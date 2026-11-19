@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // endlessList is a JSON array of empty objects that never ends: "[{},{},...".
@@ -209,6 +210,130 @@ func TestListRoutesKeepTheirOwnCap(t *testing.T) {
 			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, tc.want) {
 				t.Errorf("%s %s with %d entries = %d %.200s, want 400 %s", tc.method, tc.route, n, resp.StatusCode, out, tc.want)
 			}
+		}
+	}
+}
+
+// valuesDecoded counts the decodedValues decoded (TestDecodeBoundedMapCountsFirst
+// alone uses them).
+var valuesDecoded int
+
+type decodedValue struct{}
+
+func (*decodedValue) UnmarshalJSON([]byte) error {
+	valuesDecoded++
+	return nil
+}
+
+// A map past its cap is refused having decoded none of its values: its
+// entries are counted first, each skipped, and only a map at the cap becomes
+// values.
+func TestDecodeBoundedMapCountsFirst(t *testing.T) {
+	t.Parallel()
+	entries := func(n int) string {
+		list := make([]string, n)
+		for i := range list {
+			list[i] = fmt.Sprintf(`"%d":{"a":[1,2]}`, i)
+		}
+		return "{" + strings.Join(list, ",") + "}"
+	}
+	if m, err := decodeBoundedMap[int, json.RawMessage]([]byte(entries(5)), 5); err != nil || len(m) != 5 || string(m[4]) != `{"a":[1,2]}` {
+		t.Fatalf("at the cap: %v, %v", m, err)
+	}
+	if m, err := decodeBoundedMap[string, decodedValue]([]byte(entries(5)), 5); err != nil || len(m) != 5 || valuesDecoded != 5 {
+		t.Fatalf("at the cap: %d entries, %d values decoded, %v", len(m), valuesDecoded, err)
+	}
+	valuesDecoded = 0
+	if m, err := decodeBoundedMap[string, decodedValue]([]byte(entries(100_000)), 5); !errors.Is(err, errTooManyEntries) || m != nil || valuesDecoded != 0 {
+		t.Fatalf("past the cap: %d entries, %d values decoded, %v; want errTooManyEntries and none", len(m), valuesDecoded, err)
+	}
+	for name, tc := range map[string]struct {
+		body string
+		ok   bool
+	}{
+		"null": {"null", true}, "empty": {"{}", true}, "not a map": {"[]", false}, "bad value": {`{"1":"x"}`, false},
+	} {
+		if m, err := decodeBoundedMap[int, int]([]byte(tc.body), 5); (err == nil) != tc.ok || len(m) != 0 {
+			t.Errorf("%s: %v, %v", name, m, err)
+		}
+	}
+}
+
+// The lists and maps a one-book edit, a chapter edit and the Bridge's Audible
+// titles call carry stop at their caps as they are read: each body holds one
+// entry past the cap, and that entry doesn't decode, so the route gives its
+// cap's answer only when the decode stopped before it (decoded whole, the
+// bad entry would make it a plain 400). One entry fewer is not refused for
+// its length.
+func TestEditAndTitleListsStopAtTheirCaps(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	lib := strconv.FormatInt(b.lib.ID, 10)
+	edit := "/api/v1/admin/libraries/" + lib + "/book?path=" + escape("Some/Book")
+	chapters := "/api/v1/admin/libraries/" + lib + "/book/chapters?path=" + escape("Some/Book")
+	titles := "/api/v1/bridge/audible/accounts/" + testAccount + "/titles"
+	// list is n entries of entry(i), then the bad one when bad isn't "".
+	list := func(open, close string, n int, entry func(int) string, bad string) string {
+		parts := make([]string, n, n+1)
+		for i := range parts {
+			parts[i] = entry(i)
+		}
+		if bad != "" {
+			parts = append(parts, bad)
+		}
+		return open + strings.Join(parts, ",") + close
+	}
+	arr := func(n int, entry string, bad string) string {
+		return list("[", "]", n, func(int) string { return entry }, bad)
+	}
+	keyed := func(n int, value string, bad string) string {
+		return list("{", "}", n, func(i int) string { return fmt.Sprintf(`"%d":%s`, i, value) }, bad)
+	}
+	basis := `{"files":[{"path":"a.mp3","size":1,"duration_ms":1000}]}`
+	tooLongEdit := `"code":"too_large","error":"a list in the edit holds too many entries"`
+	for _, tc := range []struct {
+		name, method, route, tok string
+		body                     func(n int, bad string) string
+		max                      int
+		bad, want                string
+	}{
+		{"set", "PATCH", edit, b.adminTok, func(n int, bad string) string { return `{"set":` + keyed(n, `""`, bad) + `}` },
+			maxEditFields, `"x":1`, tooLongEdit},
+		{"revert", "PATCH", edit, b.adminTok, func(n int, bad string) string { return `{"revert":` + arr(n, `"x"`, bad) + `}` },
+			maxEditFields, `1`, tooLongEdit},
+		{"add fields", "PATCH", edit, b.adminTok, func(n int, bad string) string { return `{"add":` + keyed(n, `null`, bad) + `}` },
+			maxEditFields, `"x":1`, tooLongEdit},
+		{"remove labels", "PATCH", edit, b.adminTok, func(n int, bad string) string { return `{"remove":{"tags":` + arr(n, `"x"`, bad) + `}}` },
+			maxEditLabels, `1`, tooLongEdit},
+		{"chapter titles", "PATCH", edit, b.adminTok, func(n int, bad string) string { return `{"chapters":{"set":` + keyed(n, `"x"`, bad) + `}}` },
+			maxEditChapters, `"x":"y"`, tooLongEdit},
+		{"chapter reverts", "PATCH", edit, b.adminTok, func(n int, bad string) string { return `{"chapters":{"revert":` + arr(n, `1`, bad) + `}}` },
+			maxEditChapters, `"x"`, tooLongEdit},
+		{"bulk edit labels", "POST", "/api/v1/admin/books/bulk", b.adminTok, func(n int, bad string) string {
+			return `{"books":[{"library_id":1,"path":"p"}],"add":{"tags":` + arr(n, `"x"`, bad) + `}}`
+		}, maxEditLabels, `1`, tooLongEdit},
+		{"edited chapters", "PUT", chapters, b.adminTok, func(n int, bad string) string {
+			return `{"basis":` + basis + `,"chapters":` + arr(n, `{"start":1,"title":"x"}`, bad) + `}`
+		}, metadata.MaxChapterListEntries, `{"start":"x"}`, `"code":"chapters_invalid","detail":"too_many"`},
+		{"basis files", "PUT", chapters, b.adminTok, func(n int, bad string) string {
+			return `{"basis":{"files":` + arr(n, `{"path":"a.mp3","size":1,"duration_ms":1000}`, bad) + `},"chapters":[]}`
+		}, maxEditChapters, `{"path":1}`, `"code":"chapters_invalid","detail":"too_many"`},
+		{"audible titles", "PUT", titles, b.bridgeTok, func(n int, bad string) string {
+			return `{"poll_id":"p1","final":false,"titles":` + arr(n, `{}`, bad) + `}`
+		}, catalog.MaxAudibleTitles, `{"asin":1}`, `"code":"invalid_request","error":"invalid audible request: at most 500 titles per call"`},
+	} {
+		resp, out := b.do(t, tc.method, tc.route, tc.tok, tc.body(tc.max, tc.bad))
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, tc.want) {
+			t.Errorf("%s past its cap of %d: %d %.300s, want 400 %s", tc.name, tc.max, resp.StatusCode, out, tc.want)
+		}
+		// At the cap the list is read whole, so the bad entry is reached.
+		resp, out = b.do(t, tc.method, tc.route, tc.tok, tc.body(tc.max-1, tc.bad))
+		if resp.StatusCode != http.StatusBadRequest || strings.Contains(out, tc.want) {
+			t.Errorf("%s at its cap of %d: %d %.300s, want a plain 400", tc.name, tc.max, resp.StatusCode, out)
+		}
+		// A list at the cap is not refused for its length.
+		if resp, out = b.do(t, tc.method, tc.route, tc.tok, tc.body(tc.max, "")); strings.Contains(out, tc.want) {
+			t.Errorf("%s at its cap of %d: %d %.300s, refused for its length", tc.name, tc.max, resp.StatusCode, out)
 		}
 	}
 }

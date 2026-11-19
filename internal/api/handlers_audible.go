@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -137,9 +138,18 @@ func (a *API) handleBridgeAudibleAccountDelete(w http.ResponseWriter, r *http.Re
 
 // audibleTitlesRequest is a titles call: a page of one poll's titles.
 type audibleTitlesRequest struct {
-	PollID string                      `json:"poll_id"`
-	Final  bool                        `json:"final"`
-	Titles []catalog.AudibleTitleInput `json:"titles"`
+	PollID string        `json:"poll_id"`
+	Final  bool          `json:"final"`
+	Titles audibleTitles `json:"titles"`
+}
+
+// audibleTitles is a titles call's titles, decoded only when there are at most
+// catalog.MaxAudibleTitles (else errTooManyEntries, at the title past it).
+type audibleTitles []catalog.AudibleTitleInput
+
+func (l *audibleTitles) UnmarshalJSON(data []byte) (err error) {
+	*l, err = decodeBounded[catalog.AudibleTitleInput](bytes.NewReader(data), catalog.MaxAudibleTitles)
+	return err
 }
 
 // handleBridgeAudibleTitles serves PUT /bridge/audible/accounts/{account}/
@@ -152,7 +162,10 @@ func (a *API) handleBridgeAudibleTitles(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req audibleTitlesRequest
-	if err := decodeJSON(r, &req, maxAudibleTitlesBody); err != nil {
+	if err := decodeJSON(r, &req, maxAudibleTitlesBody); errors.Is(err, errTooManyEntries) {
+		a.writeAudibleError(w, catalog.ErrAudibleTooManyTitles, "put audible titles failed")
+		return
+	} else if err != nil {
 		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}

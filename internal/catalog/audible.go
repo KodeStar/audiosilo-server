@@ -100,6 +100,10 @@ func audibleInvalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrAudibleInvalid, fmt.Sprintf(format, args...))
 }
 
+// ErrAudibleTooManyTitles is a titles call past MaxAudibleTitles (an
+// ErrAudibleInvalid); the API refuses one as it reads the list.
+var ErrAudibleTooManyTitles = audibleInvalid("at most %d titles per call", MaxAudibleTitles)
+
 var audiblePollPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 // ValidASIN reports whether s is an ASIN as Audible spells one (ten upper-case
@@ -731,7 +735,7 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 		return audibleInvalid("poll_id must be 1-64 letters, digits, dots, dashes or underscores")
 	}
 	if len(titles) > MaxAudibleTitles {
-		return audibleInvalid("at most %d titles per call", MaxAudibleTitles)
+		return ErrAudibleTooManyTitles
 	}
 	for i := range titles {
 		if err := checkAudibleTitle(&titles[i]); err != nil {

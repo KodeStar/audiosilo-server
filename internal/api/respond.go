@@ -345,9 +345,10 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) b
 }
 
 // writeDecodeError answers a body that didn't decode (decodeBody): 400
-// too_large for one past its size or with a list past maxBulkBooks, else 400
-// invalid request. A route whose list has a lower cap of its own answers
-// errTooManyEntries as it answers that cap, before this.
+// too_large for one past its size, with a list past maxBulkBooks or with an
+// edit's list past its cap (errEditTooLong), else 400 invalid request. A route
+// whose list has a lower cap of its own answers errTooManyEntries as it
+// answers that cap, before this.
 func writeDecodeError(w http.ResponseWriter, err error) {
 	if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
 		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
@@ -359,11 +360,17 @@ func writeDecodeError(w http.ResponseWriter, err error) {
 			fmt.Sprintf("too many paths in one request (at most %d)", maxBulkBooks))
 		return
 	}
+	if errors.Is(err, errEditTooLong) {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, err.Error())
+		return
+	}
 	writeError(w, http.StatusBadRequest, "invalid request")
 }
 
-// errTooManyEntries is a boundedList longer than maxBulkBooks: decodeBody
-// answers it 400 too_large, as a body past its size is.
+// errTooManyEntries is a boundedList longer than maxBulkBooks (or a list or
+// map past the cap decodeBounded or decodeBoundedMap was given): decodeBody
+// answers it 400 too_large, as a body past its size is, and a route with a cap
+// of its own answers it as it answers that cap.
 var errTooManyEntries = fmt.Errorf("a list holds more than %d entries", maxBulkBooks)
 
 // boundedList is a JSON array in a request body (a share's rules, a selection
@@ -423,6 +430,34 @@ func decodeBounded[T any](r io.Reader, limit int) ([]T, error) {
 		return nil, err
 	}
 	return list, nil
+}
+
+// decodeBoundedMap is decodeBounded for a JSON object: its entries are
+// counted first, each value skipped and none kept, and it is decoded only when
+// there are at most limit (else errTooManyEntries, at the entry past limit).
+// null reads as no map.
+func decodeBoundedMap[K comparable, V any](data []byte, limit int) (map[K]V, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if tok, err := dec.Token(); err == nil && tok == json.Delim('{') {
+		// A body that stops making sense here is refused by the decode below.
+		for n := 0; dec.More(); n++ {
+			if n == limit {
+				return nil, errTooManyEntries
+			}
+			var skip spanBytes
+			if _, err := dec.Token(); err != nil { // the key
+				break
+			}
+			if err := dec.Decode(&skip); err != nil {
+				break
+			}
+		}
+	}
+	var m map[K]V
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // decodeJSONOptional is decodeJSON for endpoints whose body is optional: an

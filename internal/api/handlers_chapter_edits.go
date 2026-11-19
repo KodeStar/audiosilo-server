@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
+	"errors"
 	"net/http"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Edited chapters (server#240): the console's chapter editor saves a book's own
@@ -15,11 +18,34 @@ import (
 const maxChapterEditBody = 4 << 20
 
 // chapterEditRequest is the body of PUT .../book/chapters: the basis the book
-// page gave (AdminBookDetail.chapter_basis) and the chapters, each a start on
-// the whole-book timeline in seconds and a title.
+// page gave (AdminBookDetail.chapter_basis, catalog.ChapterBasis) and the
+// chapters, each a start on the whole-book timeline in seconds and a title.
+// Both lists are decoded only when they hold at most their cap: the chapters
+// metadata.MaxChapterListEntries (the catalog's own), the basis's files
+// maxEditChapters (every file starts a chapter, so a book with more takes no
+// edit anyway).
 type chapterEditRequest struct {
-	Basis    *catalog.ChapterBasis   `json:"basis"`
-	Chapters []catalog.EditedChapter `json:"chapters"`
+	Basis *struct {
+		Files chapterBasisFiles `json:"files"`
+	} `json:"basis"`
+	Chapters editedChapters `json:"chapters"`
+}
+
+// editedChapters is a chapter edit's chapters, at most
+// metadata.MaxChapterListEntries.
+type editedChapters []catalog.EditedChapter
+
+func (l *editedChapters) UnmarshalJSON(data []byte) (err error) {
+	*l, err = decodeBounded[catalog.EditedChapter](bytes.NewReader(data), metadata.MaxChapterListEntries)
+	return err
+}
+
+// chapterBasisFiles is a chapter edit's basis, at most maxEditChapters files.
+type chapterBasisFiles []metadata.ChapterListFile
+
+func (l *chapterBasisFiles) UnmarshalJSON(data []byte) (err error) {
+	*l, err = decodeBounded[metadata.ChapterListFile](bytes.NewReader(data), maxEditChapters)
+	return err
 }
 
 // handleAdminEditChapters serves PUT /admin/libraries/{id}/book/chapters?path=:
@@ -27,7 +53,8 @@ type chapterEditRequest struct {
 // chapters_invalid with a detail (catalog.ChapterEdit*) for chapters that
 // don't hold on the book's files, 409 chapters_basis when the files are not
 // the ones the basis names (the page is out of date), 409 not_book_library for
-// a podcast episode, 404 for no book.
+// a podcast episode, 404 for no book. A list past its cap is refused as it is
+// read (chapters_invalid, too_many), before the book is looked up.
 func (a *API) handleAdminEditChapters(w http.ResponseWriter, r *http.Request) {
 	lib, p, status, msg := a.authorizedPath(r)
 	if status != 0 {
@@ -35,11 +62,17 @@ func (a *API) handleAdminEditChapters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req chapterEditRequest
-	if err := decodeJSON(r, &req, maxChapterEditBody); err != nil || req.Basis == nil {
+	if err := decodeJSON(r, &req, maxChapterEditBody); errors.Is(err, errTooManyEntries) {
+		// Answered as the catalog answers too many chapters.
+		a.writeBookError(w, &catalog.ChapterEditError{Detail: catalog.ChapterEditTooMany},
+			"edit chapters failed", "could not save the chapters")
+		return
+	} else if err != nil || req.Basis == nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	err := a.cat.SaveChapterEdit(r.Context(), lib.ID, p, *req.Basis, req.Chapters, userFrom(r.Context()).ID)
+	basis := catalog.ChapterBasis{Files: req.Basis.Files}
+	err := a.cat.SaveChapterEdit(r.Context(), lib.ID, p, basis, req.Chapters, userFrom(r.Context()).ID)
 	if err != nil {
 		a.writeBookError(w, err, "edit chapters failed", "could not save the chapters", "library", lib.ID, "path", p)
 		return

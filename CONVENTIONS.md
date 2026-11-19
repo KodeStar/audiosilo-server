@@ -1046,7 +1046,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   /admin/meta/covers` (`thumbBatch`), a whole-list replace (`PUT /me/queue`, `PUT /me/collections/{id}/items`:
   400 `too many items`, `listReplace`), a batch of listening events (400 `too_many_events`,
   `decodeSyncEnvelope`), who a collection is shared with (`user_ids`, the 50-user 400) and a household
-  member's `collection_ids` (400 `invalid_collections`, `writeMemberDecodeError`). A new route that counts a list of small entries takes it as a `boundedList`. A bulk
+  member's `collection_ids` (400 `invalid_collections`, `writeMemberDecodeError`). A new route that counts a list of small entries takes it as a `boundedList`. A list
+  with a cap of its own past 1000, or a map, is read the same way with that cap (`decodeBounded`;
+  `decodeBoundedMap` counts an object's entries, skipping each value, before decoding it): a chapter edit's
+  chapters (2000, `chapters_invalid` `too_many`) and its basis's files (`maxEditChapters`, the same answer),
+  the Bridge's Audible titles (`MaxAudibleTitles`, `catalog.ErrAudibleTooManyTitles`), and an edit's own
+  lists and maps (one-book and bulk alike: `set`, `revert` and the fields `add`/`remove` name at most
+  `maxEditFields`, each label list `maxEditLabels`, `chapters.set`/`chapters.revert` `maxEditChapters`;
+  past one is 400 `too_large`, `errEditTooLong`). A bulk
   edit's body less its books is at most 1 MiB (`maxBulkEditBytes`, 400 `too_large`), measured before the
   decode (`spanBytes`): the edit's own lists and maps (`revert`, `add`, `remove`) never get the room the
   selection's paths have. A share's name is at most 200 characters
@@ -4123,7 +4130,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   transaction, the library must be a books library (400 `not_books`, 404 `unknown_library`); DELETE cancels
   the account's open poll (`bridge.CancelAudibleRemoved`; both reasons are `IsCancelReason`'s and the
   console's `SERVER_CANCEL_REASONS`), 204 even when unknown); `PUT .../titles` (`{poll_id, final,
-  titles:[...]}`, strict JSON, up to `MaxAudibleTitles` a call, a call without its `titles` array 400, never
+  titles:[...]}`, strict JSON, up to `MaxAudibleTitles` a call (refused at the title past it as the list is
+  read), a call without its `titles` array 400, never
   "owns nothing"; free text cleaned and bounded, not refused: a title's authors and series past the first 20
   and 10 are dropped; a match path is clean, or `.` for a `book` override on the library root, as the books
   list gives it; a match naming a missing or non-books library is stored as none; `final` marks every title
@@ -5101,6 +5109,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (1-200 bytes trimmed, no control character: `metadata.ListChapterTitle`, the chapters.json rule)|file_start}`; 409
   `chapters_basis` when the basis is not the book's files now (path, size, `duration_ms`, in play order); 409
   `not_book_library` in a podcast library; 404 no book; a body without `basis` or with an unknown field is 400.
+  Chapters past 2000, or a basis of more than `maxEditChapters` files, are `too_many` as the list is read,
+  before the book is looked up.
   `DELETE` the same URL reverts it (200, the book page; nothing audited when there was none). Book page: `chapter_edit`
   (`{state: applied|dormant, edited_by: username|null, edited_at}`, omitted with none) and `chapter_basis` (`{files:
   [{path, size, duration_ms}]}`, always); `chapter_source` and the player's `chapters_source` may be `"edited"` (an
