@@ -1385,7 +1385,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   with its page of file info, read through the open folder (`metadata.ReadDirBelow`, `DirBelow.Info`); the
   open refuses a link out of the root wherever it then is (a 404, a missing folder). `os.Root` also
   refuses a link a join allows, one that stays in the root by an absolute target or by climbing above it
-  and back, so `Below` opens the resolved path through the root then
+  and back, and a Windows junction (its target always absolute), so `Below` opens the resolved path through
+  the root then (`metadata.resolveLinks`: on Windows a junction is followed as a link, `walkLinks` by
+  `metadata.LinkKind`, the join's rule, since `filepath.EvalSymlinks` leaves one a plain name and fails a path
+  through it; one out of the root resolves out of it and is refused, as is a transcode's re-checked path
+  through one, `heldPathInput`: `TestWalkLinksFollowsJunctions`, and on Windows `TestJunctionBelowTheRoot`)
   (`TestOpenRegularBelowNeverLeavesTheRoot`, `TestReadDirBelowNeverLeavesTheRoot`,
   `TestStreamOpensThroughTheRootAfterASwap`). So does a transcode, whose ffmpeg reads the file opened there,
   never the path (`media.Transcode`, `fileInput`: ffmpeg's stdin as `fd:`, else the file as

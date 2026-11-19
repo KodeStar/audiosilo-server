@@ -3,7 +3,6 @@ package metadata
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -60,7 +59,8 @@ func boundedToolInput(ctx context.Context, path string, timeout time.Duration, l
 }
 
 // heldPathInput is ToolInput by path, where a tool inherits no descriptor
-// (Windows): path resolved (no link left in it), under root resolved, opened
+// (Windows): path resolved (resolveLinks: no link or junction left in it),
+// under root resolved, opened
 // there once more and the same file as f. That second handle is held until
 // cleanup: os.Open shares reads and writes but not deletion, so while it is
 // open the file can't be renamed away or deleted, and no link can take its
@@ -69,11 +69,11 @@ func boundedToolInput(ctx context.Context, path string, timeout time.Duration, l
 // longer leads under root (errOutsideRoot) or to f (ErrReplacedWhileOpening).
 // Built on every platform so its test runs on every one.
 func heldPathInput(f *os.File, root, path string) (string, []*os.File, func(), error) {
-	real, err := filepath.EvalSymlinks(path)
+	real, err := resolveLinks(path)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	rootReal, err := filepath.EvalSymlinks(root)
+	rootReal, err := resolveLinks(root)
 	if err != nil {
 		return "", nil, nil, err
 	}
