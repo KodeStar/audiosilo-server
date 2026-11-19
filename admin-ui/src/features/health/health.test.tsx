@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { onTestFinished } from 'vitest';
 import { setToken } from '@/api/token';
@@ -653,6 +653,22 @@ describe('library health', () => {
       await waitFor(() =>
         expect(calls.filter((c) => c.path === '/admin/books').length).toBeGreaterThan(before),
       );
+    });
+
+    it('shows no detection on the ignored list, though the jobs are cached (BRIDGE-08)', async () => {
+      const open = { ...(queuedJob('Mosse/The Black Gate') as { body: BridgeJob }).body, id: 7 };
+      mockFetch(detectRoutes({ 'GET /admin/bridge/jobs': { body: { jobs: [open] } } }));
+      const { router } = renderApp('/health?issue=no_chapters');
+      const gate = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      expect(await within(gate).findByText('Chapter detection')).toBeInTheDocument();
+      await act(() =>
+        router.navigate({
+          to: '/health',
+          search: { issue: 'no_chapters', ignored: true },
+        } as never),
+      );
+      expect(await screen.findAllByRole('button', { name: 'Show again' })).not.toHaveLength(0);
+      expect(screen.queryByText('Chapter detection')).not.toBeInTheDocument();
     });
 
     it('offers no fix while the Bridge does not offer chapter detection', async () => {

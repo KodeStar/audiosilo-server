@@ -20,7 +20,8 @@ const DETECT_JOBS = 200;
  * parked (generatePollMs), only while the list is shown. Under the job lists'
  * key, so queueing from the list reads them again. When a job ends, the book
  * may have its chapters: the issue lists and counts are read again. Undefined
- * while not enabled or not loaded.
+ * while not enabled (a disabled query still answers what it cached, which
+ * another category's list or the ignored list must not show) or not loaded.
  */
 export function useDetectJobs(enabled: boolean) {
   const qc = useQueryClient();
@@ -30,7 +31,7 @@ export function useDetectJobs(enabled: boolean) {
     enabled,
     refetchInterval: (q) => generatePollMs(q.state.data?.jobs),
   });
-  const jobs = query.data?.jobs;
+  const jobs = enabled ? query.data?.jobs : undefined;
   const open = useRef<ReadonlySet<number> | undefined>(undefined);
   useEffect(() => {
     if (!jobs) return;
