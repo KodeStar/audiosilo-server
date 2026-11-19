@@ -4,11 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
 
 // StartingStatus is the "status" a server answers every request with while it
@@ -31,9 +32,10 @@ const startingRetry = "5"
 
 // StartGate is the server's handler from the moment it listens: until Open
 // hands it the app's handler, every request is answered 503 with a
-// StartingAnswer (a browser opening a page gets startingPage instead), so the listener is up (and the healthcheck says "starting")
-// while the database opens and migrates, which can take minutes on a large
-// library; after Open every request goes to that handler.
+// StartingAnswer (a browser opening a page gets startingPage instead), so the
+// listener is up (and the healthcheck says "starting") while the database opens
+// and migrates, which can take minutes on a large library; after Open every
+// request goes to that handler.
 type StartGate struct {
 	h        atomic.Pointer[http.Handler]
 	started  time.Time
@@ -79,7 +81,7 @@ func (g *StartGate) serveStarting(w http.ResponseWriter, r *http.Request) {
 		hdr.Set("Content-Security-Policy", startingPageCSP)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		if r.Method != http.MethodHead {
-			_, _ = w.Write([]byte(startingPage))
+			_, _ = io.WriteString(w, startingPage)
 		}
 		return
 	}
@@ -142,19 +144,8 @@ var startingPageCSP = func() string {
 func prefersHTML(accept []string) bool {
 	html, jsonQ := 0.0, 0.0
 	for _, value := range accept {
-		for part := range strings.SplitSeq(value, ",") {
-			mediaType, params, _ := strings.Cut(part, ";")
-			q := 1.0
-			for param := range strings.SplitSeq(params, ";") {
-				k, v, ok := strings.Cut(param, "=")
-				if !ok || !strings.EqualFold(strings.TrimSpace(k), "q") {
-					continue
-				}
-				if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
-					q = f
-				}
-			}
-			switch strings.ToLower(strings.TrimSpace(mediaType)) {
+		for mediaType, q := range spa.Qualities(value) {
+			switch mediaType {
 			case "text/html", "application/xhtml+xml":
 				html = max(html, q)
 			case "application/json":

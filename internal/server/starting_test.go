@@ -211,13 +211,21 @@ func TestStartGateAnswersBrowsersWithAPage(t *testing.T) {
 		}
 	}
 
-	// The CSP allows exactly the page's style sheet: its hash, no script.
-	sum := sha256.Sum256([]byte(startingStyle))
-	csp := startingPageCSP
-	if !strings.Contains(csp, "default-src 'none'") || strings.Contains(csp, "script-src") ||
-		!strings.Contains(csp, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'") ||
-		!strings.Contains(startingPage, "<style>"+startingStyle+"</style>") {
-		t.Errorf("CSP %q does not admit the page's own style sheet alone", csp)
+	// The served CSP allows exactly the served page's one style sheet (the
+	// hash of the bytes between its <style> tags), and no script.
+	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	req.Header.Set("Accept", browser)
+	served := httptest.NewRecorder()
+	g.ServeHTTP(served, req)
+	page := served.Body.String()
+	_, style, _ := strings.Cut(page, "<style>")
+	style, _, _ = strings.Cut(style, "</style>")
+	sum := sha256.Sum256([]byte(style))
+	csp := served.Header().Get("Content-Security-Policy")
+	if style == "" || strings.Count(page, "<style") != 1 || !strings.Contains(csp, "default-src 'none'") ||
+		strings.Contains(csp, "script-src") ||
+		!strings.Contains(csp, "style-src 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"';") {
+		t.Errorf("CSP %q does not admit the served page's own style sheet alone", csp)
 	}
 
 	head := httptest.NewRequest(http.MethodHead, "/admin/", nil)
