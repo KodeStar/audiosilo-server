@@ -777,17 +777,20 @@ func rerootedSignature(sig string, f *feed.File) string {
 func (s *Scanner) BrowsePodcasts(ctx context.Context, lib catalog.Library, scope catalog.Scope, user int64, rel string, offset, limit int) (*Listing, error) {
 	rel = catalog.CleanRelPath(rel)
 	out := &Listing{Path: rel, Entries: []Entry{}, Offset: max(offset, 0)}
-	all := []Entry{}
+	limit = min(max(limit, 1), 2000)
 	if rel == "" {
 		shows, err := s.cat.PodcastShows(ctx, scope, user, false)
 		if err != nil {
 			return nil, err
 		}
+		all := []Entry{}
 		for _, show := range shows {
 			if scope.VisibleInBrowse(show.Path) {
 				all = append(all, Entry{Name: show.Title, Path: show.Path, IsDir: true, Title: show.Title, Author: show.Author})
 			}
 		}
+		start := min(out.Offset, len(all))
+		out.Entries, out.Total = all[start:min(start+limit, len(all))], len(all)
 	} else {
 		if !feed.ShowPath(rel) || !scope.VisibleInBrowse(rel) {
 			return nil, ErrNotIndexable
@@ -800,27 +803,18 @@ func (s *Scanner) BrowsePodcasts(ctx context.Context, lib catalog.Library, scope
 		if show.Type == "serial" {
 			order = "oldest"
 		}
-		cursor := ""
-		for {
-			page, err := s.cat.PodcastEpisodesWithin(ctx, lib.ID, rel, order, 200, cursor, scope)
-			if err != nil {
-				return nil, err
-			}
-			for _, e := range page.Episodes {
-				all = append(all, Entry{Name: e.Title, Path: e.Path, IsAudio: true, IsBook: true, Title: e.Title, Author: show.Author, Duration: e.Duration, Size: e.Size})
-			}
-			if page.NextCursor == nil {
-				break
-			}
-			cursor = *page.NextCursor
+		// One page read, not the show's every page: a long-running show holds
+		// thousands of episodes (server#180).
+		eps, total, err := s.cat.PodcastEpisodeSlice(ctx, lib.ID, rel, order, out.Offset, limit, scope)
+		if err != nil {
+			return nil, err
 		}
+		for _, e := range eps {
+			out.Entries = append(out.Entries, Entry{Name: e.Title, Path: e.Path, IsAudio: true, IsBook: true, Title: e.Title, Author: show.Author, Duration: e.Duration, Size: e.Size})
+		}
+		out.Total = total
 	}
-	out.Total = len(all)
-	limit = min(max(limit, 1), 2000)
-	start := min(out.Offset, len(all))
-	end := min(start+limit, len(all))
-	out.Entries = all[start:end]
-	if end < len(all) {
+	if end := out.Offset + len(out.Entries); end < out.Total {
 		out.NextOffset = end
 	}
 	return out, nil

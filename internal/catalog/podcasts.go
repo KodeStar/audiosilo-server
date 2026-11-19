@@ -556,11 +556,7 @@ func (c *Catalog) PodcastExport(ctx context.Context, who Caller) ([]PodcastExpor
 	if !who.Podcasts {
 		return []PodcastExportRow{}, nil
 	}
-	scopes, err := c.CallerScopes(ctx, who)
-	if err != nil {
-		return nil, err
-	}
-	podcasts, err := c.podcastLibraries(ctx)
+	scopes, podcasts, err := c.callerScopes(ctx, who)
 	if err != nil {
 		return nil, err
 	}
@@ -772,6 +768,38 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 		out.NextCursor = &v
 	}
 	return out, nil
+}
+
+// PodcastEpisodeSlice is limit episodes (1..2000) of show from offset, in
+// order ("newest" or "oldest", the episode order PodcastEpisodesWithin pages
+// by), among those in scope, with their path, title, duration and size only,
+// and how many there are in all: a show's folder listing (library's
+// BrowsePodcasts), which reads one page, not every page (server#180).
+func (c *Catalog) PodcastEpisodeSlice(ctx context.Context, lib int64, show, order string, offset, limit int, scope Scope) ([]PodcastEpisode, int, error) {
+	dir := "DESC"
+	switch order {
+	case "newest":
+	case "oldest":
+		dir = "ASC"
+	default:
+		return nil, 0, ErrInvalidCursor
+	}
+	filter, filterArgs := pathFilterSQL("b.rel_path", scope)
+	from := ` FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=? AND ` + filter
+	args := append([]any{lib, show}, filterArgs...)
+	var total int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*)`+from, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	offset = max(offset, 0)
+	if offset >= total {
+		return []PodcastEpisode{}, total, nil
+	}
+	eps, err := queryRows(ctx, c.db, func(r *sql.Rows, e *PodcastEpisode) error {
+		return r.Scan(&e.Path, &e.Title, &e.Duration, &e.Size)
+	}, `SELECT b.rel_path,b.title,b.duration,b.size`+from+` ORDER BY `+episodeOrderSQL(dir)+` LIMIT ? OFFSET ?`,
+		append(args, min(max(limit, 1), 2000), offset)...)
+	return eps, total, err
 }
 
 // PodcastEpisodeRows counts the show's indexed episodes (podcast_episodes

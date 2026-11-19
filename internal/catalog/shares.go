@@ -354,68 +354,84 @@ func (c *Catalog) callerByID(ctx context.Context, userID int64, isAdmin bool) (C
 
 // CallerScope is UserScope for who.
 func (c *Catalog) CallerScope(ctx context.Context, who Caller, libraryID int64) (Scope, error) {
+	_, scope, _, err := c.CallerLibraryScope(ctx, who, libraryID)
+	return scope, err
+}
+
+// CallerLibraryScope is CallerScope with the library it read (nil when there
+// is no such library) and whether who holds a grant on it, judged before
+// private shows narrow the scope (what CallerLibraries lists): a request's
+// library, its scope and its grant from one read of the library (server#180).
+func (c *Catalog) CallerLibraryScope(ctx context.Context, who Caller, libraryID int64) (*Library, Scope, bool, error) {
 	lib, err := c.GetLibrary(ctx, libraryID)
 	if errors.Is(err, ErrNotFound) {
-		return Scope{LibraryID: libraryID, AllowAll: who.Admin}, nil
+		return nil, Scope{LibraryID: libraryID, AllowAll: who.Admin}, false, nil
 	}
 	if err != nil {
-		return Scope{}, err
+		return nil, Scope{}, false, err
 	}
 	if lib.Kind == KindPodcasts && !who.Podcasts {
-		return Scope{LibraryID: libraryID}, nil
+		return lib, Scope{LibraryID: libraryID}, false, nil
 	}
 	scope := Scope{LibraryID: libraryID, AllowAll: who.Admin}
 	if !who.Admin {
 		scopes, err := c.userScopes(ctx, who, libraryID)
 		if err != nil {
-			return Scope{}, err
+			return nil, Scope{}, false, err
 		}
 		if s := scopes[libraryID]; s != nil {
 			scope = *s
 		}
 	}
+	granted := scope.AllowAll || len(scope.Paths) > 0
 	if lib.Kind == KindPodcasts {
-		return c.privatePodcastScope(ctx, who.ID, scope)
+		if scope, err = c.privatePodcastScope(ctx, who.ID, scope); err != nil {
+			return nil, Scope{}, false, err
+		}
 	}
-	return scope, nil
+	return lib, scope, granted, nil
 }
 
 // CallerScopes filters the old-client gate before the caller's private shows.
 func (c *Catalog) CallerScopes(ctx context.Context, who Caller) ([]Scope, error) {
-	var scopes []Scope
-	var err error
-	if who.Admin {
-		scopes, err = c.allLibraryScopes(ctx)
-	} else {
-		var byLib map[int64]*Scope
-		byLib, err = c.userScopes(ctx, who, 0)
-		scopes = flattenScopes(byLib)
-	}
-	if err != nil {
-		return nil, err
-	}
+	scopes, _, err := c.callerScopes(ctx, who)
+	return scopes, err
+}
+
+// callerScopes is CallerScopes with whether each library is a podcast one, by
+// id, from its one read of the libraries.
+func (c *Catalog) callerScopes(ctx context.Context, who Caller) ([]Scope, map[int64]bool, error) {
 	libs, err := c.ListLibraries(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	kind := map[int64]string{}
+	podcasts := make(map[int64]bool, len(libs))
 	for _, l := range libs {
-		kind[l.ID] = l.Kind
+		podcasts[l.ID] = l.Kind == KindPodcasts
+	}
+	var scopes []Scope
+	if who.Admin {
+		scopes = libraryScopesOf(libs)
+	} else {
+		byLib, err := c.userScopes(ctx, who, 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		scopes = flattenScopes(byLib)
 	}
 	out := []Scope{}
 	for _, s := range scopes {
-		if kind[s.LibraryID] == KindPodcasts {
+		if podcasts[s.LibraryID] {
 			if !who.Podcasts {
 				continue
 			}
-			s, err = c.privatePodcastScope(ctx, who.ID, s)
-			if err != nil {
-				return nil, err
+			if s, err = c.privatePodcastScope(ctx, who.ID, s); err != nil {
+				return nil, nil, err
 			}
 		}
 		out = append(out, s)
 	}
-	return out, nil
+	return out, podcasts, nil
 }
 
 // GatedScopes is who's scopes for a whole-list replace, from one read of their
@@ -433,11 +449,7 @@ func (c *Catalog) GatedScopes(ctx context.Context, who Caller) (scopes, keep []S
 		return scopes, nil, err
 	}
 	who.Podcasts = true
-	all, err := c.CallerScopes(ctx, who)
-	if err != nil {
-		return nil, nil, err
-	}
-	podcasts, err := c.podcastLibraries(ctx)
+	all, podcasts, err := c.callerScopes(ctx, who)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -452,19 +464,6 @@ func (c *Catalog) GatedScopes(ctx context.Context, who Caller) (scopes, keep []S
 		}
 	}
 	return scopes, keep, nil
-}
-
-// podcastLibraries is the set of podcast library ids.
-func (c *Catalog) podcastLibraries(ctx context.Context) (map[int64]bool, error) {
-	libs, err := c.ListLibraries(ctx)
-	if err != nil {
-		return nil, err
-	}
-	podcasts := map[int64]bool{}
-	for _, l := range libs {
-		podcasts[l.ID] = l.Kind == KindPodcasts
-	}
-	return podcasts, nil
 }
 
 // CallerLibraries applies the client gate but keeps library grants independent
@@ -499,11 +498,16 @@ func (c *Catalog) allLibraryScopes(ctx context.Context) ([]Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	return libraryScopesOf(libs), nil
+}
+
+// libraryScopesOf is each of libs, AllowAll.
+func libraryScopesOf(libs []Library) []Scope {
 	out := make([]Scope, len(libs))
 	for i, l := range libs {
 		out[i] = Scope{LibraryID: l.ID, AllowAll: true}
 	}
-	return out, nil
+	return out
 }
 
 // userScopes is a non-admin's scopes by library (in libraryID only, or every

@@ -698,9 +698,21 @@ const PollFoldWindow = 24 * time.Hour
 // yet: the sweep's rule, shared with the scheduler's poll in hand.
 const UnfoldedSQL = `NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id)`
 
+// FoldSweepEvery is how often EndedPodcasts reads every ended fetch and
+// retention job not yet folded; between those sweeps it reads only those that
+// ended within it, as idx_bridge_jobs_kind_finished finds them.
+const FoldSweepEvery = time.Hour
+
 // EndedPodcasts recovers a crash between the job commit and folding
 // (idx_bridge_jobs_kind_finished serves it), after failing the follow requests
-// left queued on a Bridge that went offline (expireOfflineSubscribes).
+// left queued on a Bridge that went offline (expireOfflineSubscribes). A poll
+// or follow is swept while it ended within PollFoldWindow. A fetch or
+// retention job is swept whenever it ended, but read only at the first sweep
+// and every FoldSweepEvery after it, otherwise only while it ended within
+// FoldSweepEvery: each episode's last fetch stays (prunePolls), and the sweep
+// runs at every job's end, so reading them all each time cost a show's
+// archive download a sweep of every episode fetched so far, 38 ms at 20,000
+// (server#180). A fold that keeps failing is tried again within the hour.
 func (s *Service) EndedPodcasts(ctx context.Context) ([]Job, error) {
 	if err := s.expireDue(ctx); err != nil {
 		return nil, err
@@ -708,7 +720,17 @@ func (s *Service) EndedPodcasts(ctx context.Context) ([]Job, error) {
 	if err := s.expireOfflineSubscribes(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`','`+KindPodcastFetch+`','`+KindPodcastRetain+`') AND j.state IN `+EndedStatesSQL+` AND (j.kind IN ('`+KindPodcastFetch+`','`+KindPodcastRetain+`') OR j.finished_at>=?) AND `+UnfoldedSQL+` ORDER BY j.id`, at(s.now().Add(-PollFoldWindow)))
+	now := s.now()
+	s.sweptAllMu.Lock()
+	all := s.sweptAll.IsZero() || now.Sub(s.sweptAll) >= FoldSweepEvery || now.Before(s.sweptAll)
+	s.sweptAllMu.Unlock()
+	episodes := `j.kind IN ('` + KindPodcastFetch + `','` + KindPodcastRetain + `')`
+	args := []any{at(now.Add(-PollFoldWindow))}
+	if !all {
+		episodes += ` AND j.finished_at>=?`
+		args = append(args, at(now.Add(-FoldSweepEvery)))
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.state IN `+EndedStatesSQL+` AND (j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`') AND j.finished_at>=? OR `+episodes+`) AND `+UnfoldedSQL+` ORDER BY j.id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -721,7 +743,15 @@ func (s *Service) EndedPodcasts(ctx context.Context) ([]Job, error) {
 		}
 		out = append(out, *j)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if all {
+		s.sweptAllMu.Lock()
+		s.sweptAll = now
+		s.sweptAllMu.Unlock()
+	}
+	return out, nil
 }
 
 // SubscribeRequests returns only this person's recent requests, never URLs held

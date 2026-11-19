@@ -120,8 +120,9 @@ func (c *Catalog) PodcastWorkShows(ctx context.Context) ([]PodcastWorkShow, erro
 		return nil, err
 	}
 	filtered := shows[:0]
+	scopes := followerScopes{}
 	for _, show := range shows {
-		allowed, err := c.podcastHasFollowers(ctx, show)
+		allowed, err := c.podcastHasFollowers(ctx, show, scopes)
 		if err != nil {
 			return nil, err
 		}
@@ -171,7 +172,14 @@ func (c *Catalog) PodcastFetchCandidates(ctx context.Context, s PodcastWorkShow)
 	return queryRows(ctx, c.db, func(r *sql.Rows, e *PodcastFetchCandidate) error { return r.Scan(&e.Path, &e.EpisodeID) }, `SELECT w.rel_path,w.episode_id FROM (SELECT b.rel_path,e.episode_id,e.present,e.published,e.season,e.episode FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=?1 AND e.show_path=?2 AND e.removed_at='' ORDER BY `+episodeOrderSQL(order)+` LIMIT ?3) w LEFT JOIN podcast_fetch_state f ON f.library_id=?1 AND f.rel_path=w.rel_path AND f.show_id=?4 WHERE w.present=0 AND (f.next_attempt_at IS NULL OR f.next_attempt_at<=?5) AND NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.library_id=?1 AND j.rel_path=w.rel_path AND j.kind='podcast.fetch' AND j.state IN `+bridge.OpenStatesSQL+` AND `+bridge.ParamSQL("j.params", "$.show_id")+`=?4 AND `+bridge.ParamSQL("j.params", "$.episode_id")+`=w.episode_id) ORDER BY `+episodeOrderOn("w.", "w.", order), s.LibraryID, s.Path, limit, s.ShowID, c.ts())
 }
 
-func (c *Catalog) podcastHasFollowers(ctx context.Context, show PodcastWorkShow) (bool, error) {
+// followerScopes are the followers' scopes one PodcastWorkShows pass has read,
+// by user and library: the same listeners follow many shows of a library, and
+// each scope read costs several statements (server#180).
+type followerScopes map[[2]int64]Scope
+
+// podcastHasFollowers reports whether a live follower of show can see it,
+// reading each follower's scope once a pass (scopes).
+func (c *Catalog) podcastHasFollowers(ctx context.Context, show PodcastWorkShow, scopes followerScopes) (bool, error) {
 	type follower struct {
 		id    int64
 		admin bool
@@ -181,9 +189,13 @@ func (c *Catalog) podcastHasFollowers(ctx context.Context, show PodcastWorkShow)
 		return false, err
 	}
 	for _, f := range followers {
-		scope, err := c.followerScope(ctx, f.id, f.admin, show.LibraryID)
-		if err != nil {
-			return false, err
+		key := [2]int64{f.id, show.LibraryID}
+		scope, ok := scopes[key]
+		if !ok {
+			if scope, err = c.followerScope(ctx, f.id, f.admin, show.LibraryID); err != nil {
+				return false, err
+			}
+			scopes[key] = scope
 		}
 		if scope.VisibleInBrowse(show.Path) {
 			return true, nil
