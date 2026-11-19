@@ -230,6 +230,10 @@ describe('detectCard (BRIDGE-08)', () => {
     expect(detectCard(long(), failed, true)).toEqual({ job: failed, offer: true });
     const done = bridgeJob({ state: 'done' });
     expect(detectCard(long(), done, true)).toEqual({ job: done, offer: true });
+    // One being cancelled still shows, and holds nothing back: the server ends
+    // it for a new request.
+    const stopping = bridgeJob({ state: 'running', cancel_requested: true });
+    expect(detectCard(long(), stopping, true)).toEqual({ job: stopping, offer: true });
     // Done or failed with the chapters in place: nothing to say. Cancelled: only the offer.
     expect(detectCard(bookDetail({ book: { ...long().book } }), done, true)).toBeUndefined();
     expect(detectCard(bookDetail({ book: { ...long().book } }), failed, true)).toBeUndefined();

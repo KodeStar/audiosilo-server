@@ -155,8 +155,8 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   const listed = new Set(books.map(refKey));
   const selectedListed = selection.books.filter((b) => listed.has(refKey(b)));
   // The selected books Detect chapters can be asked for (rowFix), none whose
-  // detection is already open.
-  const detectable = selectedListed.filter((b) => rowFix(fix, b) === 'detect' && !rowJob(b)?.open);
+  // detection holds it back.
+  const detectable = selectedListed.filter((b) => rowFix(fix, b) === 'detect' && !rowJob(b)?.holds);
   const chosenBooks = () => {
     selection.clear();
     return selectedListed;
@@ -179,7 +179,7 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
           const checkNote = chaptersCheckNote(kind, b);
           const chosenNote = detectChosenNote(fix, b);
           const detection = rowJob(b);
-          const ownFix = detection?.open ? null : rowFix(fix, b);
+          const ownFix = detection?.holds ? null : rowFix(fix, b);
           const detail = issueDetail(kind, b);
           return (
             <li

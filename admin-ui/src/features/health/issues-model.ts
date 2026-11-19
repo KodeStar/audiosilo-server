@@ -140,16 +140,19 @@ export function openDetections(books: readonly Pick<AdminBook, 'detect_job'>[]):
 
 /**
  * What a row without chapters shows of its book's newest chapter detection
- * (BRIDGE-08): one queued, working or parked (`open`, which holds the row's
- * Detect chapters back: a second click would only find the same job), or how
- * the last one ended (none found, or failed), so the row says why it is still
- * listed. A cancelled one shows nothing.
+ * (BRIDGE-08): one queued, working or parked (`open`), or how the last one
+ * ended (none found, or failed), so the row says why it is still listed. A
+ * cancelled one shows nothing. `holds` is whether it holds the row's Detect
+ * chapters back: while open and not being cancelled (a second click would only
+ * find the same job; one asked to stop ends for a new request, as the server's
+ * queue has it, so Detect is offered again at once).
  */
 export function detectRowJob(
   job: BridgeJob | undefined,
-): { job: BridgeJob; open: boolean } | undefined {
+): { job: BridgeJob; open: boolean; holds: boolean } | undefined {
   if (!job || job.state === 'cancelled') return undefined;
-  return { job, open: isOpen(job.state) };
+  const open = isOpen(job.state);
+  return { job, open, holds: open && !job.cancel_requested };
 }
 
 /**

@@ -19,10 +19,13 @@ import {
 it("reads the rows' detections: what a row shows, and how soon the list is read again (BRIDGE-08)", () => {
   const running = bridgeJob({ id: 9, state: 'running' });
   // Open (queued, working, parked) holds the row's Detect back; how one ended shows beside it.
-  expect(detectRowJob(running)).toEqual({ job: running, open: true });
-  expect(detectRowJob(bridgeJob({ state: 'needs_attention' }))?.open).toBe(true);
-  expect(detectRowJob(bridgeJob({ state: 'failed' }))?.open).toBe(false);
+  expect(detectRowJob(running)).toEqual({ job: running, open: true, holds: true });
+  expect(detectRowJob(bridgeJob({ state: 'needs_attention' }))?.holds).toBe(true);
+  expect(detectRowJob(bridgeJob({ state: 'failed' }))?.holds).toBe(false);
   expect(detectRowJob(bridgeJob({ state: 'done' }))?.open).toBe(false);
+  // One being cancelled is still open, but a new request ends it: Detect is offered.
+  const stopping = bridgeJob({ state: 'running', cancel_requested: true });
+  expect(detectRowJob(stopping)).toEqual({ job: stopping, open: true, holds: false });
   expect(detectRowJob(bridgeJob({ state: 'cancelled' }))).toBeUndefined();
   expect(detectRowJob(undefined)).toBeUndefined();
   // The list follows an open detection: every 10 s while one works, every

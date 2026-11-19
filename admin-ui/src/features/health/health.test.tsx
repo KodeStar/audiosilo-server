@@ -669,6 +669,35 @@ describe('library health', () => {
       ).toBeInTheDocument();
     });
 
+    it('offers Detect again beside a detection that is being cancelled (BRIDGE-08)', async () => {
+      mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) => ({
+            body: {
+              books:
+                req.query.get('issue') === 'no_chapters'
+                  ? [
+                      {
+                        ...plain[0],
+                        detect_job: rowJob(plain[0].path, {
+                          id: 7,
+                          state: 'running',
+                          cancel_requested: true,
+                        }),
+                      },
+                    ]
+                  : [],
+            },
+          }),
+        }),
+      );
+      renderApp('/health?issue=no_chapters');
+      const gate = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      // The stopping job still shows; the server ends it for a new request.
+      expect(await within(gate).findByText('Chapter detection')).toBeInTheDocument();
+      expect(within(gate).getByRole('button', { name: 'Detect chapters' })).toBeInTheDocument();
+    });
+
     it('reads the list again once a detection is queued, so its row says so (BRIDGE-08)', async () => {
       let queued = false;
       mockFetch(

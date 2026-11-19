@@ -413,7 +413,8 @@ export function chapterProblem(
  * offered as Health offers it for the same book (`canDetect`: an online Bridge
  * that detects chapters, a book library): a book over two hours with fewer than
  * two chapters, no chapter source chosen and no chapters edited (the server
- * refuses those: chapters_chosen, chapters_edited), and no detection open.
+ * refuses those: chapters_chosen, chapters_edited), and no detection holding
+ * it back (one open and not being cancelled: detectRowJob).
  * Undefined when there is neither a job to show nor an offer.
  */
 export function detectCard(
@@ -431,7 +432,7 @@ export function detectCard(
     chapters_source: detail.chapter_source,
     chapter_choice: detail.chapter_choice || undefined,
   });
-  const offer = canDetect && lacking && !row?.open && !chosen;
+  const offer = canDetect && lacking && !row?.holds && !chosen;
   return shown || offer ? { job: shown, offer } : undefined;
 }
 
