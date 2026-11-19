@@ -274,32 +274,35 @@ func TestCallsShareOneBudget(t *testing.T) {
 		budget time.Duration
 		ok     bool
 	}{{delay * 5 / 2, false}, {testwait.Scaled(10 * time.Second), true}} {
-		idp := oidctest.New(t, "audiosilo", "s3cret", alice)
-		settings := oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
-			UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: tc.budget}
-		p, err := oidc.New(settings)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// The authorize step on its own (its discovery is the use's only call).
-		f := flow()
-		code := signIn(t, p, f)
-		idp.SetKnobs(oidctest.Knobs{Delay: delay, UserinfoOnly: true})
-		// A fresh provider so the exchange discovers again: four slow calls.
-		p, err = oidc.New(settings)
-		if err != nil {
-			t.Fatal(err)
-		}
-		began := time.Now()
-		_, err = p.Exchange(context.Background(), code, f, true)
-		took := time.Since(began)
-		if tc.ok && err != nil {
-			t.Fatalf("budget %v: %v", tc.budget, err)
-		}
-		// Out of time is the provider unavailable (nothing refused), not a failure.
-		if !tc.ok && (!errors.Is(err, oidc.ErrUnavailable) || took > tc.budget+delay) {
-			t.Fatalf("budget %v: err %v after %v", tc.budget, err, took)
-		}
+		t.Run(tc.budget.String(), func(t *testing.T) {
+			t.Parallel()
+			idp := oidctest.New(t, "audiosilo", "s3cret", alice)
+			settings := oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
+				UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: tc.budget}
+			p, err := oidc.New(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The authorize step on its own (its discovery is the use's only call).
+			f := flow()
+			code := signIn(t, p, f)
+			idp.SetKnobs(oidctest.Knobs{Delay: delay, UserinfoOnly: true})
+			// A fresh provider so the exchange discovers again: four slow calls.
+			p, err = oidc.New(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			began := time.Now()
+			_, err = p.Exchange(context.Background(), code, f, true)
+			took := time.Since(began)
+			if tc.ok && err != nil {
+				t.Fatalf("budget %v: %v", tc.budget, err)
+			}
+			// Out of time is the provider unavailable (nothing refused), not a failure.
+			if !tc.ok && (!errors.Is(err, oidc.ErrUnavailable) || took > tc.budget+delay) {
+				t.Fatalf("budget %v: err %v after %v", tc.budget, err, took)
+			}
+		})
 	}
 }
 
@@ -526,10 +529,11 @@ func TestProbeSeesTheProviderGone(t *testing.T) {
 // two calls alone well within it, and the discovery within its own use's. The
 // budget is scaled to the build, so a loaded -race run keeps those margins, up
 // to 5 s: the discovery must also end inside the longest a use waits for
-// another's (discoveryWait, 5 s).
+// another's (UseTime less CallBudget, 5 s).
 func TestBudgetStartsAfterAnotherDiscovery(t *testing.T) {
 	t.Parallel()
-	budget := min(testwait.Scaled(2*time.Second), 5*time.Second)
+	// UseTime less CallBudget is the longest a use waits for another's discovery.
+	budget := min(testwait.Scaled(2*time.Second), oidc.UseTime-oidc.CallBudget)
 	idp := oidctest.New(t, "audiosilo", "s3cret", alice)
 	settings := oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
 		UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: budget}
