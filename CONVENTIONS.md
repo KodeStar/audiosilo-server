@@ -1432,7 +1432,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`API.afterWait`), the remux's waits being no looks.
   The scan gives each the probe's time (`Scanner.probeTimeout`); an on-demand read (`/item`'s index, an admin's
   Re-read and the Bridge's rescan through `rescanAt`) gives each `API.fileWait` instead (SRV-15c:
-  `library.WithLookTimeout` on its context, `Scanner.lookTimeout`, kept by the read `leadIndex` goes on with), well
+  `library.WithLookTimeout` on its context through `API.lookCtx`, `Scanner.lookTimeout`, kept by the read `leadIndex` goes on with), well
   under the request timeout, so a share that stopped answering is its 503 `share_not_answering`, not the timeout's:
   `resolveBook`'s looks (the join, the stat, `dirPresent`'s lstat and listings, the folder's listing and its audio
   files' lstats, the walks of a disc set, a disc that wouldn't list among them, the metadata.json and `.audiosilo`
@@ -1456,8 +1456,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   later waiter waits on it; a scan's read that has returned is waited on until its batch write, one marked
   stuck before it returned too; a read running ffprobe, which reports nothing until it returns, is given the
   probe's time from its last progress whatever the waiter's look time, `Progress.Probe` in `runFFprobe`,
-  `Probing`; a request's wait, one under `WithLookTimeout`, ends at the probe's time in all however the read
-  moves on, `flightWaitCap`, where a scan's has no such cap), so a big
+  `Probing`; a request's wait, one under `WithLookTimeout`, ends at `API.lookCtx`'s `library.WithWaitCap`,
+  `flightWaitTimeout` (`requestTimeout` less 5 s, so its coded 503 with `Retry-After` is written before the request
+  timeout's bare one), in all however the read moves on, `flightWaitCap`, where a scan's has no such cap), so a big
   book read slowly from a share that answers is waited for, never a false 503 within that time: a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
   rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,
   503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and

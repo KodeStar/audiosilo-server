@@ -479,9 +479,11 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 }
 
 // indexOnDemand reads the book at path (cleaned, scope-checked, no book of the
-// index at it) on demand (a.indexPath), each look at the share given fileWait:
-// one that stopped answering is a 503 share_not_answering, not this request's
-// own time running out. Only a path the disk has as given, byte for byte
+// index at it) on demand (a.indexPath), each look at the share given fileWait
+// (a.lookCtx): one that stopped answering, or failed as a share does that a
+// retry may get past (EIO, ESTALE: library.SafeJoinListed's rule, the
+// scanner's), is a 503 share_not_answering, not this request's own time
+// running out nor a 404. Only a path the disk has as given, byte for byte
 // (library.SafeJoinListed, through the kept listings, a.listed, as asGiven's):
 // any other is library.ErrNotIndexable, a path with nothing there. The
 // scanner's own read stats the path before it checks its spelling
@@ -496,7 +498,17 @@ func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path stri
 	} else if !there {
 		return nil, library.ErrNotIndexable
 	}
-	return a.indexPath(library.WithLookTimeout(ctx, a.fileWait), *lib, path, allow)
+	return a.indexPath(a.lookCtx(ctx), *lib, path, allow)
+}
+
+// lookCtx is ctx for a read of a book a request asked for (an on-demand index,
+// an admin's Re-read, the Bridge's rescan): each look at a library file given
+// fileWait (library.WithLookTimeout), and the wait in all on another read of
+// the book flightWaitTimeout (library.WithWaitCap), so a share that stopped
+// answering is a 503 share_not_answering with Retry-After before the request
+// timeout's bare 503.
+func (a *API) lookCtx(ctx context.Context) context.Context {
+	return library.WithWaitCap(library.WithLookTimeout(ctx, a.fileWait), flightWaitTimeout)
 }
 
 // bookAt is bookForPath for a handler: on a failure it writes the answer and

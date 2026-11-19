@@ -2632,6 +2632,17 @@ func WithLookTimeout(ctx context.Context, d time.Duration) context.Context {
 	return context.WithValue(ctx, lookTimeoutKey{}, d)
 }
 
+type waitCapKey struct{}
+
+// WithWaitCap is ctx (a request's, given a look time: WithLookTimeout) whose
+// wait in all on another's read of its book (flightWaitCap) ends at d when
+// that is shorter than the probe's time: the API's, under its request
+// timeout, so the wait's 503 share_not_answering with Retry-After is answered
+// before the request's own time runs out. A scan's wait is never capped.
+func WithWaitCap(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, waitCapKey{}, d)
+}
+
 // lookTimeout is the time each look at a library file gets under ctx: its
 // WithLookTimeout when shorter, else the probe's.
 func (s *Scanner) lookTimeout(ctx context.Context) time.Duration {
@@ -2728,8 +2739,9 @@ func (s *Scanner) startFlight(ctx context.Context, key bookKey, scan *bookRead) 
 // until it returns, is given the probe's time from its last progress rather
 // than a shorter look's: ffprobe is killed at the end of it, so the wait is
 // bounded, and a healthy run on a big file is not read as a share that
-// stopped answering. A request's wait (WithLookTimeout) ends at the probe's
-// time in all, however the read moves on (flightWaitCap): a read that
+// stopped answering. A request's wait (WithLookTimeout) ends at its
+// WithWaitCap or the probe's time in all, however the read moves on
+// (flightWaitCap): a read that
 // trickles on never holds it for its whole time. A scan's
 // read that has returned is waited on until the scan writes its book, one
 // marked stuck before it returned (it waited that long for a read slot) too.
@@ -2791,13 +2803,17 @@ func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
 // flightWaitCap is how long in all a request (an on-demand read given a look
 // time: WithLookTimeout) waits on another's read of its book, ok false for any
 // other waiter (a scan, which keeps the book as stored when it gives up, waits
-// for as long as the read moves on): the probe's time, a whole request's. A
-// read moving on slowly is then waited on for longer than a look's time, and
-// a running ffprobe for its own, but a request is never held for as long as a
-// read may take (indexTimeout).
+// for as long as the read moves on): its WithWaitCap when shorter, else the
+// probe's time. A read moving on slowly is then waited on for longer than a
+// look's time, and a running ffprobe for its own up to the cap, but a request
+// is never held for as long as a read may take (indexTimeout), nor past its
+// own timeout.
 func (s *Scanner) flightWaitCap(ctx context.Context) (time.Duration, bool) {
 	if _, asked := ctx.Value(lookTimeoutKey{}).(time.Duration); !asked {
 		return 0, false
+	}
+	if d, ok := ctx.Value(waitCapKey{}).(time.Duration); ok && d > 0 && d < s.probeTimeout {
+		return d, true
 	}
 	return s.probeTimeout, true
 }

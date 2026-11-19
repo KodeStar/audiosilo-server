@@ -558,6 +558,58 @@ func TestWaitFlightCapsARequestsWait(t *testing.T) {
 	}
 }
 
+// TestWaitFlightEndsAtTheRequestsWaitCap: a request whose wait is capped
+// under its own timeout (WithWaitCap, the API's flightWaitTimeout) gives up on
+// a read that trickles on, or one running ffprobe past the cap, at the cap,
+// not the probe's time: its 503 share_not_answering with Retry-After is then
+// written before the request timeout's bare 503. A cap past the probe's time
+// changes nothing, and a scan's wait (no look time) stays uncapped.
+func TestWaitFlightEndsAtTheRequestsWaitCap(t *testing.T) {
+	t.Parallel()
+	s := &Scanner{probeTimeout: 3 * time.Second}
+	asked := WithWaitCap(WithLookTimeout(t.Context(), 100*time.Millisecond), 400*time.Millisecond)
+	if d, ok := s.flightWaitCap(asked); !ok || d != 400*time.Millisecond {
+		t.Errorf("flightWaitCap with a cap under the probe's time = %v, %v; want the cap", d, ok)
+	}
+	if d, ok := s.flightWaitCap(WithWaitCap(WithLookTimeout(t.Context(), time.Second), time.Minute)); !ok || d != s.probeTimeout {
+		t.Errorf("flightWaitCap with a cap past the probe's time = %v, %v; want the probe's time", d, ok)
+	}
+	if _, ok := s.flightWaitCap(WithWaitCap(t.Context(), time.Second)); ok {
+		t.Error("a scan's wait (no look time) is capped")
+	}
+
+	stop := make(chan struct{})
+	defer close(stop)
+	trickling := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	go func() { // progress every 20 ms until the test ends
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-tick.C:
+				trickling.progress.Note()
+			case <-stop:
+				return
+			}
+		}
+	}()
+	probing := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	defer probing.progress.Probe()()
+	for _, c := range []struct {
+		name string
+		f    *indexFlight
+	}{{"a read that trickles on", trickling}, {"a read running ffprobe", probing}} {
+		began := time.Now()
+		err := s.waitFlight(asked, c.f)
+		if took := time.Since(began); !errors.Is(err, errReadLeft) || took < 400*time.Millisecond || took >= s.probeTimeout {
+			t.Errorf("%s, the wait capped at 400ms: %v after %v, want errReadLeft at the cap", c.name, err, took)
+		}
+		if c.f.stuck.Load() {
+			t.Errorf("%s: marked stuck at the cap, before the probe's time", c.name)
+		}
+	}
+}
+
 // TestRequestWaitsOutAnotherReadsProbe: a request joining a read of its book
 // whose ffprobe runs take longer than the request's look time gets the book
 // once the read ends, not a look given up on: the runs are marked on the

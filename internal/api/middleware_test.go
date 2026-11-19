@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
@@ -353,5 +354,20 @@ func TestCORSVaryOrigin(t *testing.T) {
 				t.Fatalf("%s %s: granted = %t", c.name, method, got)
 			}
 		}
+	}
+}
+
+// TestFlightWaitEndsBeforeTheRequestTimeout: a request's wait on another read
+// of its book (flightWaitTimeout, a.lookCtx) ends far enough under the
+// request timeout that its 503 share_not_answering with Retry-After is
+// written, not the timeout's bare 503, which has neither; and past a look's
+// own time (fileWait), so a read that moves on slowly is still waited on.
+func TestFlightWaitEndsBeforeTheRequestTimeout(t *testing.T) {
+	t.Parallel()
+	if margin := requestTimeout - flightWaitTimeout; margin < 5*time.Second {
+		t.Errorf("flightWaitTimeout %v is %v under requestTimeout %v, want 5s or more", flightWaitTimeout, margin, requestTimeout)
+	}
+	if flightWaitTimeout <= fileWaitTimeout {
+		t.Errorf("flightWaitTimeout %v is not past fileWaitTimeout %v", flightWaitTimeout, fileWaitTimeout)
 	}
 }
