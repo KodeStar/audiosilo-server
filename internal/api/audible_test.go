@@ -296,9 +296,10 @@ func TestAudibleAdminAccountDelete(t *testing.T) {
 
 // A poll that fails because Audible refused the account marks it refused, as a
 // refused sync does, so the console's card asks for a sign-in again instead of
-// showing it checked (bridge#40); a complete poll later clears it. Denied: a
-// poll refused only for now (audible_sign_in) marks nothing, and nor does a
-// refused poll claimed before a fresh sign-in (server#303).
+// showing it checked (bridge#40); a complete poll later clears it. So does one
+// refused after an admin asked it to stop (stored cancelled, UpdateHeld).
+// Denied: a poll refused only for now (audible_sign_in) marks nothing, and nor
+// does a refused poll claimed before a fresh sign-in (server#303).
 func TestAudibleRefusedPollMarksTheAccount(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
@@ -316,25 +317,30 @@ func TestAudibleRefusedPollMarksTheAccount(t *testing.T) {
 		}
 		return a.RefusedAt != nil
 	}
-	poll := func(result, errText string, claimedBefore time.Time) {
+	poll := func(result, errText string, claimedAt time.Time, cancelled bool) {
 		t.Helper()
 		if resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/poll", b.adminTok, ""); resp.StatusCode != http.StatusCreated {
 			t.Fatalf("Check now: %d %s", resp.StatusCode, out)
 		}
 		job := b.claim(t, bridge.KindAudiblePoll)
-		if !claimedBefore.IsZero() {
+		if cancelled {
+			if resp, out := b.do(t, "POST", fmt.Sprintf("/api/v1/admin/bridge/jobs/%d/cancel", job.ID), b.adminTok, ""); resp.StatusCode != http.StatusOK {
+				t.Fatalf("cancel: %d %s", resp.StatusCode, out)
+			}
+		}
+		if !claimedAt.IsZero() {
 			if _, err := b.db.ExecContext(ctx, `UPDATE bridge_jobs SET claimed_at = ? WHERE id = ?`,
-				claimedBefore.UTC().Format(time.RFC3339), job.ID); err != nil {
+				claimedAt.UTC().Format(time.RFC3339), job.ID); err != nil {
 				t.Fatal(err)
 			}
 		}
 		b.finish(t, job, bridge.StateFailed, result, errText)
 	}
-	poll(`{"code":"audible_sign_in"}`, "audible_sign_in", time.Time{})
+	poll(`{"code":"audible_sign_in"}`, "audible_sign_in", time.Time{}, false)
 	if refused() {
 		t.Fatal("a sign-in refused for now marked the account")
 	}
-	poll(`{"code":"audible_refused","message":"sign in again"}`, "audible_refused: sign in again", time.Time{})
+	poll(`{"code":"audible_refused","message":"sign in again"}`, "audible_refused: sign in again", time.Time{}, false)
 	if !refused() {
 		t.Fatal("a refused poll left the account unmarked")
 	}
@@ -344,12 +350,20 @@ func TestAudibleRefusedPollMarksTheAccount(t *testing.T) {
 	if refused() {
 		t.Fatal("a complete poll left the account refused")
 	}
+	// Claimed in a second after the complete poll's (refusalEndedSince).
+	poll(`{"code":"audible_refused"}`, "audible_refused", time.Now().Add(2*time.Second), true)
+	if !refused() {
+		t.Fatal("a poll refused after a cancel left the account unmarked")
+	}
+	if code, out := b.putTitles(t, testAccount, "p2", true); code != http.StatusOK || refused() {
+		t.Fatalf("complete poll: %d %s, refused %v", code, out, refused())
+	}
 	// Claimed a minute before a fresh sign-in: the refusal is from before it.
 	claimed := time.Now().Add(-time.Minute)
 	if code, out := b.putAccount(t, testAccount, b.adminID, b.lib.ID); code != http.StatusOK {
 		t.Fatalf("sign in again: %d %s", code, out)
 	}
-	poll(`{"code":"audible_refused"}`, "audible_refused", claimed)
+	poll(`{"code":"audible_refused"}`, "audible_refused", claimed, false)
 	if refused() {
 		t.Fatal("a refusal from before the sign-in marked the account")
 	}

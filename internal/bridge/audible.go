@@ -653,12 +653,17 @@ func AudibleAccountOf(j Job) (account string, err error) {
 
 // AudibleRefusalCode is the code an ended audible.sync or audible.poll failed
 // with, "" for none: the result's "code", else an error starting with
-// SyncAudibleRefused.
+// SyncAudibleRefused. A cancelled one names only its result's code: a failure
+// reported once it was asked to stop is stored cancelled (UpdateHeld) with
+// the Bridge's result, while its error may be the server's cancel reason.
 func AudibleRefusalCode(j Job) string {
-	if j.State != StateFailed {
-		return ""
+	switch j.State {
+	case StateFailed:
+		return failureCode(j, []string{SyncAudibleRefused})
+	case StateCancelled:
+		return failureCode(j, nil)
 	}
-	return failureCode(j, []string{SyncAudibleRefused})
+	return ""
 }
 
 // AudibleSynced reports whether an ended audible.sync read Audible's places:

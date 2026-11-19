@@ -3372,7 +3372,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answers the job, whose `cancel_requested` asks the Bridge to stop. A `failed` report on a job with
   `cancel_requested` is stored `cancelled` (the failure may be the stop itself, a cancel the Bridge's
   last check missed or an older Bridge): the server's reason stays, an admin's cancel keeps the Bridge's
-  text, and the failure is logged; a `done` report stays done.
+  text, and the failure is logged; a `done` report stays done. Its result stays, so an Audible
+  refusal still marks the account (`AudibleRefusalCode` reads a cancelled job's result code).
   Claim responses retain the request deadline but bypass response buffering and flush before return;
   a wait the deadline ends still answers 503 `request timed out`, as the buffered timeout did.
   A claim ended before its reply was written, a failed 200 write, or a Bridge that left before the
