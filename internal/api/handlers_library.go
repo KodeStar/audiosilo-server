@@ -86,11 +86,11 @@ type listenerLibrary struct {
 // A non-admin with no access there (no granting share, and for a household
 // member nothing through their owner) gets 403.
 func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, catalog.Scope, int, string) {
-	scope, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), libraryID)
+	lib, scope, granted, err := a.cat.CallerLibraryScope(r.Context(), callerOf(r.Context()), libraryID)
 	if err != nil {
 		return nil, scope, http.StatusInternalServerError, "access check failed"
 	}
-	return a.scopedLibrary(r, scope)
+	return scopedLibrary(lib, scope, granted)
 }
 
 // callerScopes is the caller's current access in every library (CallerScopes), for
@@ -133,43 +133,21 @@ func scopeIn(scopes []catalog.Scope, libraryID int64) (catalog.Scope, bool) {
 	return catalog.Scope{LibraryID: libraryID}, false
 }
 
-// scopedLibrary loads the library the caller's scope is for: 403 without a
-// library grant, 404 for no such library. Private podcast filtering can leave a
+// scopedLibrary judges lib (nil: no such library) for the caller's scope in
+// it: 403 without a library grant (granted, judged before private-show
+// narrowing), 404 for no such library. Private podcast filtering can leave a
 // granted library with no visible content; its empty listings remain readable.
-func (a *API) scopedLibrary(r *http.Request, scope catalog.Scope) (*catalog.Library, catalog.Scope, int, string) {
+func scopedLibrary(lib *catalog.Library, scope catalog.Scope, granted bool) (*catalog.Library, catalog.Scope, int, string) {
 	if !scope.AllowAll && len(scope.Paths) == 0 {
-		lib, err := a.grantedLibrary(r, scope.LibraryID)
-		if err != nil {
-			return nil, scope, http.StatusInternalServerError, "access check failed"
-		}
-		if lib != nil && lib.Kind == catalog.KindPodcasts {
+		if granted && lib != nil && lib.Kind == catalog.KindPodcasts {
 			return lib, scope, 0, ""
 		}
 		return nil, scope, http.StatusForbidden, "no access to this library"
 	}
-	lib, err := a.cat.GetLibrary(r.Context(), scope.LibraryID)
-	if errors.Is(err, catalog.ErrNotFound) {
+	if lib == nil {
 		return nil, scope, http.StatusNotFound, "library not found"
 	}
-	if err != nil {
-		return nil, scope, http.StatusInternalServerError, "could not load library"
-	}
 	return lib, scope, 0, ""
-}
-
-// grantedLibrary is library id when the caller holds a grant on it, judged
-// before private-show narrowing (nil without one).
-func (a *API) grantedLibrary(r *http.Request, id int64) (*catalog.Library, error) {
-	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(r.Context()))
-	if err != nil {
-		return nil, err
-	}
-	for i := range libs {
-		if libs[i].ID == id {
-			return &libs[i], nil
-		}
-	}
-	return nil, nil
 }
 
 // browseScope resolves {id} to the library and the caller's scope in it, writing
@@ -276,7 +254,12 @@ func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID in
 		// tells them apart as for any path (an admin's unknown library is a 404).
 		return a.scopedPath(r, libraryID, rawPath)
 	}
-	lib, scope, status, msg := a.scopedLibrary(r, scope)
+	// Among the caller's scopes, so granted: the library is read for itself.
+	lib, err := a.cat.GetLibrary(r.Context(), libraryID)
+	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
+		return nil, "", scope, http.StatusInternalServerError, "could not load library"
+	}
+	lib, scope, status, msg := scopedLibrary(lib, scope, true)
 	if status != 0 {
 		return nil, "", scope, status, msg
 	}
@@ -319,10 +302,10 @@ func pathTooLong(w http.ResponseWriter, rawPath string) bool {
 // miss it (server#359). A query no longer than the cap can't hold such a path,
 // so it is only parsed here when it is longer. A path in a body is the route's
 // to check (pathTooLong, refsTooLong). A refusal rateLimit didn't charge (an
-// authenticated or media route's, which rateLimit only checks with Ready and
-// leaves to requireAuth or mediaAuth) pays into the address's bucket, as a
-// failed authentication does: otherwise these requests, refused before any
-// credential check, would never be limited.
+// authenticated, media or Bridge route's, which rateLimit only checks with
+// Ready and leaves to requireAuth, mediaAuth or requireBridge) pays into the
+// address's bucket, as a failed authentication does: otherwise these requests,
+// refused before any credential check, would never be limited.
 func (a *API) capPathQuery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(r.URL.RawQuery) > catalog.MaxPathBytes && strings.HasPrefix(r.URL.Path, "/api/") {

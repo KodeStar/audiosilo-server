@@ -5,6 +5,9 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"errors"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,20 +40,98 @@ const BridgeTokenName = "AudioSilo Bridge"
 // token: not revoked, and its admin still an enabled admin.
 const bridgeLiveWhere = `t.kind = '` + KindBridge + `' AND t.revoked = 0 AND tu.disabled = 0 AND tu.role = '` + RoleAdmin + `'`
 
+// bridgeLiveFrom selects the live bridge tokens t (with their users tu).
+const bridgeLiveFrom = `FROM tokens t JOIN users tu ON tu.id = t.user_id WHERE ` + bridgeLiveWhere
+
 // BridgeLiveSQL is true while a bridge token is live. It is the one statement
 // of "a Bridge is paired"; the bridge package's heartbeat reads use it too.
-const BridgeLiveSQL = `EXISTS(SELECT 1 FROM tokens t JOIN users tu ON tu.id = t.user_id WHERE ` + bridgeLiveWhere + `)`
+const BridgeLiveSQL = `EXISTS(SELECT 1 ` + bridgeLiveFrom + `)`
 
 // BridgeTokenLiveSQL is BridgeLiveSQL for one token, its id the statement's
 // next parameter: whether a request's bridge token is still the paired Bridge's.
 // A Bridge's call was authenticated when it arrived; a pairing or an unpair may
 // have revoked its token since (a heartbeat queued for the writer, a claim
 // waiting out its long poll), so the bridge package's writes ask again.
-const BridgeTokenLiveSQL = `EXISTS(SELECT 1 FROM tokens t JOIN users tu ON tu.id = t.user_id
-	WHERE t.id = ? AND ` + bridgeLiveWhere + `)`
+const BridgeTokenLiveSQL = `EXISTS(SELECT 1 ` + bridgeLiveFrom + ` AND t.id = ?)`
 
 // revokeBridgeTokensSQL revokes every bridge token (pairing and unpairing).
 const revokeBridgeTokensSQL = `UPDATE tokens SET revoked = 1 WHERE kind = '` + KindBridge + `' AND revoked = 0`
+
+// Only hashes from the database enter this snapshot. Pairing leaves one live
+// token. Guesses share one read until the next content write or maxCachedTokenAge.
+// ResolveRequest still checks the matching credential.
+type bridgeCandidates struct {
+	load    sync.Mutex
+	current atomic.Pointer[bridgeHashes]
+}
+
+type bridgeHashes struct {
+	generation uint64
+	read       time.Time
+	hashes     []string
+}
+
+func (c *bridgeHashes) fresh(gen uint64, now time.Time) bool {
+	return c != nil && c.generation == gen && freshTokenRead(c.read, now)
+}
+
+// MayBeBridgeToken is the rate limiter's in-memory check on a spent address.
+// A cold snapshot lets the request through to lookupToken, where the refresh
+// has the request's database timeout. A match alone grants no access.
+func (s *Service) MayBeBridgeToken(secret string) bool {
+	if secret == "" {
+		return false
+	}
+	c := s.bridgeCandidates.current.Load()
+	return !c.fresh(s.db.ContentGeneration(), s.now()) || slices.Contains(c.hashes, hashSecret(secret))
+}
+
+// checkBridgeHash rejects unknown hashes before any per-secret database read.
+// A fresh snapshot is read without the lock; callers arriving together on a
+// cold one share the first caller's read.
+func (s *Service) checkBridgeHash(ctx context.Context, hash string) error {
+	c := s.bridgeCandidates.current.Load()
+	if !c.fresh(s.db.ContentGeneration(), s.now()) {
+		var err error
+		if c, err = s.loadBridgeHashes(ctx); err != nil {
+			return err
+		}
+	}
+	if !slices.Contains(c.hashes, hash) {
+		return ErrInvalidToken
+	}
+	return nil
+}
+
+// loadBridgeHashes reads the live Bridge token hashes into the snapshot, unless
+// a caller that held the lock first already did.
+func (s *Service) loadBridgeHashes(ctx context.Context) (*bridgeHashes, error) {
+	b := &s.bridgeCandidates
+	b.load.Lock()
+	defer b.load.Unlock()
+	gen, now := s.db.ContentGeneration(), s.now()
+	if c := b.current.Load(); c.fresh(gen, now) {
+		return c, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT t.token_hash `+bridgeLiveFrom)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	c := &bridgeHashes{generation: gen, read: now}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		c.hashes = append(c.hashes, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	b.current.Store(c)
+	return c, nil
+}
 
 // BridgePairing is the pairing side of the bridge_status row: whether a Bridge
 // is paired, by whom and when, and a code waiting to be exchanged.

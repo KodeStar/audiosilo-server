@@ -41,9 +41,13 @@ func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, err
 	if !KnownKind(lib.Kind) {
 		return nil, ErrInvalidKind
 	}
+	resolved, err := c.resolveRoots(ctx, lib)
+	if err != nil {
+		return nil, err
+	}
 	var id int64
-	err := c.db.WithTx(ctx, "CreateLibrary", func(tx *sql.Tx) error {
-		if _, err := checkLibraryRoot(ctx, tx, lib); err != nil {
+	err = c.db.WithTx(ctx, "CreateLibrary", func(tx *sql.Tx) error {
+		if _, err := checkLibraryRoot(ctx, tx, lib, resolved); err != nil {
 			return err
 		}
 		// A new library lands after every other in the display order (ADMIN-12),
@@ -142,16 +146,35 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	if err := checkMetadataSource(existing); err != nil {
 		return nil, false, err
 	}
-	err = c.db.WithTx(ctx, "UpdateLibrary", func(tx *sql.Tx) error {
-		if _, err := checkLibraryRoot(ctx, tx, *existing); err != nil {
-			return err
+	// Only a new root is checked for overlaps: the kind never changes, so an
+	// edit keeping its root (a rename, a setting, config sync's every start)
+	// keeps the pairs it was stored with, and a pair stored before the check
+	// knew links, case or volume roots, or made by a link since, is the warning
+	// at start (RootOverlaps) rather than a refusal of every other edit. The
+	// links are resolved here, before the writer, for an edit that names a new
+	// root; whether the root it writes is new is read inside the transaction
+	// (below), as the source is.
+	var resolved map[string]string
+	if existing.Root != before.Root {
+		if resolved, err = c.resolveRoots(ctx, *existing); err != nil {
+			return nil, false, err
 		}
-		var stored string
-		if err := tx.QueryRowContext(ctx, `SELECT metadata_source FROM libraries WHERE id = ?`, id).
-			Scan(&stored); errors.Is(err, sql.ErrNoRows) {
+	}
+	err = c.db.WithTx(ctx, "UpdateLibrary", func(tx *sql.Tx) error {
+		var stored, storedRoot string
+		if err := tx.QueryRowContext(ctx, `SELECT metadata_source, root FROM libraries WHERE id = ?`, id).
+			Scan(&stored, &storedRoot); errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		} else if err != nil {
 			return err
+		}
+		// Against the stored root, not the earlier read: an edit that raced
+		// this one may have moved the library since, and the root this one
+		// writes back (the one it read) is then a move too, checked as written.
+		if existing.Root != storedRoot {
+			if _, err := checkLibraryRoot(ctx, tx, *existing, resolved); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE libraries SET name = ?, root = ?, default_view = ?, scan_schedule = ?, ignore_patterns = ?,
@@ -533,10 +556,12 @@ var ErrRootOverlaps = errors.New("podcast library roots must not overlap other l
 
 // checkLibraryRoot runs with the writer held (q a writer transaction) so
 // simultaneous creates cannot admit overlapping roots; CheckLibraryRoot reads it
-// without. Paths are cleaned and made absolute on both sides. sameRoot is the
-// name of another library at exactly this root (first in the console's order),
-// which is allowed between two books libraries.
-func checkLibraryRoot(ctx context.Context, q rowQuerier, lib Library) (sameRoot string, err error) {
+// without. Paths are cleaned and made absolute on both sides, and compared as
+// written and, where links resolved them (resolved: resolveRoots, read before
+// the writer was taken), as resolved, by the platform's rule (pathOverlaps).
+// sameRoot is the name of another library at exactly this root (first in the
+// console's order), which is allowed between two books libraries.
+func checkLibraryRoot(ctx context.Context, q rowQuerier, lib Library, resolved map[string]string) (sameRoot string, err error) {
 	root, err := filepath.Abs(lib.Root)
 	if err != nil {
 		return "", err
@@ -555,17 +580,14 @@ func checkLibraryRoot(ctx context.Context, q rowQuerier, lib Library) (sameRoot 
 		if err != nil {
 			return "", err
 		}
-		if (lib.Kind == KindPodcasts || kind == KindPodcasts) && pathOverlaps(root, other) {
-			return "", ErrRootOverlaps
+		if (lib.Kind == KindPodcasts || kind == KindPodcasts) && formsOverlap(root, other, resolved) {
+			return "", fmt.Errorf("%w: the library %q at %s", ErrRootOverlaps, name, other)
 		}
 		if other == root && sameRoot == "" {
 			sameRoot = name
 		}
 	}
 	return sameRoot, rows.Err()
-}
-func pathOverlaps(a, b string) bool {
-	return a == b || strings.HasPrefix(a, b+string(filepath.Separator)) || strings.HasPrefix(b, a+string(filepath.Separator)) || a == string(filepath.Separator) || b == string(filepath.Separator)
 }
 
 // ListBookLibraries is for cross-library audiobook tools; podcasts have their

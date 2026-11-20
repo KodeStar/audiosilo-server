@@ -138,6 +138,9 @@ type API struct {
 	// timeoutDur bounds non-streaming requests (see the timeout middleware).
 	// Defaults to requestTimeout; a field so tests can shorten it.
 	timeoutDur time.Duration
+	// opmlImportDur bounds an OPML import (opmlImportTimeout; a field so tests
+	// can shorten it).
+	opmlImportDur time.Duration
 	// dirs is the folder picker's lister (library.ListDirs behind a deadline and
 	// a few slots), which the setup preview checks its root through too; a field
 	// so tests can hand it a listing that hangs.
@@ -170,6 +173,7 @@ type API struct {
 	demoLimiter    *limiter     // per-IP cap on demo account creation
 	accountLimiter *limiter     // per-IP cap on self-service password/recovery mutations
 	ipLimiter      *rateLimiter // general request rate, per IP (see rateLimit)
+	bridgeLimiter  *rateLimiter // authenticated Bridge requests, per credential (see requireBridge)
 	tokenLimiter   *rateLimiter // authenticated API rate, per credential (see requireAuth)
 	mediaLimiter   *rateLimiter // authenticated media rate, per credential (see requireMediaAuth)
 	// health is /healthz's database probe, shared by the requests within
@@ -319,6 +323,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		log:               log,
 		baseCtx:           context.Background(),
 		timeoutDur:        requestTimeout,
+		opmlImportDur:     opmlImportTimeout,
 		mountHints:        library.MountHints,
 		listed:            cat.DirNames(),
 		dirs:              library.NewDirLister(library.ListDirs, dirListSlots, dirListTimeout),
@@ -329,6 +334,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		accountLimiter:    newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
 		// Per IP, then per credential (config rate_limit.*).
 		ipLimiter:      newBucketLimiter(limits.Address),
+		bridgeLimiter:  newRateLimiter(bridgeRate, bridgeBurst),
 		tokenLimiter:   newBucketLimiter(limits.Token),
 		mediaLimiter:   newBucketLimiter(limits.Media),
 		castKeepEvery:  auth.CastTouchInterval,

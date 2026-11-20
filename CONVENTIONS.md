@@ -1050,7 +1050,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   reads `tokens` and `users` (owner join), and the touch is the only user-state change to
   either (`KeepCastToken`'s is a cast token's, which the cache never holds), dropped from the cache by the touching request (its rows are also read again once a minute
   old, `maxCachedTokenAge`: the generation never sees another process's write, which `reset-admin`
-  beside a running server is). A new cache whose answer reads a
+  beside a running server is); the Bridge token snapshot (`auth/bridge.go` `bridgeCandidates`, the live
+  Bridge token hashes `lookupToken` and `MayBeBridgeToken` check a guess against) reads `tokens`
+  (`token_hash`, `kind`, `revoked`) and `users` (`disabled`, `role`), none of which the touch changes,
+  and is read again once a minute old as well. A new cache whose answer reads a
   user-state table needs a key of its own, or that table out of the list.
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
@@ -1305,7 +1308,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   none, and such a show counts as none (`TestPodcastShowSpelling`). An unfollow also drops, in one statement, the caller's own follow at
   the path as given (one kept past its show's row) and, when neither that nor the show's spelling is theirs, the one follow of theirs in another
   spelling of it (one kept past their access to the show: a share removed, its identity replaced), by
-  the same rule over their own rows only (`Catalog.UnfollowPodcast`, `TestUnfollowPodcastByTheOtherSpelling`). So an older client or a saved link naming a show
+  the same rule over their own rows only, a show or folder at the path the caller's scope refuses counting as none
+  (`Catalog.UnfollowPodcast`, `TestUnfollowPodcastByTheOtherSpelling`,
+  `TestUnfollowPodcastHiddenShowAtThePathCountsAsNone`). So an older client or a saved link naming a show
   folder renamed by hand to its other spelling still reaches it, and a private show it doesn't follow
   stays 404 `show_not_found` (`TestPodcastShowRoutesMeetTheOtherSpelling`,
   `TestPodcastPrivateShowNotReachedByTheOtherSpelling`). `spelledIn` passes the caller's scope (for `/fs`, `VisibleInBrowse`;
@@ -3025,7 +3030,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection; a share created with `paths`
   is held to the same 1000 (`boundedList`, 400 `too_large`).
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
-  `api/ratelimit.go`, values from `config.rate_limit.*` read at start through
+  `api/ratelimit.go`, configurable values from `config.rate_limit.*` read at start through
   `RateLimitConfig.Effective`: a rate or burst left at 0 is the current default and is
   never saved, so a changed default reaches existing installs), read off the
   handler `mux.Handler` picks: static files (`web.IsStatic`) are not counted; media
@@ -3035,19 +3040,27 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   authenticated API routes outside `/api/v1/auth/` (`requireAuth`, whose
   `authHandler` marks them; `tokenKeyed`, server#246) limit themselves: refused
   while the address's general bucket is empty (`Ready`, checked in rateLimit too, so
-  the refusal comes before the timeout layer), a failed authentication (missing or
-  refused token), and a `?path=` over the cap refused before the credential is
-  looked at (`capPathQuery`), charges it (`Charge`: even past empty, down to -burst, so requests
+  the refusal comes before the timeout layer). A failed authentication (missing or refused token)
+  and a `?path=` over the cap refused before the credential is looked at (`capPathQuery`, on a
+  Bridge route too) charge the address (`Charge`: even past empty, down to -burst, so requests
   that passed `Ready` together all pay; `Ready` reserves nothing, so a concurrent
-  flood is looked up up to its concurrency before it pays), an authenticated one spends
+  flood is looked up up to its concurrency before it pays). An authenticated request spends
   from its credential's bucket (`mediaLimiter` ~200/s burst 2000, `tokenLimiter`
   ~50000/s burst 100000, per credential id) and charges the address's bucket when that
   refuses it (the lookup was already done), except that a demo account's API and media
   requests spend from the address's bucket (`allowCredential`: anyone can mint a demo
-  session, so a per-token budget would be none); everything else (public routes, the
-  Bridge's `/api/v1/bridge/*`, and `/api/v1/auth/*` with or without a token: sign-in,
-  pairing, password, API keys) spends from `ipLimiter` (~50/s, burst 200, per IP), but `/healthz` and
-  `/api/v1/healthz` (`healthPatterns`), which spend nothing: a container's healthcheck asks from the loopback
+  session, so a per-token budget would be none). A paired Bridge's requests
+  spend from `bridgeLimiter` per authenticated token ID (2,000/s, burst 20,000: ten times the
+  busiest second of a 1,000-show podcast backlog; a refusal there doesn't charge the address).
+  Missing and refused Bridge tokens, and one a database fault left unchecked (its 503), spend
+  from `ipLimiter` (`Allow`: 429 once it is empty). When the address is
+  spent, `rateLimit` rejects known mismatches before the timeout layer. On a cold cache,
+  `lookupToken` refreshes the stored Bridge token hashes. The snapshot lasts until a content write or one minute.
+  This lets a paired Bridge work behind the same address as busy players or bad tokens
+  (`TestRateLimitBridgeRefusedTokenPaysTheAddress`). Public routes (including Bridge pairing)
+  and the sign-in, pairing, password and API key routes under `/api/v1/auth/*` spend from
+  `ipLimiter` (~50/s, burst 200, per IP). The health probes `/healthz` and
+  `/api/v1/healthz` (`healthPatterns`) spend nothing: a container's healthcheck asks from the loopback
   address an untrusted proxy on the same host shares with everyone, and one probe answers every request
   within `healthReuse` (a second; one ping at a time, detached from the request), server#217.
   Each limiter's idle TTL is two refills, from a minute up to a day. rateLimit
@@ -3898,9 +3911,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   on that its timed re-admit acts on (bridge#25).
 - **Podcasts (Bridge Phases 2c-1, 2c-2a, 2c-2b and 2c-3)**: libraries have an immutable `kind` (`books`, the default,
   or `podcasts`). Creating or re-rooting either kind may never overlap a podcast root in either
-  direction (clean absolute paths, checked under the writer). Config sync logs a root clash and
-  skips that entry, keeping its existing library when present, so startup continues. API creates
-  and patches still refuse it with 409 `root_overlaps`. Two books libraries may share a folder or
+  direction (clean absolute paths, checked under the writer, compared as written and as their links
+  resolve, `resolveRoots` before the writer, under 2 s, a root not there yet through the nearest folder
+  that is, an edit keeping its root not checked at all (kept as against the root stored when it writes, read in its transaction: one that raced a move and writes back the root it read is checked, `TestUpdateLibraryChecksARootWrittenBackOverAMove`), so a stored pair never blocks a rename or config sync; Windows and macOS fold case, macOS a name's NFC and NFD spellings too (`pathOverlaps`), and a volume's root holds every folder on it: `rootsOverlap`,
+  `libraryroots.go`, server#179). Config sync logs a root clash and
+  skips that entry, keeping its existing library when present, so startup continues, then warns of every
+  stored pair that overlaps (`catalog.RootOverlaps`: one stored before the check knew links and case, or a
+  link added since). API creates and patches still refuse it with 409 `root_overlaps`. Two books libraries may share a folder or
   nest one inside the other (their books are then listed twice, once in each): the server allows
   it, and the console's Add library and folder edit ask first (`bookRootOverlap`, ADMIN-14). Podcast libraries are indexed only
   from regular, non-symlinked `feed.json` v1 files in top-level non-hidden show folders, capped at
@@ -4225,7 +4242,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge service's clock) is an `error` row `recently_failed` (`request_id` the failed request), neither
   queued nor counted (`FollowURL.SkipRecentFailure`, `bridge.RecentSubscribeFailure`); a failure that
   isn't the feed's (`notFeedFailures`: an expired private request, a lost lease, the library or the
-  Bridge's storage) never counts, and the single follow always retries. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
+  Bridge's storage) never counts, and the single follow always retries. The import runs outside the 30 s
+  request timeout, under `opmlImportTimeout` (5 min) on its context with its answer unbuffered
+  (`unbufferedBound`, as the Bridge's claim); one its bound ends answers the timeout's 503 (`writeOPMLImport`),
+  never the rows it got to as all of them (server#179). Its rows are followed under that bound without the
+  request's cancellation (`opmlImportContext`): a player gives the upload up after 45 s, and the import
+  runs to its end all the same, its slot held until then (the server stopping ends it). A library the caller holds no whole grant on, or
+  none at that id, is 403 `no_library_access` before its kind, as for the single follow: neither tells
+  which ids exist. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
   `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1; a busy import is answered before its body is read (`Slots.Busy`) and refunds its token, so the retry runs; so does a 400 `invalid_opml`, server#219, but not a 413 or an upload whose read failed). The export (`catalog.PodcastExport`: current
   scopes and private narrowing, follows matching the show id, <= 10,000 rows else 413
   `opml_export_limit`; `podcast.BuildExport`; `opml.Render`, <= 4 MiB) never writes a private show,
@@ -4613,7 +4637,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   same second's next write), as is any read while the stamp is ahead of the clock (the clock set back)),
   `podcast_feed_failing` and `podcast_feed_recovered` (`catalog.FoldPodcastJob`, `podcast.poll` only,
   idempotent through `podcast_folded`; the scheduler queues no poll for a show with one in hand, open or
-  ended and not folded yet within `pollInHandWindow` (so a fold that keeps failing pauses the show's polls no longer, while the sweep retries it for the longer `bridge.PollFoldWindow`; such a poll folding after the show's next one has is stale and only marked folded), `catalog.DuePodcastPolls`; `0076` adds `podcast_feed_state.feed_failures`,
+  ended and not folded yet within `pollInHandWindow` (so a fold that keeps failing pauses the show's polls no longer, while the sweep retries it for the longer `bridge.PollFoldWindow`; such a poll folding after the show's next one has is stale and only marked folded), `catalog.DuePodcastPolls`; the sweep (`bridge.EndedPodcasts`, every minute and at every job's end) reads an ended fetch or retention job whenever it ended at its first pass and every `bridge.FoldSweepEvery` (1 h), between those only one that ended within it, and `catalog.PodcastWorkShows` reads each follower's scope once a pass (server#180); `0076` adds `podcast_feed_state.feed_failures`,
   `feed_network_failures` and `failing_announced`, while `failures` still drives the backoff: a failure
   whose code is the feed's (`bridge.FeedFailure`, not `notFeedFailures`) counts, announced once at the
   third in a row (`catalog.FeedFailingAfter`) or at once for `gone`; network-class codes

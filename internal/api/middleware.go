@@ -77,20 +77,45 @@ func isBackupDownload(p string) bool {
 // bounds without buffering its response.
 const bridgeClaimPath = "/api/v1/bridge/jobs/next"
 
+// opmlImportPath is the OPML import, which the timeout middleware bounds by
+// opmlImportTimeout (a.opmlImportDur) without buffering its response: up to
+// opml.MaxOutlines follows, each a transaction, may take longer than
+// requestTimeout on a busy writer, and a 503 written over rows already
+// followed would read as nothing done (server#179). Its handler answers the
+// 503 itself when the bound ends the import (handleOPMLImport).
+const opmlImportPath = "/api/v1/podcasts/opml/import"
+
+// opmlImportTimeout bounds one OPML import's request.
+const opmlImportTimeout = 5 * time.Minute
+
+// unbufferedBound is how long the timeout middleware lets r run under a
+// context deadline alone, its response unbuffered (0: r is not such a
+// request): the Bridge's claim and the OPML import.
+func (a *API) unbufferedBound(r *http.Request) time.Duration {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == bridgeClaimPath:
+		return a.timeoutDur
+	case r.Method == http.MethodPost && r.URL.Path == opmlImportPath:
+		return a.opmlImportDur
+	}
+	return 0
+}
+
 // timeout wraps ordinary handlers in http.TimeoutHandler, which cancels the
-// request context at the deadline and emits a 503. Claims retain the context
-// deadline without buffering; streaming routes pass through unbounded.
+// request context at the deadline and emits a 503. Claims and the OPML import
+// retain a context deadline without buffering (unbufferedBound); streaming
+// routes pass through unbounded.
 // TimeoutHandler gives the handler a header map of its own and copies it over
 // the real one key by key, so the Vary set outside (cors's Origin) is seeded
 // into it first: a handler's own Vary (spa's Accept-Encoding) then adds to it
 // instead of replacing it.
 func (a *API) timeout(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == bridgeClaimPath {
+		if bound := a.unbufferedBound(r); bound > 0 {
 			// Claims must observe response write failures before returning, so
 			// they can release an undelivered lease. TimeoutHandler buffers the
 			// response until after the handler's cleanup has finished.
-			ctx, cancel := context.WithTimeout(r.Context(), a.timeoutDur)
+			ctx, cancel := context.WithTimeout(r.Context(), bound)
 			defer cancel()
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -246,7 +271,8 @@ func clientIP(r *http.Request) string {
 // the general bucket, keyed by address because it runs before authentication: it
 // bounds the work done (token lookups included) for a caller nobody has
 // identified yet, and the sign-in, pairing and account routes, which a token must
-// not take out of their address's budget.
+// not take out of their address's budget. requireBridge limits its own routes
+// so a paired Bridge can work even when players have spent the address bucket.
 func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h, pattern := mux.Handler(r)
@@ -255,8 +281,9 @@ func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 			return
 		}
 		ip := clientIP(r)
-		if isMedia(h) || tokenKeyed(h, pattern) {
-			if !a.ipLimiter.Ready(ip) {
+		_, bridge := h.(bridgeHandler)
+		if bridge || isMedia(h) || tokenKeyed(h, pattern) {
+			if !a.ipLimiter.Ready(ip) && (!bridge || !a.auth.MayBeBridgeToken(bearerToken(r, false))) {
 				rateLimited(w, a.ipLimiter.Wait(ip))
 				return
 			}

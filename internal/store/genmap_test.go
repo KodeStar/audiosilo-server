@@ -28,6 +28,21 @@ func TestGenMapGenerations(t *testing.T) {
 	if m.Len() > 4 {
 		t.Fatalf("map holds %d values, bound 4", m.Len())
 	}
+	// Full, a key it holds is put again in place; a new one starts it again.
+	m = GenMap[string, int]{Max: 2}
+	m.Put(1, "a", 1)
+	m.Put(1, "b", 2)
+	m.Put(1, "a", 3)
+	if v, ok := m.Get(1, "b"); !ok || v != 2 || m.Len() != 2 {
+		t.Fatalf("a held key put again emptied the map: b = %d %v, %d held", v, ok, m.Len())
+	}
+	if v, _ := m.Get(1, "a"); v != 3 {
+		t.Fatalf("a = %d, want 3", v)
+	}
+	m.Put(1, "c", 4)
+	if _, ok := m.Get(1, "a"); ok || m.Len() != 1 {
+		t.Fatalf("a new key past the bound kept %d values", m.Len())
+	}
 }
 
 // Delete drops one key at whatever generation, leaving the others.

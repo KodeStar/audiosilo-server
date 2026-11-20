@@ -79,19 +79,50 @@ func (a *API) SetBridge(b *bridge.Service) {
 // no other route lists that kind, so a bridge token is refused everywhere else.
 var bridgeKinds = []string{auth.KindBridge}
 
-// requireBridge authenticates the paired Bridge's token (Authorization header
-// only). Only a missing or refused token is a 401 (the Bridge then stops calling
-// in and retries every few minutes), so a failure to check the token (the
-// database) is a 503, which it retries at once (refuseToken).
+// bridgeRate and bridgeBurst are a paired Bridge's budget, per token. The
+// busiest second of a 1,000-show podcast backlog held 199 of its 46,209 Bridge
+// requests. The rate is ten times that, and the burst ten more seconds of it.
+// A larger backlog lasts longer but runs no faster, so the pace sets the
+// budget, not the number of shows. Both stay far under the default per-device
+// token tier (rate_limit.token), so a stolen Bridge token still meets a cap
+// until an unpair revokes it. Only an authenticated token gets a bucket, and a
+// pairing leaves one live, so the buckets stay few.
+const (
+	bridgeRate  = 2_000
+	bridgeBurst = 20_000
+)
+
+// bridgeHandler marks a route that requireBridge limits. The public pairing
+// exchange goes through the ordinary address and redemption limits.
+type bridgeHandler struct{ http.Handler }
+
+// requireBridge spends a paired request from its token ID's bucket. A missing
+// or refused bearer, or one a database fault left unchecked, spends from the
+// address bucket: rateLimit spent nothing for it, so an unchecked one (a
+// retryable 503, the snapshot's read failing on a cancelled request too) would
+// otherwise be free. When that bucket is empty, only a candidate for the paired
+// token gets a credential lookup, so a Bridge behind a busy address can still
+// work.
 func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return bridgeHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, failure, err := a.authenticate(r, false, bridgeKinds)
-		if failure != "" {
-			a.refuseToken(w, r, failure, err)
+		if failure == "" {
+			// Unlike spendCredential, a refusal here leaves the address alone:
+			// players behind the Bridge's address don't pay for its pace.
+			key := strconv.FormatInt(credentialFrom(ctx).ID, 10)
+			if !a.bridgeLimiter.Allow(key) {
+				rateLimited(w, a.bridgeLimiter.Wait(key))
+				return
+			}
+			next(w, r.WithContext(ctx))
 			return
 		}
-		next(w, r.WithContext(ctx))
-	})
+		if ip := clientIP(r); !a.ipLimiter.Allow(ip) {
+			rateLimited(w, a.ipLimiter.Wait(ip))
+			return
+		}
+		a.refuseToken(w, r, failure, err)
+	})}
 }
 
 // bridgeInfo is the bridge block of GET /server, present only while the Bridge

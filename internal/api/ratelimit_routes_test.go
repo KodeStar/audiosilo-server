@@ -30,7 +30,7 @@ func newRouteLimitEnv(t *testing.T) *routeLimitEnv {
 	t.Helper()
 	e := newTestEnv(t)
 	now := time.Now()
-	for _, l := range []*rateLimiter{e.api.ipLimiter, e.api.tokenLimiter, e.api.mediaLimiter} {
+	for _, l := range []*rateLimiter{e.api.ipLimiter, e.api.bridgeLimiter, e.api.tokenLimiter, e.api.mediaLimiter} {
 		l.now = func() time.Time { return now }
 	}
 	re := &routeLimitEnv{testEnv: e, h: e.api.Handler()}
@@ -196,6 +196,7 @@ func TestRateLimitOverLongPathBounded(t *testing.T) {
 	for i, path := range []string{
 		"/api/v1/libraries/1/item?path=" + escape(over),
 		mediaURL(1, "stream", over, ""),
+		"/api/v1/bridge/libraries/1/book?path=" + escape(over),
 	} {
 		ip := "192.0.2." + strconv.Itoa(40+i)
 		for n := range 200 {
@@ -281,6 +282,170 @@ func TestRateLimitGeneralBurst(t *testing.T) {
 	}
 	if code := e.get("192.0.2.41", "/api/v1/server", ""); code != http.StatusOK {
 		t.Fatalf("API call from another address = %d, want 200", code)
+	}
+}
+
+// Replay a conservative per-show mix from the 1,000-show backlog, one show
+// every 50 ms: 1,240 requests a second, six times the busiest second logged.
+// The endpoint handlers are stubs so claims never wait and rescans never touch
+// disk. Every call must authenticate and reach its handler.
+func TestRateLimitBridgePodcastBacklog(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	now := time.Now()
+	e.api.bridgeLimiter.now = func() time.Time { return now }
+	token := pairTestBridge(t, e.testEnv)
+	mix := []struct {
+		method, path string
+		perShow      int
+	}{
+		{"PUT", "/api/v1/bridge/status", 1},
+		{"GET", bridgeClaimPath, 10},
+		{"PATCH", "/api/v1/bridge/jobs/1", 40}, // progress, lease confirmations and finishes
+		{"POST", "/api/v1/bridge/rescan", 5},   // index the show's feed.json
+		{"GET", "/api/v1/bridge/libraries/1/podcasts/retention", 1},
+		{"POST", "/api/v1/bridge/libraries/1/podcasts/retention/check", 4},
+		{"GET", "/api/v1/bridge/libraries/1/marker", 1},
+	}
+	mux := http.NewServeMux()
+	for _, route := range mix {
+		mux.Handle(route.method+" "+route.path, e.api.requireBridge(func(w http.ResponseWriter, r *http.Request) {
+			if cred := credentialFrom(r.Context()); cred.Kind != auth.KindBridge {
+				t.Fatalf("handler received credential of kind %q", cred.Kind)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+	}
+	e.h = e.api.rateLimit(mux, mux)
+	for show := range 1000 {
+		now = now.Add(50 * time.Millisecond)
+		for _, route := range mix {
+			for range route.perShow {
+				if code := e.serve("192.0.2.50", route.method, route.path, token, ""); code != http.StatusNoContent {
+					t.Fatalf("show %d: %s %s = %d, want 204", show+1, route.method, route.path, code)
+				}
+			}
+		}
+	}
+}
+
+func TestRateLimitBridgeRoutesOwnBucket(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.ipLimiter.burst, e.api.bridgeLimiter.burst = 2, 2
+	const players, other = "192.0.2.50", "192.0.2.51"
+	const users = "/api/v1/bridge/users"
+	tok := pairTestBridge(t, e.testEnv)
+	for range 2 {
+		if code := e.get(players, "/api/v1/server", ""); code != http.StatusOK {
+			t.Fatalf("API call within the burst = %d, want 200", code)
+		}
+	}
+	if code := e.get(players, "/api/v1/server", ""); code != http.StatusTooManyRequests {
+		t.Fatalf("API call past the burst = %d, want 429", code)
+	}
+	for i := range 2 {
+		if code := e.get(players, users, tok); code != http.StatusOK {
+			t.Fatalf("Bridge call %d with the players' bucket spent = %d, want 200", i, code)
+		}
+	}
+	if code := e.get(other, users, tok); code != http.StatusTooManyRequests {
+		t.Fatalf("spent token from another address = %d, want 429", code)
+	}
+	for range 2 {
+		if code := e.get(other, "/api/v1/server", ""); code != http.StatusOK {
+			t.Fatalf("API call with the Bridge's bucket spent = %d, want 200", code)
+		}
+	}
+
+	// Exchanging a new pairing code replaces the token. The new credential
+	// starts with its full burst on the very same (still throttled) address.
+	next := pairTestBridge(t, e.testEnv)
+	for range 2 {
+		if code := e.get(players, users, next); code != http.StatusOK {
+			t.Fatalf("replacement Bridge token = %d, want 200", code)
+		}
+	}
+	if code := e.get(players, users, next); code != http.StatusTooManyRequests {
+		t.Fatalf("replacement token past its burst = %d, want 429", code)
+	}
+	if code := e.get("192.0.2.52", users, tok); code != http.StatusUnauthorized {
+		t.Fatalf("replaced token = %d, want 401", code)
+	}
+}
+
+func TestRateLimitBridgeRefusedTokenPaysTheAddress(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	const ip, other = "192.0.2.60", "192.0.2.61"
+	const users = "/api/v1/bridge/users"
+	tok := pairTestBridge(t, e.testEnv)
+	session := e.session(t)
+	badTokens := []string{"", session, "wrong"}
+	for i := range 200 {
+		bad := badTokens[i%len(badTokens)]
+		if code := e.get(ip, users, bad); code != http.StatusUnauthorized {
+			t.Fatalf("refused Bridge token %d = %d, want 401", i, code)
+		}
+	}
+	for _, bad := range []string{"", "another-wrong-token", session} {
+		if code := e.get(ip, users, bad); code != http.StatusTooManyRequests {
+			t.Fatalf("invalid credential from the spent address = %d, want 429", code)
+		}
+	}
+	if code := e.get(ip, "/api/v1/server", ""); code != http.StatusTooManyRequests {
+		t.Fatalf("API call after refused Bridge tokens = %d, want 429", code)
+	}
+	if code := e.serve(ip, "POST", "/api/v1/bridge/pair", tok, "{}"); code != http.StatusTooManyRequests {
+		t.Fatalf("pairing from the spent address = %d, want 429", code)
+	}
+	if code := e.get(ip, users, tok); code != http.StatusOK {
+		t.Fatalf("first call from paired Bridge behind the spent address = %d, want 200", code)
+	}
+	if code := e.get(other, users, tok); code != http.StatusOK {
+		t.Fatalf("paired request from a fresh address = %d, want 200", code)
+	}
+	for range 200 {
+		if code := e.get(other, users, "wrong"); code != http.StatusUnauthorized {
+			t.Fatalf("refused token within the fresh address's burst = %d, want 401", code)
+		}
+	}
+	if code := e.get(other, users, "wrong"); code != http.StatusTooManyRequests {
+		t.Fatalf("refused token past the fresh address's burst = %d, want 429", code)
+	}
+}
+
+// A token the check couldn't finish (here the snapshot's read on a cancelled
+// request, which leaves the snapshot cold, so rateLimit lets every guess
+// through) is a 503 that still spends from the address: past its burst the
+// address is refused, never answered for free.
+func TestRateLimitBridgeUncheckedTokenPaysTheAddress(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.ipLimiter.burst = 3
+	const users = "/api/v1/bridge/users"
+	mux := http.NewServeMux()
+	mux.Handle("GET "+users, e.api.requireBridge(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("an unchecked token reached the handler")
+	}))
+	e.h = e.api.rateLimit(mux, mux)
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	send := func() int {
+		req := httptest.NewRequestWithContext(gone, http.MethodGet, users, nil)
+		req.RemoteAddr = "192.0.2.70:1234"
+		req.Header.Set("Authorization", "Bearer a-guess")
+		rec := httptest.NewRecorder()
+		e.h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for i := range 3 {
+		if code := send(); code != http.StatusServiceUnavailable {
+			t.Fatalf("unchecked token %d = %d, want 503", i, code)
+		}
+	}
+	if code := send(); code != http.StatusTooManyRequests {
+		t.Fatalf("unchecked token past the address's burst = %d, want 429", code)
 	}
 }
 

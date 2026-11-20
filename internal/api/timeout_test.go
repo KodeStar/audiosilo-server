@@ -54,6 +54,61 @@ func TestTimeoutMiddlewareBoundsUnbufferedClaim(t *testing.T) {
 	}
 }
 
+// The OPML import runs past the request timeout under a bound of its own
+// (allowed: its answer is the handler's, written as the handler wrote it),
+// and that bound still ends it (denied: an import that would run on gets its
+// context cancelled). A GET of the same path, and any other POST, keeps the
+// request timeout.
+func TestTimeoutMiddlewareGivesTheOPMLImportItsOwnBound(t *testing.T) {
+	t.Parallel()
+	a := &API{timeoutDur: 20 * time.Millisecond, opmlImportDur: 2 * time.Second}
+	slow := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deadline, ok := r.Context().Deadline()
+		if !ok || time.Until(deadline) < time.Second {
+			t.Errorf("import deadline %v %v, want its own bound", deadline, ok)
+		}
+		select {
+		case <-r.Context().Done():
+			w.WriteHeader(http.StatusTeapot)
+		case <-time.After(100 * time.Millisecond): // five request timeouts
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	rec := httptest.NewRecorder()
+	a.timeout(slow).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, opmlImportPath, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import past the request timeout = %d, want 200", rec.Code)
+	}
+
+	a.opmlImportDur = 20 * time.Millisecond
+	ended := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			w.WriteHeader(http.StatusServiceUnavailable)
+		case <-time.After(5 * time.Second):
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	rec = httptest.NewRecorder()
+	start := time.Now()
+	a.timeout(ended).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, opmlImportPath, nil))
+	if rec.Code != http.StatusServiceUnavailable || time.Since(start) > 2*time.Second {
+		t.Fatalf("import past its bound = %d after %v, want 503 promptly", rec.Code, time.Since(start))
+	}
+
+	a.opmlImportDur = 5 * time.Second
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, opmlImportPath, nil),
+		httptest.NewRequest(http.MethodPost, "/api/v1/podcasts/follow", nil),
+	} {
+		rec = httptest.NewRecorder()
+		a.timeout(ended).ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "request timed out") {
+			t.Fatalf("%s %s = %d %q, want the request timeout", req.Method, req.URL.Path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 // TestTimeoutMiddlewareExemptsStreaming asserts streaming routes are NOT bounded:
 // a /stream handler that runs past the deadline still completes (audio playback
 // must not be cut off - there is deliberately no WriteTimeout either).

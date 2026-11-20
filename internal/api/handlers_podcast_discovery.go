@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"mime"
 	"net/http"
@@ -112,7 +113,7 @@ func (a *API) mountPodcastTransfer(mux *http.ServeMux) {
 	// The artwork is an <img> source: the media equivalent (?token= allowed for
 	// a session or API key only, the media rate limit).
 	mux.Handle("GET /api/v1/podcasts/discovery/artwork", a.requireMediaAuth(notKid(notDemo(a.requireModule(bridge.ModulePodcasts, http.HandlerFunc(a.handleDiscoveryArtwork))))))
-	mux.Handle("POST /api/v1/podcasts/opml/import", listener(a.handleOPMLImport))
+	mux.Handle("POST "+opmlImportPath, listener(a.handleOPMLImport))
 	mux.Handle("GET /api/v1/podcasts/opml/export", a.requireAuth(notDemo(http.HandlerFunc(a.handleOPMLExport))))
 }
 
@@ -262,23 +263,22 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	who := callerOf(r.Context())
-	lib, err := a.cat.GetLibrary(r.Context(), id)
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeNoStoreError(w, http.StatusNotFound, "library_not_found", "Library not found.", 0)
-		return
-	}
-	if err != nil {
-		a.writeCatalogError(w, err, "opml import library failed", "Could not import.")
-		return
-	}
-	// The grant before the kind: a library the caller holds no whole grant on
-	// is 403 whatever it holds, so its kind is never revealed.
+	// The grant before the library and its kind: a library the caller holds
+	// no whole grant on is 403 whatever it holds, so its kind is never
+	// revealed, nor, as for a single follow, whether it is there at all.
 	whole, err := a.cat.PodcastWholeGrant(r.Context(), who, id)
 	if err != nil {
 		a.writeCatalogError(w, err, "opml import grant failed", "Could not import.")
 		return
 	}
-	if !whole {
+	var lib *catalog.Library
+	if whole {
+		if lib, err = a.cat.GetLibrary(r.Context(), id); err != nil && !errors.Is(err, catalog.ErrNotFound) {
+			a.writeCatalogError(w, err, "opml import library failed", "Could not import.")
+			return
+		}
+	}
+	if lib == nil {
 		writeNoStoreError(w, http.StatusForbidden, "no_library_access", "Importing needs access to the whole library.", 0)
 		return
 	}
@@ -317,7 +317,9 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 		defer a.opml.slots.Release()
 		var doc *opml.Document
 		if doc, err = opml.Parse(body); err == nil {
-			writeNoStore(w, http.StatusOK, a.follower().Import(r.Context(), who, id, doc))
+			ctx, cancel := a.opmlImportContext(r)
+			defer cancel()
+			writeOPMLImport(w, ctx, a.follower().Import(ctx, who, id, doc))
 			return
 		}
 	}
@@ -334,6 +336,42 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 		a.opml.imports.Refund(quotaKey(r))
 	}
 	writeNoStoreError(w, http.StatusBadRequest, "invalid_opml", "Invalid OPML document.", 0)
+}
+
+// opmlImportContext is the context an import's rows are followed under: the
+// request's values and its bound (the deadline the timeout middleware set,
+// opmlImportTimeout) without its cancellation. A player gives the upload up
+// after 45 s, and the import that client no longer waits for still runs to
+// its end, holding its slot until then, so the rows it had not reached are
+// not left for an upload again. The server stopping ends it.
+func (a *API) opmlImportContext(r *http.Request) (context.Context, context.CancelFunc) {
+	ctx := context.WithoutCancel(r.Context())
+	var cancel context.CancelFunc
+	if deadline, ok := r.Context().Deadline(); ok {
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, a.opmlImportDur)
+	}
+	// AfterFunc ends it from a goroutine of its own, so an import admitted
+	// while the server is already stopping is ended here, before a row acts.
+	if a.baseCtx.Err() != nil {
+		cancel()
+	}
+	stop := context.AfterFunc(a.baseCtx, cancel)
+	return ctx, func() { stop(); cancel() }
+}
+
+// writeOPMLImport answers an import's rows, or, when ctx ended it (its bound,
+// opmlImportTimeout, or the server stopping), the timeout's 503: the rows
+// answered so far are followed and the rest not looked at, so a list short of
+// rows would read as all done. An upload again is safe: rows already done
+// answer already_following or already_queued.
+func writeOPMLImport(w http.ResponseWriter, ctx context.Context, res podcast.ImportResult) {
+	if ctx.Err() != nil {
+		writeError(w, http.StatusServiceUnavailable, "request timed out")
+		return
+	}
+	writeNoStore(w, http.StatusOK, res)
 }
 
 // opmlAdmit answers a refused OPML budget: 429 opml_rate_limited with

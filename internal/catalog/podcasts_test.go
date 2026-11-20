@@ -239,7 +239,7 @@ func TestPodcastFolding(t *testing.T) {
 	if err != nil || !got.Following || got.Status.NextCheck == nil || *got.Status.NextCheck != "2026-10-20T12:15:00Z" {
 		t.Fatalf("fold %+v %v", got, err)
 	}
-	_ = c.UnfollowPodcast(ctx, user, lib.ID, "Example Show")
+	_ = c.UnfollowPodcast(ctx, user, lib.ID, "Example Show", nil)
 	if err := c.FoldPodcastJob(ctx, job); err != nil {
 		t.Fatal(err)
 	}

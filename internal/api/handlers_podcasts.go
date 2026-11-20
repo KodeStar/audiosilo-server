@@ -219,19 +219,21 @@ func (a *API) handleMyPodcasts(w http.ResponseWriter, r *http.Request) {
 
 // podcastActionLibrary checks the gate and grant before the private-show scope:
 // knowing a private URL is the proof needed to follow that particular show.
-func (a *API) podcastActionLibrary(w http.ResponseWriter, r *http.Request, id int64) (*catalog.Library, bool) {
-	lib, err := a.grantedLibrary(r, id)
+// It returns the library and the caller's scope in it, private shows applied,
+// from one read of their access (catalog.CallerLibraryScope).
+func (a *API) podcastActionLibrary(w http.ResponseWriter, r *http.Request, id int64) (*catalog.Library, catalog.Scope, bool) {
+	lib, scope, granted, err := a.cat.CallerLibraryScope(r.Context(), callerOf(r.Context()), id)
 	switch {
 	case err != nil:
 		a.writeCatalogError(w, err, "podcast access failed", "Could not check access.")
-	case lib == nil:
+	case !granted: // never with no such library
 		writeErrorCode(w, 403, "no_library_access", "No access to this library.")
 	case lib.Kind != catalog.KindPodcasts:
 		writeErrorCode(w, 409, "not_podcast_library", "This library holds books.")
 	default:
-		return lib, true
+		return lib, scope, true
 	}
-	return nil, false
+	return nil, scope, false
 }
 func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -244,7 +246,7 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, 400, "invalid_request", "Send a path or a feed URL.")
 		return
 	}
-	lib, ok := a.podcastActionLibrary(w, r, req.LibraryID)
+	lib, s, ok := a.podcastActionLibrary(w, r, req.LibraryID)
 	if !ok {
 		return
 	}
@@ -254,11 +256,6 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := *req.Path
-	s, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), lib.ID)
-	if err != nil {
-		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")
-		return
-	}
 	if p, ok = a.visibleShow(w, r, lib.ID, s, p); !ok {
 		return
 	}
@@ -391,22 +388,18 @@ func (a *API) handlePodcastUnfollow(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, 400, "invalid_request", "A library and show are required.")
 		return
 	}
-	if _, ok := a.podcastActionLibrary(w, r, id); !ok {
+	_, s, ok := a.podcastActionLibrary(w, r, id)
+	if !ok {
 		return
 	}
 	// The follow is stored at the show's spelling, spelled only among the
 	// shows the caller can see; catalog.UnfollowPodcast decides which of
 	// their own rows go (one in another spelling only from their own rows).
-	s, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), id)
-	if err != nil {
-		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")
-		return
-	}
 	spelled, ok := a.showSpelled(w, r, id, p, s.VisibleInBrowse)
 	if !ok {
 		return
 	}
-	if err := a.cat.UnfollowPodcast(r.Context(), userFrom(r.Context()).ID, id, p, spelled); err != nil {
+	if err := a.cat.UnfollowPodcast(r.Context(), userFrom(r.Context()).ID, id, p, s.VisibleInBrowse, spelled); err != nil {
 		a.writeCatalogError(w, err, "unfollow podcast failed", "Could not unfollow show.")
 		return
 	}
@@ -424,13 +417,8 @@ func (a *API) handlePodcastCheck(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, 400, "invalid_request", "A library and show are required.")
 		return
 	}
-	lib, ok := a.podcastActionLibrary(w, r, req.LibraryID)
+	lib, scope, ok := a.podcastActionLibrary(w, r, req.LibraryID)
 	if !ok {
-		return
-	}
-	scope, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), lib.ID)
-	if err != nil {
-		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")
 		return
 	}
 	if req.Path, ok = a.showSpelled(w, r, lib.ID, req.Path, scope.VisibleInBrowse); !ok {

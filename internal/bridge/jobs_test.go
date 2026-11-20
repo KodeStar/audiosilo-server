@@ -28,7 +28,7 @@ type testQueue struct {
 	token int64
 }
 
-func newTestQueue(t *testing.T) *testQueue {
+func newTestQueue(t testing.TB) *testQueue {
 	t.Helper()
 	ctx := context.Background()
 	db := storetest.Open(t)
@@ -51,7 +51,7 @@ func newTestQueue(t *testing.T) *testQueue {
 
 // pair stands in for auth's pairing: a live bridge token of the admin and the
 // bridge_status row.
-func (q *testQueue) pair(t *testing.T) {
+func (q *testQueue) pair(t testing.TB) {
 	t.Helper()
 	ctx := context.Background()
 	res, err := q.db.ExecContext(ctx, `INSERT INTO tokens(user_id, token_hash, kind, created_at) VALUES(?, 'h', 'bridge', '2026-01-01T00:00:00Z')`, q.admin)
@@ -65,7 +65,7 @@ func (q *testQueue) pair(t *testing.T) {
 }
 
 // beat records a heartbeat naming kinds.
-func (q *testQueue) beat(t *testing.T, kinds ...string) {
+func (q *testQueue) beat(t testing.TB, kinds ...string) {
 	t.Helper()
 	st := Status{Version: "0.1.0", Kinds: kinds}
 	if err := st.Validate(); err != nil {

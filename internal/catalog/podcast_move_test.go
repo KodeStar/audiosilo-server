@@ -17,7 +17,7 @@ import (
 // showAt is the fixture feed (show a1b2c3d4e5f60718) as the folder show holds
 // it: its episode paths under show, as the Bridge writes them on taking in a
 // folder renamed by hand.
-func showAt(t *testing.T, show, id string) *feed.File {
+func showAt(t testing.TB, show, id string) *feed.File {
 	t.Helper()
 	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
@@ -32,7 +32,7 @@ func showAt(t *testing.T, show, id string) *feed.File {
 	return f
 }
 
-func indexShowAt(t *testing.T, c *Catalog, ctx context.Context, lib int64, show, id string) *feed.File {
+func indexShowAt(t testing.TB, c *Catalog, ctx context.Context, lib int64, show, id string) *feed.File {
 	t.Helper()
 	f := showAt(t, show, id)
 	if _, err := c.IndexPodcastShow(ctx, lib, show, show, "", "", f, nil, true, false); err != nil {

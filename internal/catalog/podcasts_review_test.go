@@ -116,7 +116,7 @@ func TestPodcastSubscribeFollowsReportedIdentity(t *testing.T) {
 	}
 	// An outcome without a valid identity records no follow that could never match.
 	job.Result = json.RawMessage(`{"show_path":"Example Show","status":200}`)
-	if err := c.UnfollowPodcast(ctx, user, lib.ID, "Example Show"); err != nil {
+	if err := c.UnfollowPodcast(ctx, user, lib.ID, "Example Show", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.FoldPodcastJob(ctx, job); err != nil {

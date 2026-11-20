@@ -45,10 +45,10 @@ type cachedToken struct {
 	read    time.Time
 }
 
-// fresh reports whether c's row was read under maxCachedTokenAge before now
+// freshTokenRead reports whether the read was under maxCachedTokenAge before now
 // (one read ahead of a clock that has moved back since is not).
-func (c cachedToken) fresh(now time.Time) bool {
-	age := now.Sub(c.read)
+func freshTokenRead(read, now time.Time) bool {
+	age := now.Sub(read)
 	return age >= 0 && age < maxCachedTokenAge
 }
 

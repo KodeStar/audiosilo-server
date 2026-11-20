@@ -103,6 +103,12 @@ type Service struct {
 	// only: a restart forgets it, so a park still on is announced once more.
 	announcedMu sync.Mutex
 	announced   map[int64]announcedPark
+
+	// sweptAll is when EndedPodcasts last swept every ended fetch and
+	// retention job (its clock), zero before the first sweep: between such
+	// sweeps it reads only those that ended within FoldSweepEvery.
+	sweptAllMu sync.Mutex
+	sweptAll   time.Time
 }
 
 // announcedPark is the park announced for a job: its code, whether it named a
