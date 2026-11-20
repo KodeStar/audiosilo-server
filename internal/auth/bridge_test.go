@@ -62,6 +62,36 @@ func TestBridgeTokenOnlyOnBridgeRoutes(t *testing.T) {
 	}
 }
 
+// After the pairing is known, distinct guesses need no database reads, even
+// if the caller still has address budget. The limiter can reject a known
+// mismatch before reaching the handler. A stale snapshot defers to a new read.
+func TestBridgeTokenCandidatesBoundGuessLookups(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	_, token := pairBridge(t, s, ctx, "boss")
+	if !s.MayBeBridgeToken(token) {
+		t.Fatal("a cold cache refused the paired token")
+	}
+	if _, _, err := s.ResolveRequest(ctx, token, Presence{}, KindBridge); err != nil {
+		t.Fatal(err)
+	}
+	if !s.MayBeBridgeToken(token) || s.MayBeBridgeToken("wrong") || s.MayBeBridgeToken("") {
+		t.Fatal("the warm cache should admit only the paired token")
+	}
+	if err := s.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, "another guess", Presence{}, KindBridge); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("new guess against a known pairing = %v, want ErrInvalidToken without a database read", err)
+	}
+	now = now.Add(maxCachedTokenAge)
+	if !s.MayBeBridgeToken("a possible new pairing") {
+		t.Fatal("an expired snapshot refused a lookup")
+	}
+}
+
 // Security-critical: a bridge token dies with its admin's admin role.
 func TestBridgeTokenNeedsAnEnabledAdmin(t *testing.T) {
 	t.Parallel()

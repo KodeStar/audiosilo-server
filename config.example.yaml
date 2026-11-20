@@ -70,9 +70,9 @@ cors_origins: []                                    # [AUDIOSILO_CORS_ORIGINS]
 #   address - per client address: requests with no valid token (a wrong or
 #             missing token pays here), the public routes, and sign-in, pairing
 #             and account requests (/api/v1/auth/*) even with a valid token.
-#             The Bridge's own requests (/api/v1/bridge/*) have a bucket of
-#             their own per address at these values, so busy players behind
-#             the Bridge's address don't hold it up, nor it them.
+#             This includes the public Bridge pairing exchange and missing or
+#             refused Bridge tokens. A paired Bridge has its own per-token
+#             budget of 2,000 requests/s with a burst of 125,000.
 #   token   - per signed-in device or API key: every other API request. A
 #             household behind one address, or everyone behind a reverse proxy,
 #             each have their own; a token past its budget also costs its address.

@@ -301,19 +301,18 @@ func pathTooLong(w http.ResponseWriter, rawPath string) bool {
 // book authenticate checks before its route), so a route added later can't
 // miss it (server#359). A query no longer than the cap can't hold such a path,
 // so it is only parsed here when it is longer. A path in a body is the route's
-// to check (pathTooLong, refsTooLong). A refusal rateLimit didn't charge (an
-// authenticated or media route's, which rateLimit only checks with Ready and
-// leaves to requireAuth or mediaAuth) pays into the address's bucket, as a
-// failed authentication does: otherwise these requests, refused before any
-// credential check, would never be limited.
+// to check (pathTooLong, refsTooLong). An overlong path rejected before
+// authentication spends from the address unless rateLimit already charged it.
 func (a *API) capPathQuery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(r.URL.RawQuery) > catalog.MaxPathBytes && strings.HasPrefix(r.URL.Path, "/api/") {
 			for _, p := range r.URL.Query()["path"] {
-				if pathTooLong(w, p) {
-					if !addressCharged(r) {
-						a.ipLimiter.Charge(clientIP(r))
+				if len(p) > catalog.MaxPathBytes {
+					if ip := clientIP(r); !addressCharged(r) && !a.ipLimiter.Allow(ip) {
+						rateLimited(w, a.ipLimiter.Wait(ip))
+						return
 					}
+					writeError(w, http.StatusBadRequest, msgPathTooLong)
 					return
 				}
 			}

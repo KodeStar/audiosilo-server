@@ -211,7 +211,8 @@ type Service struct {
 	now func() time.Time
 	// tokens is lookupToken's cache of valid tokens, exact by the store's content
 	// generation and its own touches' deletes (tokencache.go).
-	tokens store.GenMap[string, cachedToken]
+	tokens           store.GenMap[string, cachedToken]
+	bridgeCandidates bridgeCandidates
 	// ssoIssuer is the issuer of the single sign-on that can run now ("" while
 	// it is off or can't run; unset, none): only an identity from it is an
 	// admin's way into the console (decision 5). SetSSOIssuer.
@@ -702,12 +703,17 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	// that lands after it (which drops the row it changed, leaving the
 	// generation) has this read's row dropped too.
 	gen, mark, read := s.db.ContentGeneration(), s.tokens.Mark(), s.now()
-	if c, ok := s.tokens.Get(gen, hash); ok && slices.Contains(kinds, c.row.kind) && c.fresh(read) {
+	if c, ok := s.tokens.Get(gen, hash); ok && slices.Contains(kinds, c.row.kind) && freshTokenRead(c.read, read) {
 		if s.pastExpiry(c.expires) {
 			return nil, tokenRow{}, ErrInvalidToken
 		}
 		u := cloneUser(c.user)
 		return &u, c.row, nil
+	}
+	if len(kinds) == 1 && kinds[0] == KindBridge {
+		if err := s.checkBridgeHash(ctx, hash); err != nil {
+			return nil, tokenRow{}, err
+		}
 	}
 	args := make([]any, 0, len(kinds)+1)
 	args = append(args, hash)

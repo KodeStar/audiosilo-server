@@ -79,32 +79,45 @@ func (a *API) SetBridge(b *bridge.Service) {
 // no other route lists that kind, so a bridge token is refused everywhere else.
 var bridgeKinds = []string{auth.KindBridge}
 
-// requireBridge authenticates the paired Bridge's token (Authorization header
-// only). Only a missing or refused token is a 401 (the Bridge then stops calling
-// in and retries every few minutes), so a failure to check the token (the
-// database) is a 503, which it retries at once. A 401 also pays into its
-// address's general bucket, as a refused token does on any other route
-// (authLimited): rateLimit spent the request from bridgeLimiter, so without
-// it the Bridge's routes would give an address a second rate of token
-// lookups beside the general one. Paid, the tokens tried here use up the
-// general bucket's refill, so the two together sustain one bucket's rate
-// (their bursts still add: these routes are never refused for an empty
-// general bucket, which is the point of a bucket of their own). A paired
-// Bridge's own requests never pay it.
+// The 1,000-show backlog produced 31,697 job updates, 8,837 claims and 3,980
+// feed rescans, plus retention checks, heartbeats and mapping reads. Budget
+// 40 updates, 10 claims, 5 rescans, 1 policy read, 4 checks, 1 heartbeat and
+// 1 marker read per show (62,000 requests). The burst holds two such backlogs
+// without refill. The rate is over ten times the busiest logged second (199).
+const (
+	bridgeRate  = 2_000
+	bridgeBurst = 125_000
+)
+
+// bridgeHandler marks a route that requireBridge limits. The public pairing
+// exchange goes through the ordinary address and redemption limits.
+type bridgeHandler struct{ http.Handler }
+
+// requireBridge spends a paired request from its token ID's bucket. A missing
+// or refused bearer spends from the address bucket. When that bucket is empty,
+// only a candidate for the paired token gets a credential lookup, so a Bridge
+// behind a busy address can still work. A database fault is a retryable 503.
 func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return bridgeHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := clientIP(r)
 		ctx, failure, err := a.authenticate(r, false, bridgeKinds)
 		switch {
 		case failure == "":
+			key := strconv.FormatInt(credentialFrom(ctx).ID, 10)
+			if !a.bridgeLimiter.Allow(key) {
+				rateLimited(w, a.bridgeLimiter.Wait(key))
+				return
+			}
 			next(w, r.WithContext(ctx))
 		case err != nil && !errors.Is(err, auth.ErrInvalidToken):
 			a.log.Warn("bridge token check failed", "err", err)
 			writeError(w, http.StatusServiceUnavailable, "could not check the token, try again")
+		case !a.ipLimiter.Allow(ip):
+			rateLimited(w, a.ipLimiter.Wait(ip))
 		default:
-			a.ipLimiter.Charge(clientIP(r))
 			writeError(w, http.StatusUnauthorized, failure)
 		}
-	})
+	})}
 }
 
 // bridgeInfo is the bridge block of GET /server, present only while the Bridge

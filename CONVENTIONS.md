@@ -2977,7 +2977,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection; a share created with `paths`
   is held to the same 1000 (`boundedList`, 400 `too_large`).
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
-  `api/ratelimit.go`, values from `config.rate_limit.*` read at start through
+  `api/ratelimit.go`, configurable values from `config.rate_limit.*` read at start through
   `RateLimitConfig.Effective`: a rate or burst left at 0 is the current default and is
   never saved, so a changed default reaches existing installs), read off the
   handler `mux.Handler` picks: static files (`web.IsStatic`) are not counted; media
@@ -2987,24 +2987,25 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   authenticated API routes outside `/api/v1/auth/` (`requireAuth`, whose
   `authHandler` marks them; `tokenKeyed`, server#246) limit themselves: refused
   while the address's general bucket is empty (`Ready`, checked in rateLimit too, so
-  the refusal comes before the timeout layer), a failed authentication (missing or
-  refused token), and a `?path=` over the cap refused before the credential is
-  looked at (`capPathQuery`), charges it (`Charge`: even past empty, down to -burst, so requests
+  the refusal comes before the timeout layer). A `?path=` over the cap spends an address token
+  before returning 400 (`capPathQuery`). A failed authentication (missing or refused token)
+  charges the address (`Charge`: even past empty, down to -burst, so requests
   that passed `Ready` together all pay; `Ready` reserves nothing, so a concurrent
-  flood is looked up up to its concurrency before it pays), an authenticated one spends
+  flood is looked up up to its concurrency before it pays). An authenticated request spends
   from its credential's bucket (`mediaLimiter` ~200/s burst 2000, `tokenLimiter`
   ~50000/s burst 100000, per credential id) and charges the address's bucket when that
   refuses it (the lookup was already done), except that a demo account's API and media
   requests spend from the address's bucket (`allowCredential`: anyone can mint a demo
-  session, so a per-token budget would be none); the Bridge's `/api/v1/bridge/*` spends from
-  `bridgeLimiter`, a bucket per IP of its own at the address bucket's rate and burst (`addressLimiter`), so
-  a Bridge behind the address busy players share is not refused for their requests, nor they for its
-  (server#179); a refused token there (`requireBridge`'s 401) still pays into the address's `ipLimiter`, as
-  one does on any route, so the two buckets together sustain one bucket's rate of token lookups, not two
-  (their bursts add: a Bridge route is never refused for an empty general bucket;
-  `TestRateLimitBridgeRefusedTokenPaysTheAddress`); everything else (public routes and `/api/v1/auth/*` with or without a token: sign-in,
-  pairing, password, API keys) spends from `ipLimiter` (~50/s, burst 200, per IP), but `/healthz` and
-  `/api/v1/healthz` (`healthPatterns`), which spend nothing: a container's healthcheck asks from the loopback
+  session, so a per-token budget would be none). A paired Bridge's requests
+  spend from `bridgeLimiter` per authenticated token ID (2,000/s, burst 125,000 for podcast
+  backlogs). Missing and refused Bridge tokens spend from `ipLimiter`. When the address is
+  spent, `rateLimit` rejects known mismatches before the timeout layer. On a cold cache,
+  `lookupToken` refreshes the stored Bridge token hashes. The snapshot lasts until a content write or one minute.
+  This lets a paired Bridge work behind the same address as busy players or bad tokens
+  (`TestRateLimitBridgeRefusedTokenPaysTheAddress`). Public routes (including Bridge pairing)
+  and the sign-in, pairing, password and API key routes under `/api/v1/auth/*` spend from
+  `ipLimiter` (~50/s, burst 200, per IP). The health probes `/healthz` and
+  `/api/v1/healthz` (`healthPatterns`) spend nothing: a container's healthcheck asks from the loopback
   address an untrusted proxy on the same host shares with everyone, and one probe answers every request
   within `healthReuse` (a second; one ping at a time, detached from the request), server#217.
   Each limiter's idle TTL is two refills, from a minute up to a day. rateLimit

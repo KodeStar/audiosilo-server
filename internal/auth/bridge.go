@@ -5,6 +5,9 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"errors"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -51,6 +54,68 @@ const BridgeTokenLiveSQL = `EXISTS(SELECT 1 FROM tokens t JOIN users tu ON tu.id
 
 // revokeBridgeTokensSQL revokes every bridge token (pairing and unpairing).
 const revokeBridgeTokensSQL = `UPDATE tokens SET revoked = 1 WHERE kind = '` + KindBridge + `' AND revoked = 0`
+
+// Only hashes from the database enter this snapshot. Pairing leaves one live
+// token. Guesses share one read until the next content write or maxCachedTokenAge.
+// ResolveRequest still checks the matching credential.
+type bridgeCandidates struct {
+	load    sync.Mutex
+	current atomic.Pointer[bridgeHashes]
+}
+
+type bridgeHashes struct {
+	generation uint64
+	read       time.Time
+	hashes     []string
+}
+
+func (c *bridgeHashes) fresh(gen uint64, now time.Time) bool {
+	return c != nil && c.generation == gen && freshTokenRead(c.read, now)
+}
+
+// MayBeBridgeToken is the rate limiter's in-memory check on a spent address.
+// A cold snapshot lets the request through to lookupToken, where the refresh
+// has the request's database timeout. A match alone grants no access.
+func (s *Service) MayBeBridgeToken(secret string) bool {
+	if secret == "" {
+		return false
+	}
+	c := s.bridgeCandidates.current.Load()
+	return !c.fresh(s.db.ContentGeneration(), s.now()) || slices.Contains(c.hashes, hashSecret(secret))
+}
+
+// checkBridgeHash rejects unknown hashes before any per-secret database read.
+// Callers arriving together on a cold snapshot share the first caller's read.
+func (s *Service) checkBridgeHash(ctx context.Context, hash string) error {
+	b := &s.bridgeCandidates
+	b.load.Lock()
+	defer b.load.Unlock()
+	gen, now := s.db.ContentGeneration(), s.now()
+	c := b.current.Load()
+	if !c.fresh(gen, now) {
+		rows, err := s.db.QueryContext(ctx, `SELECT t.token_hash FROM tokens t JOIN users tu ON tu.id = t.user_id WHERE `+bridgeLiveWhere)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		c = &bridgeHashes{generation: gen, read: now}
+		for rows.Next() {
+			var h string
+			if err := rows.Scan(&h); err != nil {
+				return err
+			}
+			c.hashes = append(c.hashes, h)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		b.current.Store(c)
+	}
+	if !slices.Contains(c.hashes, hash) {
+		return ErrInvalidToken
+	}
+	return nil
+}
 
 // BridgePairing is the pairing side of the bridge_status row: whether a Bridge
 // is paired, by whom and when, and a code waiting to be exchanged.

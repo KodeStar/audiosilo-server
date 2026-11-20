@@ -123,9 +123,9 @@ func (a ActivityConfig) SessionRetention() time.Duration {
 // start. Address is per client address: requests no credential has been proved
 // for yet (a missing or refused token pays here, after its lookup), the sign-in,
 // pairing and account routes (/api/v1/auth/*, whatever token they carry) and
-// the public routes; the Bridge's routes (/api/v1/bridge/*) spend from a bucket
-// per address of their own at Address's values. Token is per
-// credential: every other authenticated API request, so several people behind
+// the public routes, including the Bridge pairing exchange. Authenticated
+// Bridge requests have a separate per-token backlog budget. Token is per
+// credential for other authenticated API requests, so several people behind
 // one address (a household behind NAT, a reverse proxy) each have their own.
 // Media is per credential too: covers and audio (a grid is one request per
 // cover). The brute-force lockouts on sign-in and code redemption are separate
