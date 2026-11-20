@@ -79,14 +79,17 @@ func (a *API) SetBridge(b *bridge.Service) {
 // no other route lists that kind, so a bridge token is refused everywhere else.
 var bridgeKinds = []string{auth.KindBridge}
 
-// The 1,000-show backlog produced 31,697 job updates, 8,837 claims and 3,980
-// feed rescans, plus retention checks, heartbeats and mapping reads. Budget
-// 40 updates, 10 claims, 5 rescans, 1 policy read, 4 checks, 1 heartbeat and
-// 1 marker read per show (62,000 requests). The burst holds two such backlogs
-// without refill. The rate is over ten times the busiest logged second (199).
+// bridgeRate and bridgeBurst are a paired Bridge's budget, per token. The
+// busiest second of a 1,000-show podcast backlog held 199 of its 46,209 Bridge
+// requests. The rate is ten times that, and the burst ten more seconds of it.
+// A larger backlog lasts longer but runs no faster, so the pace sets the
+// budget, not the number of shows. Both stay far under the per-device token
+// tier (rate_limit.token), so a stolen Bridge token still meets a cap until an
+// unpair revokes it. Only an authenticated token gets a bucket, and a pairing
+// leaves one live, so the buckets stay few.
 const (
 	bridgeRate  = 2_000
-	bridgeBurst = 125_000
+	bridgeBurst = 20_000
 )
 
 // bridgeHandler marks a route that requireBridge limits. The public pairing
@@ -99,10 +102,11 @@ type bridgeHandler struct{ http.Handler }
 // behind a busy address can still work. A database fault is a retryable 503.
 func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 	return bridgeHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
 		ctx, failure, err := a.authenticate(r, false, bridgeKinds)
 		switch {
 		case failure == "":
+			// Unlike spendCredential, a refusal here leaves the address alone:
+			// players behind the Bridge's address don't pay for its pace.
 			key := strconv.FormatInt(credentialFrom(ctx).ID, 10)
 			if !a.bridgeLimiter.Allow(key) {
 				rateLimited(w, a.bridgeLimiter.Wait(key))
@@ -112,9 +116,11 @@ func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 		case err != nil && !errors.Is(err, auth.ErrInvalidToken):
 			a.log.Warn("bridge token check failed", "err", err)
 			writeError(w, http.StatusServiceUnavailable, "could not check the token, try again")
-		case !a.ipLimiter.Allow(ip):
-			rateLimited(w, a.ipLimiter.Wait(ip))
 		default:
+			if ip := clientIP(r); !a.ipLimiter.Allow(ip) {
+				rateLimited(w, a.ipLimiter.Wait(ip))
+				return
+			}
 			writeError(w, http.StatusUnauthorized, failure)
 		}
 	})}

@@ -285,12 +285,15 @@ func TestRateLimitGeneralBurst(t *testing.T) {
 	}
 }
 
-// Replay a conservative per-show mix from the 1,000-show backlog with no
-// refill. The endpoint handlers are stubs so claims never wait and rescans
-// never touch disk. Every call must authenticate and reach its handler.
+// Replay a conservative per-show mix from the 1,000-show backlog, one show
+// every 50 ms: 1,240 requests a second, six times the busiest second logged.
+// The endpoint handlers are stubs so claims never wait and rescans never touch
+// disk. Every call must authenticate and reach its handler.
 func TestRateLimitBridgePodcastBacklog(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
+	now := time.Now()
+	e.api.bridgeLimiter.now = func() time.Time { return now }
 	token := pairTestBridge(t, e.testEnv)
 	mix := []struct {
 		method, path string
@@ -315,6 +318,7 @@ func TestRateLimitBridgePodcastBacklog(t *testing.T) {
 	}
 	e.h = e.api.rateLimit(mux, mux)
 	for show := range 1000 {
+		now = now.Add(50 * time.Millisecond)
 		for _, route := range mix {
 			for range route.perShow {
 				if code := e.serve("192.0.2.50", route.method, route.path, token, ""); code != http.StatusNoContent {

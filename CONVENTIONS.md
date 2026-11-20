@@ -2997,8 +2997,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refuses it (the lookup was already done), except that a demo account's API and media
   requests spend from the address's bucket (`allowCredential`: anyone can mint a demo
   session, so a per-token budget would be none). A paired Bridge's requests
-  spend from `bridgeLimiter` per authenticated token ID (2,000/s, burst 125,000 for podcast
-  backlogs). Missing and refused Bridge tokens spend from `ipLimiter`. When the address is
+  spend from `bridgeLimiter` per authenticated token ID (2,000/s, burst 20,000: ten times the
+  busiest second of a 1,000-show podcast backlog; a refusal there doesn't charge the address).
+  Missing and refused Bridge tokens spend from `ipLimiter`. When the address is
   spent, `rateLimit` rejects known mismatches before the timeout layer. On a cold cache,
   `lookupToken` refreshes the stored Bridge token hashes. The snapshot lasts until a content write or one minute.
   This lets a paired Bridge work behind the same address as busy players or bad tokens

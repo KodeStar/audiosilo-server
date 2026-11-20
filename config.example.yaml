@@ -72,7 +72,7 @@ cors_origins: []                                    # [AUDIOSILO_CORS_ORIGINS]
 #             and account requests (/api/v1/auth/*) even with a valid token.
 #             This includes the public Bridge pairing exchange and missing or
 #             refused Bridge tokens. A paired Bridge has its own per-token
-#             budget of 2,000 requests/s with a burst of 125,000.
+#             budget of 2,000 requests/s with a burst of 20,000.
 #   token   - per signed-in device or API key: every other API request. A
 #             household behind one address, or everyone behind a reverse proxy,
 #             each have their own; a token past its budget also costs its address.
