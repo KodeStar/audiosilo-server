@@ -52,8 +52,7 @@ const BridgeLiveSQL = `EXISTS(SELECT 1 ` + bridgeLiveFrom + `)`
 // A Bridge's call was authenticated when it arrived; a pairing or an unpair may
 // have revoked its token since (a heartbeat queued for the writer, a claim
 // waiting out its long poll), so the bridge package's writes ask again.
-const BridgeTokenLiveSQL = `EXISTS(SELECT 1 FROM tokens t JOIN users tu ON tu.id = t.user_id
-	WHERE t.id = ? AND ` + bridgeLiveWhere + `)`
+const BridgeTokenLiveSQL = `EXISTS(SELECT 1 ` + bridgeLiveFrom + ` AND t.id = ?)`
 
 // revokeBridgeTokensSQL revokes every bridge token (pairing and unpairing).
 const revokeBridgeTokensSQL = `UPDATE tokens SET revoked = 1 WHERE kind = '` + KindBridge + `' AND revoked = 0`

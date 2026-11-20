@@ -1020,7 +1020,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   reads `tokens` and `users` (owner join), and the touch is the only user-state change to
   either (`KeepCastToken`'s is a cast token's, which the cache never holds), dropped from the cache by the touching request (its rows are also read again once a minute
   old, `maxCachedTokenAge`: the generation never sees another process's write, which `reset-admin`
-  beside a running server is). A new cache whose answer reads a
+  beside a running server is); the Bridge token snapshot (`auth/bridge.go` `bridgeCandidates`, the live
+  Bridge token hashes `lookupToken` and `MayBeBridgeToken` check a guess against) reads `tokens`
+  (`token_hash`, `kind`, `revoked`) and `users` (`disabled`, `role`), none of which the touch changes,
+  and is read again once a minute old as well. A new cache whose answer reads a
   user-state table needs a key of its own, or that table out of the list.
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
@@ -2987,9 +2990,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   authenticated API routes outside `/api/v1/auth/` (`requireAuth`, whose
   `authHandler` marks them; `tokenKeyed`, server#246) limit themselves: refused
   while the address's general bucket is empty (`Ready`, checked in rateLimit too, so
-  the refusal comes before the timeout layer). A `?path=` over the cap spends an address token
-  before returning 400 (`capPathQuery`). A failed authentication (missing or refused token)
-  charges the address (`Charge`: even past empty, down to -burst, so requests
+  the refusal comes before the timeout layer). A failed authentication (missing or refused token)
+  and a `?path=` over the cap refused before the credential is looked at (`capPathQuery`, on a
+  Bridge route too) charge the address (`Charge`: even past empty, down to -burst, so requests
   that passed `Ready` together all pay; `Ready` reserves nothing, so a concurrent
   flood is looked up up to its concurrency before it pays). An authenticated request spends
   from its credential's bucket (`mediaLimiter` ~200/s burst 2000, `tokenLimiter`
@@ -2999,7 +3002,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   session, so a per-token budget would be none). A paired Bridge's requests
   spend from `bridgeLimiter` per authenticated token ID (2,000/s, burst 20,000: ten times the
   busiest second of a 1,000-show podcast backlog; a refusal there doesn't charge the address).
-  Missing and refused Bridge tokens spend from `ipLimiter`. When the address is
+  Missing and refused Bridge tokens, and one a database fault left unchecked (its 503), spend
+  from `ipLimiter` (`Allow`: 429 once it is empty). When the address is
   spent, `rateLimit` rejects known mismatches before the timeout layer. On a cold cache,
   `lookupToken` refreshes the stored Bridge token hashes. The snapshot lasts until a content write or one minute.
   This lets a paired Bridge work behind the same address as busy players or bad tokens
