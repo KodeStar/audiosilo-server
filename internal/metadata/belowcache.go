@@ -293,7 +293,7 @@ func closeFolders(folders []*keptFolder) {
 // is opened through the root's kept folder, the whole path under it, and
 // failing that, the path resolved as Below resolves it (a link with an
 // absolute target, a Windows junction), opened through that kept folder too,
-// the root never opened again for it. A folder whose handle went stale
+// the root not opened again for it where folders are kept. A folder whose handle went stale
 // (ESTALE) is kept no longer.
 func BelowFolder[T any](root, path string, open func(r *os.Root, rel string) (T, error)) (T, error) {
 	return belowFolder(root, path, true, open)
@@ -336,9 +336,10 @@ func belowFolder[T any](root, path string, followLast bool, open func(r *os.Root
 	}
 	// The path resolved, opened through the root's kept folder: the open
 	// through it failed just now, so it is not made again, nor the root
-	// opened once more (below's way, should the root not open here, or the
-	// kept handle have gone stale since its look: below's fresh root opens
-	// the path itself again).
+	// opened once more where folders are kept (Windows keeps none: openOnly,
+	// so get opens it there; below's way, should the root not open here, or
+	// the kept handle have gone stale since its look: below's fresh root
+	// opens the path itself again).
 	if staleHandle(err) {
 		return below(root, path, followLast, open)
 	}
