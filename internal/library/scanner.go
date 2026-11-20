@@ -1659,7 +1659,8 @@ func partTitle(relPath string) string {
 //
 // The root is resolved first and the walk starts at its target: filepath.WalkDir
 // Lstat's its root, so a root that is itself a symlink (a NAS mount linked into
-// place) was one non-directory entry and indexed nothing. Links below the
+// place) or a Windows junction (metadata.EvalSymlinksBounded follows one) was
+// one non-directory entry and indexed nothing. Links below the
 // root are still not walked into, and a file link is a part only while it
 // stays inside the root (linkOut). Rel paths are taken against the folder walked and
 // folders are named under lib.Root, so both are the same whether or not the root

@@ -18,7 +18,7 @@ import (
 // Such a name is read (os.Readlink reads a junction's target) and followed as
 // a link when it reads as one (NotALink says it does not), else taken as a
 // plain name, as it always was. The library's join and scan read names so,
-// and so does resolveLinks.
+// and so does resolveLinks (ResolveLinks).
 func LinkKind(m fs.FileMode) (link, maybe bool) {
 	switch {
 	case m&fs.ModeSymlink != 0:
@@ -42,6 +42,13 @@ const MaxLinkHops = 255
 
 // errLinkLoop is walkLinks' for a path through more than MaxLinkHops links.
 var errLinkLoop = errors.New("too many links")
+
+// ResolveLinks is filepath.EvalSymlinks of path with a Windows junction
+// followed as a link (resolveLinks: walkLinks there, EvalSymlinks elsewhere):
+// a library's root resolved as Below resolves it, so the join's containment
+// check (library.SafeJoin, SafeJoinListed) holds for a root reached through a
+// junction, which EvalSymlinks fails (ENOTDIR) or leaves as a plain name.
+func ResolveLinks(path string) (string, error) { return resolveLinks(path) }
 
 // walkLinks is filepath.EvalSymlinks of path, an absolute one, a name that may
 // be a link (LinkKind: a Windows junction, which EvalSymlinks has not followed

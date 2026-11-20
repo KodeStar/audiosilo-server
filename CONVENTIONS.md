@@ -1350,13 +1350,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestSafeJoinListedVariantCostsWhatMissingDoes`; a folder whose names pass the bound once a request). A
   link is read (`Readlink`), never followed: `followLink` walks its target one name at a time, from the
   link's folder or the filesystem's root, through the root and the folders above it unlooked at (the root is
-  resolved: no link in them), each name under the root looked at and a link among them read the same way (at
-  most `maxLinkHops`, a loop past it a name not there), and ends at the first name out of the root without
+  resolved: no link in them; `metadata.ResolveLinks`, which follows a Windows junction as a link, as `Below`
+  does, where `filepath.EvalSymlinks` fails a root reached through one and the join checked no link below it:
+  `SafeJoin`, `SafeJoinListed`, the scan's walk, `TestSafeJoinRootThroughAJunction` on Windows), each name under the root looked at and a link among them read the same way (at
+  most `metadata.MaxLinkHops`, a loop past it a name not there), and ends at the first name out of the root without
   looking at it. An absolute target that names the root as configured (a root that is itself a link,
   `/data/books` to `/mnt/books`, or macOS's `/var`) is walked from the resolved root, as the OS opens it
   (`throughRootAs`); one through any other link above the root is out of it. A Windows junction (Lstat's
   irregular entry that is no folder since Go 1.23, neither a link nor a folder) is read as a link
-  (`linkKind`), and another reparse point that doesn't read as one is a plain name
+  (`metadata.LinkKind`), and another reparse point that doesn't read as one is a plain name
   (`TestJoinLinkThroughTheRootAsConfigured`, `TestResolveBelowJunction`). A link or junction that is there and
   can't be read (a permission, a junction another process holds) is `ErrOutsideRoot` too (`linkRead`), and so is
   one with a name along its target whose look failed for anything but the name gone (a permission, a limit of

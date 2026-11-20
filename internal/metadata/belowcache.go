@@ -263,7 +263,7 @@ func FoldersKeptForTests(root string) int {
 		panic("metadata.FoldersKeptForTests called outside a test binary")
 	}
 	abs, _ := filepath.Abs(root)
-	resolved, _ := filepath.EvalSymlinks(abs)
+	resolved, _ := resolveLinks(abs)
 	n := 0
 	belowFolders.mu.Lock()
 	defer belowFolders.mu.Unlock()

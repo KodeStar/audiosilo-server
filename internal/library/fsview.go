@@ -147,9 +147,13 @@ func safeJoin(root, relPath string, lk belowLooks) (string, error) {
 		return "", err
 	}
 	// Resolve symlinks in the root itself so containment is checked against the
-	// real directory (the root is operator-configured and expected to exist).
+	// real directory (the root is operator-configured and expected to exist), a
+	// Windows junction followed as a link (metadata.ResolveLinks, as Below
+	// resolves the root): filepath.EvalSymlinks fails a root reached through
+	// one (ENOTDIR), which left only resolveExisting's look, no link below the
+	// root checked.
 	rootAs := rootAbs
-	resolved, rerr := filepath.EvalSymlinks(rootAbs)
+	resolved, rerr := metadata.ResolveLinks(rootAbs)
 	if rerr == nil {
 		rootAbs = resolved
 	} else if err := unansweredLook(context.Background(), rerr); err != nil {
@@ -540,7 +544,8 @@ func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
 
 // throughRootAs is names, an absolute link target's on volume vol, less the
 // root's names as configured (w.rootAs) when they lead it: the OS resolves
-// that spelling to w.rootAbs, as this resolve's EvalSymlinks of the root did,
+// that spelling to w.rootAbs, as this resolve's look at the root
+// (metadata.ResolveLinks, EvalSymlinksBounded) did,
 // so the names after it are walked from w.rootAbs (a root that is itself a
 // link, /data/books to /mnt/books, or macOS's /var to /private/var, whose
 // links name its files through the configured path). ok false when they do
@@ -566,13 +571,14 @@ func withinRoot(rootAbs, p string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
-// resolveExisting resolves symlinks in the longest existing prefix of p and
-// re-appends the (not-yet-existing) remainder, so containment can be checked even
-// for a path that has not been created yet.
+// resolveExisting resolves symlinks (and Windows junctions: metadata.ResolveLinks)
+// in the longest existing prefix of p and re-appends the (not-yet-existing)
+// remainder, so containment can be checked even for a path that has not been
+// created yet.
 func resolveExisting(p string) string {
 	rest := ""
 	for cur := p; ; {
-		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+		if resolved, err := metadata.ResolveLinks(cur); err == nil {
 			return filepath.Join(resolved, rest)
 		}
 		parent := filepath.Dir(cur)
