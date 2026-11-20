@@ -23,11 +23,13 @@ import (
 // is. os.Root follows a link that stays under root by a relative target, but
 // refuses one it could follow safely all the same: an absolute target that
 // names a place under root, a relative one that climbs above root and comes
-// back. A join allows those (library.followLink), so when the first open
-// fails for anything but the name gone, path is resolved
-// (filepath.EvalSymlinks) and, when that is under root, opened there, through
-// the os.Root again: no link is left in it to follow, and one swapped in
-// since is refused as before. A path holding a NUL (the API's noFile: a path
+// back, and a Windows junction, whose target is always absolute. A join
+// allows those (library.followLink), so when the first open fails for
+// anything but the name gone, path is resolved (resolveLinks: a junction
+// followed as a link) and, when that is under root, opened there, through the
+// os.Root again: no link is left in it to follow, and one swapped in since is
+// refused as before. A junction (or a link) that leads out of root resolves
+// out of it and is refused. A path holding a NUL (the API's noFile: a path
 // no file has) fails at once, the disk not reached, as a plain open's does.
 func Below[T any](root, path string, open func(r *os.Root, rel string) (T, error)) (T, error) {
 	return below(root, path, true, open)
@@ -51,8 +53,19 @@ func below[T any](root, path string, followLast bool, open func(r *os.Root, rel 
 	if err == nil || errors.Is(err, fs.ErrNotExist) {
 		return v, err
 	}
+	return openResolved(r, rootAbs, rel, resolved, followLast, err, open)
+}
+
+// openResolved is below's second open, through r, the root opened at rootAbs
+// (or a folder kept open there, BelowFolder's), after the first, of rel under
+// it, failed with err for anything but the name gone: rel resolved (up to its
+// last name only unless followLast) and, when that leads under the root
+// (resolved: underRoot's, or resolved here) by another path, opened there.
+// err when it does not.
+func openResolved[T any](r *os.Root, rootAbs, rel, resolved string, followLast bool, err error, open func(r *os.Root, rel string) (T, error)) (T, error) {
+	var zero T
 	if resolved == "" {
-		if resolved, _ = filepath.EvalSymlinks(rootAbs); resolved == "" {
+		if resolved, _ = resolveLinks(rootAbs); resolved == "" {
 			return zero, err
 		}
 	}
@@ -62,8 +75,8 @@ func below[T any](root, path string, followLast bool, open func(r *os.Root, rel 
 	var real string
 	var rerr error
 	if followLast || rel == "." {
-		real, rerr = filepath.EvalSymlinks(abs)
-	} else if real, rerr = filepath.EvalSymlinks(filepath.Dir(abs)); rerr == nil {
+		real, rerr = resolveLinks(abs)
+	} else if real, rerr = resolveLinks(filepath.Dir(abs)); rerr == nil {
 		real = filepath.Join(real, filepath.Base(abs))
 	}
 	if rerr != nil {
@@ -94,7 +107,7 @@ func underRoot(root, path string) (rootAbs, rel, resolved string, err error) {
 	// same folder: resolved only when the first does not lead it).
 	rel, ok := relBelow(rootAbs, path)
 	if !ok {
-		if resolved, err = filepath.EvalSymlinks(rootAbs); err != nil {
+		if resolved, err = resolveLinks(rootAbs); err != nil {
 			return "", "", "", err
 		}
 		if rel, ok = relBelow(resolved, path); !ok {

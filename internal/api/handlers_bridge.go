@@ -121,12 +121,7 @@ func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 			rateLimited(w, a.ipLimiter.Wait(ip))
 			return
 		}
-		if err != nil && !errors.Is(err, auth.ErrInvalidToken) {
-			a.log.Warn("bridge token check failed", "err", err)
-			writeError(w, http.StatusServiceUnavailable, "could not check the token, try again")
-			return
-		}
-		writeError(w, http.StatusUnauthorized, failure)
+		a.refuseToken(w, r, failure, err)
 	})}
 }
 

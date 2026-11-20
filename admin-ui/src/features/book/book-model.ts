@@ -6,6 +6,7 @@ import {
   type AdminChapter,
   type AdminFile,
   type BookEditRequest,
+  type BridgeJob,
   type BookRef,
   type CommunityChaptersDetail,
   type FieldSource,
@@ -14,6 +15,7 @@ import {
   type OverrideField,
   type PairToken,
 } from '@/api/types';
+import { detectChosenNote, detectRowJob } from '@/features/health/issues-model';
 import { hasIdentifier } from '@/features/library/series/series-model';
 import { formatSeriesPosition } from '@/lib/format';
 import { checkLabels, labelsText } from '@/lib/labels';
@@ -386,14 +388,52 @@ export function fileStrip(files: AdminFile[], bookPath: string) {
   }));
 }
 
+/**
+ * How long a book with fewer than two chapters runs before Health lists it under
+ * books without chapters: catalog/issues.go's longWithoutChapters, two hours.
+ */
+const LONG_WITHOUT_CHAPTERS = 2 * 3600;
+
 /** Chapters worth a plain warning: none, or one that runs over two hours. */
 export function chapterProblem(
   chapters: AdminChapter[],
   duration: number,
 ): 'none' | 'single' | undefined {
   if (chapters.length === 0) return 'none';
-  if (chapters.length === 1 && duration > 2 * 3600) return 'single';
+  if (chapters.length === 1 && duration > LONG_WITHOUT_CHAPTERS) return 'single';
   return undefined;
+}
+
+/**
+ * The Chapters card's chapter detection (BRIDGE-08), as the read-along card
+ * shows its job: the book's newest `chapters.detect` job while it is queued,
+ * working or parked, or how it ended (failed, or done: none were found, or
+ * they don't stand) while the book still lacks chapters, so an old failure
+ * says nothing once chapters came another way, and Detect chapters,
+ * offered as Health offers it for the same book (`canDetect`: an online Bridge
+ * that detects chapters, a book library): a book over two hours with fewer than
+ * two chapters, no chapter source chosen and no chapters edited (the server
+ * refuses those: chapters_chosen, chapters_edited), and no detection holding
+ * it back (one open and not being cancelled: detectRowJob).
+ * Undefined when there is neither a job to show nor an offer.
+ */
+export function detectCard(
+  detail: Pick<AdminBookDetail, 'book' | 'chapters' | 'chapter_source' | 'chapter_choice'>,
+  job: BridgeJob | undefined,
+  canDetect: boolean,
+): { job?: BridgeJob; offer: boolean } | undefined {
+  const lacking =
+    detail.book.duration > LONG_WITHOUT_CHAPTERS && (detail.chapters ?? []).length < 2;
+  // Health's row rules (detectRowJob, detectChosenNote), with an ended job
+  // shown only while the book still lacks chapters (Health lists only those).
+  const row = detectRowJob(job);
+  const shown = row && (row.open || lacking) ? row.job : undefined;
+  const chosen = detectChosenNote('detect', {
+    chapters_source: detail.chapter_source,
+    chapter_choice: detail.chapter_choice || undefined,
+  });
+  const offer = canDetect && lacking && !row?.holds && !chosen;
+  return shown || offer ? { job: shown, offer } : undefined;
 }
 
 // ---- community chapters ----

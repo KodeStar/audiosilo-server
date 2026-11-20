@@ -486,3 +486,127 @@ func TestBridgeDetectRefusalInTheEnqueue(t *testing.T) {
 		t.Fatalf("detect with neither: %+v, %v, %v; want queued", j, created, err)
 	}
 }
+
+// Health's books without chapters carry each book's newest chapters.detect job
+// (server#273): none before one is queued, the queued one after, then what the
+// Bridge reports of it though that is no content write (the list is not kept
+// in the list cache), and the newer of two. However many newer detections other
+// books have, the row still names its own. The ignored list and the Library's
+// list carry none.
+func TestHealthNoChaptersRowsCarryDetectJob(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beatDetect(t, true)
+	ctx := context.Background()
+	// Both books long and chapterless: Health lists them.
+	if _, err := b.db.ExecContext(ctx, `DELETE FROM chapters`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.db.ExecContext(ctx, `UPDATE books SET duration = 3 * 3600 WHERE rel_path IN (?, ?)`, mistbornBook, cradleBook); err != nil {
+		t.Fatal(err)
+	}
+	type row struct {
+		Path      string      `json:"path"`
+		DetectJob *bridge.Job `json:"detect_job"`
+	}
+	list := func(query string) map[string]*bridge.Job {
+		t.Helper()
+		resp, body := b.do(t, "GET", "/api/v1/admin/books?"+query, b.adminTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("list %s: %d %s", query, resp.StatusCode, body)
+		}
+		var page struct {
+			Books []row `json:"books"`
+		}
+		decodeInto(t, body, &page)
+		out := map[string]*bridge.Job{}
+		for _, r := range page.Books {
+			out[r.Path] = r.DetectJob
+		}
+		return out
+	}
+	const health = "issue=no_chapters&sort=added&order=desc&limit=50"
+	rows := list(health)
+	if j, listed := rows[mistbornBook]; !listed || j != nil {
+		t.Fatalf("before a detection: %+v (listed %v), want the book with no job", j, listed)
+	}
+	if _, listed := rows[cradleBook]; !listed {
+		t.Fatalf("rows = %v, want both books", rows)
+	}
+
+	resp, body := b.queueDetect(t, b.adminTok, mistbornBook, "")
+	var first bridge.Job
+	decodeInto(t, body, &first)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("queue: %d %s", resp.StatusCode, body)
+	}
+	rows = list(health)
+	if j := rows[mistbornBook]; j == nil || j.ID != first.ID || j.State != bridge.StateQueued || j.Kind != bridge.KindDetectChapters {
+		t.Fatalf("queued: %+v, want job %d queued", j, first.ID)
+	}
+	if j := rows[cradleBook]; j != nil {
+		t.Fatalf("a book with no detection carries %+v", j)
+	}
+
+	// The Bridge works on it. Its progress reports are no content write, so a
+	// list kept in the list cache would go on saying the step before: the row
+	// says the newest.
+	claimed := b.claim(t, bridge.KindDetectChapters)
+	report := func(body string) {
+		t.Helper()
+		if resp, out := b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", claimed.ID), b.bridgeTok, body); resp.StatusCode != http.StatusOK {
+			t.Fatalf("report %s: %d %s", body, resp.StatusCode, out)
+		}
+	}
+	report(`{"attempt":1,"state":"running","progress":{"step":"asr"}}`)
+	if j := list(health)[mistbornBook]; j == nil || j.State != bridge.StateRunning || !strings.Contains(string(j.Progress), `"asr"`) {
+		t.Fatalf("running: %+v, want running at asr", j)
+	}
+	report(`{"attempt":1,"state":"running","progress":{"step":"headings"}}`)
+	if j := list(health)[mistbornBook]; j == nil || !strings.Contains(string(j.Progress), `"headings"`) {
+		t.Fatalf("a later step: %+v, want the headings step", j)
+	}
+	// Parked: the row says why.
+	report(`{"attempt":1,"state":"needs_attention","error":"no headings","progress":{"park":{"code":"chapters_not_detected"}}}`)
+	if j := list(health)[mistbornBook]; j == nil || j.State != bridge.StateNeedsAttention || j.Error != "no headings" {
+		t.Fatalf("parked: %+v, want needs_attention", j)
+	}
+
+	// A second detection after the first was cancelled: the row names the newer,
+	// with more newer detections for other books than a job list page holds.
+	if _, err := b.api.bridge.Cancel(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	resp, body = b.queueDetect(t, b.adminTok, mistbornBook, "")
+	var second bridge.Job
+	decodeInto(t, body, &second)
+	if resp.StatusCode != http.StatusCreated || second.ID == first.ID {
+		t.Fatalf("second queue: %d %s", resp.StatusCode, body)
+	}
+	for i := range bridge.MaxListLimit + 1 {
+		if _, err := b.db.ExecContext(ctx, `INSERT INTO bridge_jobs(kind, library_id, rel_path, state, dedupe_key, created_at, updated_at, finished_at)
+			VALUES('chapters.detect', ?1, ?2, 'done', ?2, '2026-11-19T00:00:00Z', '2026-11-19T00:00:00Z', '2026-11-19T00:00:00Z')`,
+			b.lib.ID, fmt.Sprintf("Elsewhere/Book %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if j := list(health)[mistbornBook]; j == nil || j.ID != second.ID || j.State != bridge.StateQueued {
+		t.Fatalf("after %d newer jobs: %+v, want job %d queued", bridge.MaxListLimit+1, j, second.ID)
+	}
+
+	// Only that list carries it: not the ignored list, nor the Library's.
+	if resp, body := b.do(t, "POST", "/api/v1/admin/issues/ignore", b.adminTok,
+		fmt.Sprintf(`{"kind":"no_chapters","books":[{"library_id":%d,"path":%q}]}`, b.lib.ID, mistbornBook)); resp.StatusCode >= 300 {
+		t.Fatalf("ignore: %d %s", resp.StatusCode, body)
+	}
+	if j, listed := list("issue=no_chapters&issue_ignored=true")[mistbornBook]; !listed || j != nil {
+		t.Fatalf("the ignored list: %+v (listed %v), want the book with no job", j, listed)
+	}
+	if j, listed := list("limit=200")[mistbornBook]; !listed || j != nil {
+		t.Fatalf("the Library's list: %+v (listed %v), want the book with no job", j, listed)
+	}
+	// Denied: a user.
+	if resp, body := b.do(t, "GET", "/api/v1/admin/books?"+health, b.userTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("a user: %d %s, want 403", resp.StatusCode, body)
+	}
+}

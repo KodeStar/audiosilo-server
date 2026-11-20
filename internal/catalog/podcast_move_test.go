@@ -19,7 +19,7 @@ import (
 // folder renamed by hand.
 func showAt(t testing.TB, show, id string) *feed.File {
 	t.Helper()
-	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func TestPrefetchSkipsFetchLimitAndRetriesAfterSlotFreed(t *testing.T) {
 	if err = jobs.SaveHeartbeat(ctx, 1, bridge.Status{Kinds: []string{bridge.KindPodcastFetch}, Libraries: []bridge.LibraryStatus{{LibraryID: lib.ID, Mapped: true, Writable: true}}}); err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	f, err := feed.ReadFile("testdata/phase2c2", "testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +120,7 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	if err = jobs.SaveHeartbeat(ctx, 1, bridge.Status{Kinds: []string{bridge.KindPodcastFetch}, Libraries: []bridge.LibraryStatus{{LibraryID: lib.ID, Mapped: true, Writable: true}}}); err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	f, err := feed.ReadFile("testdata/phase2c2", "testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,5 +279,42 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	p4.work.Wait()
 	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE rel_path=?`, candidate.Path).Scan(&n); err != nil || n != 0 {
 		t.Fatal("removed entry prefetched", n, err)
+	}
+}
+
+// TestPrefetchPassesOverARefusedShow: the next episode in a show whose folder
+// the share refuses the server for good (chmod 000) is not prepared
+// (library.ShowRefused, the fetch routes' check): the Bridge's file would sit
+// behind the same refusal. Allowed: the folder readable again, a queue's
+// change prepares it.
+func TestPrefetchPassesOverARefusedShow(t *testing.T) {
+	e := refusedShow(t)
+	if err := e.cat.GrantWholeLibrary(e.ctx, 2, e.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	who := catalog.Caller{ID: 2, Podcasts: true}
+	scopes, err := e.cat.CallerScopes(e.ctx, who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := catalog.Ref{LibraryID: e.lib.ID, Path: e.f.Episodes[0].Path}
+	next := catalog.Ref{LibraryID: e.lib.ID, Path: e.f.Episodes[1].Path}
+	if err = e.cat.SetQueue(e.ctx, 2, []catalog.Ref{current, next}, scopes, nil); err != nil {
+		t.Fatal(err)
+	}
+	p := &Prefetcher{Catalog: e.cat, Bridge: e.queue, Context: e.ctx}
+	done := p.Start(who, current, true)
+	defer done()
+	p.work.Wait()
+	if n := e.fetches(t, next.Path); n != 0 {
+		t.Fatalf("%d fetches prepared in a show the share refuses, want none", n)
+	}
+	if err = os.Chmod(e.dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p.Reconsider(who)
+	p.work.Wait()
+	if n := e.fetches(t, next.Path); n != 1 {
+		t.Fatalf("%d fetches prepared once the show's folder reads, want 1", n)
 	}
 }

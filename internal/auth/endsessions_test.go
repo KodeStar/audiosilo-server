@@ -149,12 +149,83 @@ func TestPasswordChangeEndsOtherSessions(t *testing.T) {
 	theirs, _ := s.IssueToken(ctx, bystander.ID, KindSession, "phone", 0)
 	warm(t, s, theirs, KindSession)
 
-	if err := s.SetPassword(ctx, k.user.ID, "a-new-password", k.phoneID); err != nil {
+	n, err := s.ChangePassword(ctx, k.user.ID, "a-new-password", k.phoneID)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The count is the laptop alone (server#285): the person's own other session.
+	if n != 1 {
+		t.Fatalf("ChangePassword ended %d sessions, want 1", n)
 	}
 	k.check(t, s, ctx, true, false)
 	if _, _, err := s.ResolveRequest(ctx, theirs, Presence{}, KindSession); err != nil {
 		t.Fatalf("another person's session = %v, want it kept", err)
+	}
+	// A refused change counts nothing.
+	if n, err := s.ChangePassword(ctx, k.user.ID, "short", k.phoneID); err == nil || n != 0 {
+		t.Fatalf("a refused change = %d %v, want 0 and an error", n, err)
+	}
+}
+
+// Security-critical (server#285 Q21): EndKeys ends every API key and the
+// calendar feed link of the person, on the next lookup, and nothing else:
+// their sessions, pairing and recovery codes, Bridge token and another
+// person's key and link stay. An unknown account is ErrNotFound.
+func TestEndKeys(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	k := mintEveryKind(t, s, ctx, "boss")
+	key2, _, err := s.IssueAPIToken(ctx, k.user.ID, k.phoneID, "cron")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := mustUser(t, s, ctx, "bystander", "bystander-password", RoleUser)
+	theirPhone := mustSessionID(t, s, ctx, other.ID, "phone")
+	theirKey, _, err := s.IssueAPIToken(ctx, other.ID, theirPhone, "dash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirFeed := mustFeed(t, s, ctx, other.ID, theirPhone)
+	warm(t, s, theirKey, KindSession, KindAPI)
+
+	got, err := s.EndKeys(ctx, k.user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != (EndedKeys{APIKeys: 2, CalendarLink: true}) {
+		t.Fatalf("EndKeys = %+v, want 2 keys and the link", got)
+	}
+	for name, secret := range map[string]string{"the API key": k.key, "the second key": key2} {
+		_, _, err := s.ResolveRequest(ctx, secret, Presence{}, KindSession, KindAPI)
+		wantLive(t, name, false, err)
+	}
+	_, _, err = s.ResolveRequest(ctx, k.feed, Presence{}, KindFeed)
+	wantLive(t, "the calendar link", false, err)
+	for name, c := range map[string]struct {
+		secret string
+		kind   string
+	}{
+		"the phone's session":  {k.phone, KindSession},
+		"the laptop's session": {k.laptop, KindSession},
+		"the Bridge token":     {k.bridgeSecret, KindBridge},
+		"another's key":        {theirKey, KindAPI},
+		"another's link":       {theirFeed, KindFeed},
+	} {
+		_, _, err := s.ResolveRequest(ctx, c.secret, Presence{}, c.kind)
+		wantLive(t, name, true, err)
+	}
+	if _, _, err := s.lookupToken(ctx, hashSecret(k.pairing), KindPairing); err != nil {
+		t.Errorf("the open pairing code = %v, want it kept", err)
+	}
+	if _, err := s.ResolveAuthCode(ctx, k.recovery); err != nil {
+		t.Errorf("the recovery code = %v, want it kept", err)
+	}
+
+	if got, err := s.EndKeys(ctx, k.user.ID); err != nil || got != (EndedKeys{}) {
+		t.Fatalf("EndKeys again = %+v %v, want nothing ended", got, err)
+	}
+	if _, err := s.EndKeys(ctx, 9999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("EndKeys(unknown) = %v, want ErrNotFound", err)
 	}
 }
 

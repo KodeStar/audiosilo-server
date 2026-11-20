@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { AudioLines } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys } from '@/api/hooks';
+import { invalidateIssues, keys } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { FactList } from '@/components/fact-list';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
@@ -107,6 +107,8 @@ export function DetectChaptersDialog({
       })),
       { skip: DETECT_SKIPS },
     );
+    // Health's rows carry their book's detection: read again, whatever was queued.
+    invalidateIssues(qc);
     running.current = false;
     setBusy(false);
     const failed = queueReport(out, chosen.length, t, lang);

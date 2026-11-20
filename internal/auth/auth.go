@@ -1769,7 +1769,16 @@ type DeletedUser struct {
 // password the account had ends its sessions but keep (UserChanges.KeepToken);
 // the first-run admin's notes follow in the same write (notePasswordSet).
 func (s *Service) SetPassword(ctx context.Context, id int64, password string, keep int64) error {
-	return s.UpdateUser(ctx, id, UserChanges{Password: &password, KeepToken: keep})
+	_, err := s.ChangePassword(ctx, id, password, keep)
+	return err
+}
+
+// ChangePassword is SetPassword answering how many of the person's own sessions
+// it ended (server#285, POST /auth/password's signed_out): 0 for a first
+// password, which ends nothing. Their household members' sign-ins it ends too
+// are not counted (endSessions' count).
+func (s *Service) ChangePassword(ctx context.Context, id int64, password string, keep int64) (int64, error) {
+	return s.updateUser(ctx, id, UserChanges{Password: &password, KeepToken: keep})
 }
 
 // UserChanges is a change to an account (the admin's PATCH /admin/users/{id}):
@@ -1843,10 +1852,17 @@ type HouseholdChange struct {
 // replaces the printed one and ends the auth code printed beside it, and so
 // does clearing it (notePasswordSet).
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
+	_, err := s.updateUser(ctx, id, c)
+	return err
+}
+
+// updateUser is UpdateUser, also returning how many of the person's own
+// sessions the change ended (endSessions' count; 0 when it ended none).
+func (s *Service) updateUser(ctx context.Context, id int64, c UserChanges) (int64, error) {
 	if c.Username != nil {
 		name, err := cleanUsername(*c.Username)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		c.Username = &name
 	}
@@ -1854,20 +1870,20 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 	if c.Email != nil {
 		email, err := NormalizeEmail(*c.Email)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		emailArg = email
 	}
 	hash := ""
 	if c.Password != nil {
 		if err := validatePassword(*c.Password); err != nil {
-			return err
+			return 0, err
 		}
 		// Hashing (argon2id) is slow: never while holding the writer.
 		if *c.Password != "" {
 			var err error
 			if hash, err = HashPassword(*c.Password); err != nil {
-				return err
+				return 0, err
 			}
 		}
 	}
@@ -1875,13 +1891,13 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 	assign := h != nil && h.Owner > 0
 	if assign {
 		if err := checkKind(h.Kind); err != nil {
-			return err
+			return 0, err
 		}
 		if err := checkAccess(h.Access); err != nil {
-			return err
+			return 0, err
 		}
 		if h.Owner == id {
-			return ErrSelfManaged
+			return 0, ErrSelfManaged
 		}
 	}
 	role := ""
@@ -1900,7 +1916,10 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 	if c == gives && (c.Disabled == nil || !*c.Disabled) {
 		withTx = s.db.WithTx
 	}
-	return withTx(ctx, "UpdateUser", func(tx *sql.Tx) error {
+	var ended int64
+	err := withTx(ctx, "UpdateUser", func(tx *sql.Tx) error {
+		// A retried transaction counts again from nothing.
+		ended = 0
 		u, err := getUser(ctx, tx, id)
 		if err != nil {
 			return err
@@ -2019,7 +2038,7 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 			}
 		}
 		if c.Password != nil && u.HasPassword {
-			if _, err := endSessions(ctx, tx, id, c.KeepToken); err != nil {
+			if ended, err = endSessions(ctx, tx, id, c.KeepToken); err != nil {
 				return err
 			}
 		}
@@ -2044,6 +2063,10 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		}
 		return nil
 	})
+	if err != nil {
+		return 0, err
+	}
+	return ended, nil
 }
 
 // lastAdminGuard is ErrLastAdmin when no enabled admin but id exists (so
@@ -2086,8 +2109,8 @@ func forgetBrowsers(ctx context.Context, ex sqlExecer, userID int64) error {
 // code records no device, so one a grown-up member minted on their own device
 // goes too). A member's own device, paired before, stays signed in, with what
 // was made on it. The person's own API keys stay (listed and revoked on their
-// own), and so do their calendar feed token (theirs to end) and Bridge tokens
-// (the Bridge's). A cast token needs no write: it is refused once its
+// own), and so do their calendar feed token (theirs to end; the admin ends both
+// with EndKeys) and Bridge tokens (the Bridge's). A cast token needs no write: it is refused once its
 // parent is revoked (cast.go). The write moves the content generation, so the
 // token cache reads an ended token again and refuses it on the very next request.
 // It returns how many of the person's own sessions it ended.
@@ -2148,6 +2171,47 @@ func (s *Service) SignOutEverywhere(ctx context.Context, id, keep int64) (int64,
 		return forgetBrowsers(ctx, tx, id)
 	})
 	return n, err
+}
+
+// EndedKeys is what EndKeys ended: how many of the person's API keys, and
+// whether they had a calendar feed link.
+type EndedKeys struct {
+	APIKeys      int64 `json:"api_keys"`
+	CalendarLink bool  `json:"calendar_link"`
+}
+
+// EndKeys is the admin's "End API keys and calendar link" for account id
+// (server#285): it revokes every live API key of theirs and deletes their
+// calendar feed token (a feed row is deleted, never revoked: feed.go), in one
+// durable transaction, so neither works on the very next request (the write
+// moves the content generation, as endSessions' does). Their sessions, pairing
+// codes, household members' credentials and Bridge tokens stay: signing out is
+// SignOutEverywhere's. ErrNotFound for an unknown account.
+func (s *Service) EndKeys(ctx context.Context, id int64) (EndedKeys, error) {
+	var out EndedKeys
+	err := s.db.WithDurableTx(ctx, "EndKeys", func(tx *sql.Tx) error {
+		if _, err := getUser(ctx, tx, id); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx,
+			`UPDATE tokens SET revoked = 1 WHERE user_id = ? AND kind = ? AND revoked = 0`, id, KindAPI)
+		if err != nil {
+			return err
+		}
+		if out.APIKeys, err = res.RowsAffected(); err != nil {
+			return err
+		}
+		if res, err = tx.ExecContext(ctx, deleteFeedTokensSQL, id); err != nil {
+			return err
+		}
+		feeds, err := res.RowsAffected()
+		out.CalendarLink = feeds > 0
+		return err
+	})
+	if err != nil {
+		return EndedKeys{}, err
+	}
+	return out, nil
 }
 
 // CheckPassword verifies a plaintext password against a user's stored hash,

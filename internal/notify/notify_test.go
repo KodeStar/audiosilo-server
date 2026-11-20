@@ -978,7 +978,7 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 	const secretURL = "https://member:hunter2@private.feeds.example.net/rss/sekrit-token-42.xml?auth=TOKEN42"
 	secrets := []string{"hunter2", "private.feeds.example.net", "sekrit-token-42", "TOKEN42", "member:", "rss/",
 		"Example Show", "Example%20Show", "Episode Four", "show_path"}
-	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

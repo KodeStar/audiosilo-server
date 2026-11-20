@@ -156,6 +156,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"listening_stay":     true,                 // a sync listen's start "stay" (a Stay on another device's offer wins: 0080)
 		"renditions":         a.renditionsOn(),     // watch renditions: GET /stream?rendition=, POST/GET /libraries/{id}/renditions; the kinds in the top-level "renditions"
 		"oidc":               a.oidcOn(),           // Sign in with OpenID Connect: GET /auth/oidc/start; the button's name in auth.oidc
+		"unauthorized_mark":  true,                 // every 401 the server writes carries X-AudioSilo-Unauthorized (headerUnauthorized), so a 401 without it came from a proxy
 	}
 }
 
@@ -474,7 +475,11 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // with them), keeping the caller's, and their open pairing codes and recovery
 // code, and their household members' sign-ins, API keys and calendar links
 // made on their other devices; their own API keys, calendar feed token and
-// Bridge tokens stay (auth.endSessions).
+// Bridge tokens stay (auth.endSessions). Answers 200 {"signed_out": n}, how
+// many of the caller's own other sessions it ended (server#285: 0 for a first
+// password; never the members' sign-ins it ended, nor anything of another
+// person's), so the player names it without reading the devices list; a
+// server before v2.7.0 answered 204 with no body.
 // A wrong current password is 401 current_password_incorrect. An admin's change
 // ends the start's first-run hint, and the first-run admin's the printed
 // password and auth code (auth.UpdateUser's notePasswordSet).
@@ -506,7 +511,8 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := a.auth.SetPassword(r.Context(), full.ID, req.Password, credentialFrom(r.Context()).ID); err != nil {
+	n, err := a.auth.ChangePassword(r.Context(), full.ID, req.Password, credentialFrom(r.Context()).ID)
+	if err != nil {
 		// notKid refused a kid before this; a request that passed it just
 		// before the owner's switch to kid committed is refused in the write
 		// (ErrKidNoPassword, the admin PATCH's 400) and answers as notKid does.
@@ -517,7 +523,7 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		a.writeUserError(w, err, "could not update password")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]int64{"signed_out": n})
 }
 
 // handleGenerateRecovery mints (or replaces) the signed-in user's durable

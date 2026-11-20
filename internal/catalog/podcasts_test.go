@@ -50,7 +50,7 @@ func TestPodcastScopesAndAggregates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestPodcastMetadataSourceKeepsEpisodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestPodcastPruneNamedShows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestPodcastEpisodesOutOfBookFigures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestPodcastFolding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestPodcastFoldingOddOutcomes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

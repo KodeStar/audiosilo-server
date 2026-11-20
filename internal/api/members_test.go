@@ -603,7 +603,7 @@ func TestMembers_AccessAndKindChanges(t *testing.T) {
 		t.Fatalf("kind change = %d %+v", s, out)
 	}
 	// As a grown-up: a password and an API key, then back to a kid.
-	if s := m.status(t, "POST", "/api/v1/auth/password", evieTok, `{"password":"evie-password"}`); s != http.StatusNoContent {
+	if s := m.status(t, "POST", "/api/v1/auth/password", evieTok, `{"password":"evie-password"}`); s != http.StatusOK {
 		t.Fatalf("grown-up password = %d", s)
 	}
 	resp, b := m.do(t, "POST", "/api/v1/auth/tokens", evieTok, `{"label":"dash"}`)
@@ -817,7 +817,7 @@ func TestMembers_MemberLimits_Allowed(t *testing.T) {
 			t.Errorf("own collection = %d", s)
 		}
 	}
-	if s := m.status(t, "POST", "/api/v1/auth/password", gTok, `{"password":"ellis-password"}`); s != http.StatusNoContent {
+	if s := m.status(t, "POST", "/api/v1/auth/password", gTok, `{"password":"ellis-password"}`); s != http.StatusOK {
 		t.Errorf("grown-up password = %d", s)
 	}
 	if s := m.status(t, "POST", "/api/v1/auth/pair", gTok, ""); s != http.StatusOK {

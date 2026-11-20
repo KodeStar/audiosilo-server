@@ -263,12 +263,14 @@ func LstatBounded(ctx context.Context, path string, timeout time.Duration) (fs.F
 	return bounded(ctx, path, timeout, true, func() (fs.FileInfo, error) { return os.Lstat(path) }, nil)
 }
 
-// EvalSymlinksBounded is filepath.EvalSymlinks of path as a Bounded call: a
-// library's root as the spelling checks list below it (library.SafeJoinListed,
-// catalog's ownEntry: one form, so they read a folder's kept listing, DirNames,
-// under one name), and a link met on the way.
+// EvalSymlinksBounded is filepath.EvalSymlinks of path as a Bounded call, a
+// Windows junction followed as a link (ResolveLinks, as SafeJoin and Below
+// resolve a root): a library's root as the spelling checks list below it
+// (library.SafeJoinListed, catalog's ownEntry: one form, so they read a
+// folder's kept listing, DirNames, under one name) and as the scan walks it,
+// and a link met on the way.
 func EvalSymlinksBounded(ctx context.Context, path string, timeout time.Duration) (string, error) {
-	return bounded(ctx, path, timeout, true, func() (string, error) { return filepath.EvalSymlinks(path) }, nil)
+	return bounded(ctx, path, timeout, true, func() (string, error) { return resolveLinks(path) }, nil)
 }
 
 // ReadlinkBounded is os.Readlink of path as a Bounded call: one link's own

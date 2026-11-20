@@ -99,12 +99,12 @@ func countingRemuxer(t *testing.T, gate chan struct{}) (*FileCache, *atomic.Int3
 		t.Fatal(err)
 	}
 	var runs atomic.Int32
-	m.run = func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
+	m.run = func(ctx context.Context, ffmpegPath string, args []string, in inputSpec) error {
 		runs.Add(1)
 		if gate != nil {
 			<-gate
 		}
-		return runFFmpeg(ctx, ffmpegPath, args, stdin)
+		return runFFmpeg(ctx, ffmpegPath, args, in)
 	}
 	return m, &runs
 }
@@ -351,7 +351,7 @@ func fakeRemuxer(t *testing.T, run func(src, out string) error) (m *FileCache, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.run = func(_ context.Context, _ string, args []string, _ *os.File) error {
+	m.run = func(_ context.Context, _ string, args []string, _ inputSpec) error {
 		return run(src, strings.TrimPrefix(args[len(args)-1], "file:"))
 	}
 	return m, src
@@ -516,7 +516,7 @@ func TestRemuxerWarmAll(t *testing.T) {
 	m, runs := countingRemuxer(t, nil)
 	var most, now atomic.Int32
 	run := m.run
-	m.run = func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
+	m.run = func(ctx context.Context, ffmpegPath string, args []string, in inputSpec) error {
 		n := now.Add(1)
 		defer now.Add(-1)
 		for {
@@ -524,7 +524,7 @@ func TestRemuxerWarmAll(t *testing.T) {
 				break
 			}
 		}
-		return run(ctx, ffmpegPath, args, stdin)
+		return run(ctx, ffmpegPath, args, in)
 	}
 	ctx := context.Background()
 	m.WarmAll(ctx, "ffmpeg", dir, []string{one, aac, two})
@@ -610,7 +610,7 @@ func TestFileCacheTimeoutIsARefusal(t *testing.T) {
 	var runs atomic.Int32
 	m, src := fakeRemuxer(t, func(_, _ string) error { panic("replaced below") })
 	m.spec.timeout = 20 * time.Millisecond
-	m.run = func(ctx context.Context, _ string, _ []string, _ *os.File) error {
+	m.run = func(ctx context.Context, _ string, _ []string, _ inputSpec) error {
 		runs.Add(1)
 		<-ctx.Done()
 		return ctx.Err()
@@ -632,7 +632,7 @@ func TestFileCacheTimeoutIsARefusal(t *testing.T) {
 	g, gsrc := fakeRemuxer(t, func(_, _ string) error { panic("replaced below") })
 	g.spec.timeout = time.Hour
 	runCtx, cancel := context.WithCancel(ctx)
-	g.run = func(ctx context.Context, _ string, _ []string, _ *os.File) error {
+	g.run = func(ctx context.Context, _ string, _ []string, _ inputSpec) error {
 		cancel()
 		<-ctx.Done()
 		return ctx.Err()

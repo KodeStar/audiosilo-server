@@ -77,6 +77,20 @@ func (k samKinds) check(t *testing.T, c *castEnv, phoneLive, laptopLive bool) {
 	}
 }
 
+// signedOutOf reads POST /auth/password's answer: {"signed_out": n}, the only field.
+func signedOutOf(t *testing.T, body string) int {
+	t.Helper()
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("password answer %q: %v", body, err)
+	}
+	var n int
+	if len(out) != 1 || json.Unmarshal(out["signed_out"], &n) != nil {
+		t.Fatalf("password answer = %s, want only a signed_out count", body)
+	}
+	return n
+}
+
 // waysBack is what a session can make that signs a device in without the
 // password: an open pairing code (POST /auth/pair) and a recovery code.
 type waysBack struct{ pairing, recovery string }
@@ -153,8 +167,12 @@ func TestSelfPasswordChangeEndsOtherSessions(t *testing.T) {
 
 	resp, body := c.do(t, "POST", "/api/v1/auth/password", k.phone,
 		`{"password":"a-new-password","current_password":"sam-password"}`)
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("change = %d %s, want 204", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("change = %d %s, want 200", resp.StatusCode, body)
+	}
+	// The answer names what it ended (server#285): the laptop, the one other session.
+	if n := signedOutOf(t, body); n != 1 {
+		t.Fatalf("signed_out = %d, want 1 (%s)", n, body)
 	}
 	k.check(t, c, true, false)
 	spare.check(t, c.testEnv, false)
@@ -182,8 +200,12 @@ func TestFirstPasswordEndsNoSession(t *testing.T) {
 	u, _ := e.auth.CreateUser(ctx, "paired", "", auth.RoleUser)
 	phone, _ := e.auth.IssueToken(ctx, u.ID, auth.KindSession, "phone", 0)
 	tablet, _ := e.auth.IssueToken(ctx, u.ID, auth.KindSession, "tablet", 0)
-	if resp, body := e.do(t, "POST", "/api/v1/auth/password", phone, `{"password":"first-password"}`); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("first password = %d %s, want 204", resp.StatusCode, body)
+	resp, body := e.do(t, "POST", "/api/v1/auth/password", phone, `{"password":"first-password"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first password = %d %s, want 200", resp.StatusCode, body)
+	}
+	if n := signedOutOf(t, body); n != 0 {
+		t.Fatalf("a first password's signed_out = %d, want 0", n)
 	}
 	if resp, _ := e.do(t, "GET", "/api/v1/me", tablet, ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("the tablet after a first password = %d, want 200", resp.StatusCode)
@@ -342,9 +364,15 @@ func TestOwnersPasswordAndSignOutEndMembersSessions(t *testing.T) {
 	}
 
 	// Allowed: the change on the phone ends the member on the laptop.
-	if resp, body := m.do(t, "POST", "/api/v1/auth/password", m.adamTok,
-		`{"password":"a-new-password","current_password":"adam-password"}`); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("change = %d %s, want 204", resp.StatusCode, body)
+	resp, body := m.do(t, "POST", "/api/v1/auth/password", m.adamTok,
+		`{"password":"a-new-password","current_password":"adam-password"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("change = %d %s, want 200", resp.StatusCode, body)
+	}
+	// The answer counts adam's own laptop only, never the members' sign-ins it
+	// ended with it (nothing about another person, server#285).
+	if n := signedOutOf(t, body); n != 1 {
+		t.Fatalf("signed_out = %d, want 1: adam's laptop alone (%s)", n, body)
 	}
 	if s := status(onLaptop); s != http.StatusUnauthorized {
 		t.Fatalf("the member on the owner's laptop = %d, want 401", s)
@@ -360,7 +388,7 @@ func TestOwnersPasswordAndSignOutEndMembersSessions(t *testing.T) {
 	}
 
 	// Sign out everywhere (nothing kept) ends the member on the phone too.
-	resp, body := m.do(t, "POST", "/api/v1/admin/users/"+strconv.FormatInt(m.adam, 10)+"/sign-out", m.adminTok, "")
+	resp, body = m.do(t, "POST", "/api/v1/admin/users/"+strconv.FormatInt(m.adam, 10)+"/sign-out", m.adminTok, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("sign out everywhere = %d %s", resp.StatusCode, body)
 	}

@@ -1,6 +1,7 @@
 package library
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,7 @@ func podcastDiskFixture(t testing.TB) (context.Context, *catalog.Catalog, *catal
 	if err := os.MkdirAll(filepath.Join(dir, ".audiosilo"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata/phase2c2", "../podcast/testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,8 +573,10 @@ func setFeedTime(t testing.TB, filename string, at time.Time) {
 // 503 share_not_answering), never the episode absent (ErrNotIndexable), which
 // would ask the Bridge to fetch an episode the library holds. Denied the 503:
 // a permission is ErrEpisodeRefused (the stream's 404, no fetch), the file
-// gone ErrNotIndexable and no refusal. Allowed: with every look answering the
-// episode opens. Not parallel: it swaps podcastLstat.
+// gone ErrNotIndexable and no refusal; a permission above the file (the
+// folder, feed.json, the barrier) is ErrShowRefused, the file's own not.
+// Allowed: with every look answering the episode opens. Not parallel: it
+// swaps podcastLstat.
 func TestOpenPodcastReadsAShareFault(t *testing.T) {
 	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
 	ep := f.Episodes[0]
@@ -612,6 +615,12 @@ func TestOpenPodcastReadsAShareFault(t *testing.T) {
 			if refused := errors.Is(err, ErrEpisodeRefused); refused != (c.errno == syscall.EACCES) {
 				t.Errorf("%s failing %v: %v, refused for good %v, want it only for the permission", at, c.errno, err, refused)
 			}
+			// Above the file (the folder, feed.json, the barrier) a refusal
+			// is the show's, which no new download mends; the file's own is
+			// not.
+			if show := errors.Is(err, ErrShowRefused); show != (c.errno == syscall.EACCES && at != audio) {
+				t.Errorf("%s failing %v: %v, the show refused %v, want it for a permission above the file only", at, c.errno, err, show)
+			}
 		}
 	}
 	podcastLstat = was
@@ -620,6 +629,51 @@ func TestOpenPodcastReadsAShareFault(t *testing.T) {
 		t.Fatalf("every look answering: %v", err)
 	}
 	opened.Close()
+}
+
+// TestShowRefusedForAnEpisodeNotDownloaded: ShowRefused makes OpenPodcast's
+// looks above the episode's file for an episode the library does not hold
+// yet, which OpenPodcast answers absent before it looks: a permission on the
+// show's folder, its feed.json or the publish barrier is ErrShowRefused, and
+// the folder unreadable on the disk too (chmod 000, read through the root).
+// Denied the refusal: a share's fault a retry may get past, the folder not
+// there, a readable show. Not parallel: it swaps podcastLstat.
+func TestShowRefusedForAnEpisodeNotDownloaded(t *testing.T) {
+	ctx, _, lib, _, f, dir := podcastDiskFixture(t)
+	rel := f.Episodes[2].Path
+	if err := ShowRefused(ctx, *lib, rel, time.Second); err != nil {
+		t.Fatalf("a readable show: %v", err)
+	}
+	was := podcastLstat
+	t.Cleanup(func() { podcastLstat = was })
+	for _, at := range []string{dir, filepath.Join(dir, "feed.json"), filepath.Join(dir, ".audiosilo")} {
+		for _, errno := range []syscall.Errno{syscall.EACCES, syscall.EIO, syscall.ENOENT} {
+			podcastLstat = func(p string) (os.FileInfo, error) {
+				if p == at {
+					return nil, &fs.PathError{Op: "lstat", Path: p, Err: errno}
+				}
+				return was(p)
+			}
+			err := ShowRefused(ctx, *lib, rel, time.Second)
+			if refused := errors.Is(err, ErrShowRefused); refused != (errno == syscall.EACCES) || (err != nil) != refused {
+				t.Errorf("%s failing %v: %v, want ErrShowRefused for the permission alone", at, errno, err)
+			}
+		}
+	}
+	podcastLstat = was
+	if err := ShowRefused(ctx, *lib, "Another Show/2026-10-17-c0d697452a.mp3", time.Second); err != nil {
+		t.Errorf("a show folder not there yet: %v, want nil (a fetch makes it)", err)
+	}
+	if os.Geteuid() == 0 {
+		return // root reads a folder whatever its mode
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := ShowRefused(ctx, *lib, rel, time.Second); !errors.Is(err, ErrShowRefused) {
+		t.Errorf("a show folder chmod 000: %v, want ErrShowRefused", err)
+	}
 }
 
 // TestPodcastScanKeepsAShowOnAShareFault: a podcast scan whose look at a show
@@ -722,5 +776,84 @@ func TestPodcastScanBoundsAShowsLooks(t *testing.T) {
 	release()
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Partial || !downloaded() {
 		t.Errorf("a scan with every look answering: %+v %v, downloaded %v", res, err, downloaded())
+	}
+}
+
+// TestOpenPodcastThroughTheRootAfterASwap (security): an episode's feed.json
+// and file are read through the library's root, so a show folder swapped,
+// after the folder's own look, for a link to a copy out of the library (its
+// feed.json and episode at the size and times the pin names, so every look by
+// path, which follows the link, matches) is never read: the episode is not
+// opened. Plain reads by path followed the link and opened the copy's file.
+// Allowed: in place the episode opens to its own bytes. Not parallel: it
+// swaps podcastLstat.
+func TestOpenPodcastThroughTheRootAfterASwap(t *testing.T) {
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	ep := f.Episodes[0]
+	audio := filepath.Join(lib.Root, filepath.FromSlash(ep.Path))
+	writePodcastFixture(t, audio, "chap-v24-reverse.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	inside, err := os.ReadFile(audio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() ([]byte, error) {
+		t.Helper()
+		opened, _, err := OpenPodcast(ctx, cat, *lib, ep.Path)
+		if err != nil {
+			return nil, err
+		}
+		defer opened.Close()
+		return io.ReadAll(opened)
+	}
+	if got, err := read(); err != nil || !bytes.Equal(got, inside) {
+		t.Fatalf("the episode in place = %v, want its own bytes", err)
+	}
+
+	// A copy out of the library: the same feed.json, an episode of the same
+	// size whose bytes are not the library's, each at the original's times.
+	copyDir := filepath.Join(t.TempDir(), "Fixture Show")
+	if err := os.MkdirAll(filepath.Join(copyDir, ".audiosilo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{
+		"feed.json":          nil,
+		filepath.Base(audio): bytes.Repeat([]byte("x"), len(inside)),
+	} {
+		src := filepath.Join(dir, name)
+		if body == nil {
+			if body, err = os.ReadFile(src); err != nil {
+				t.Fatal(err)
+			}
+		}
+		st, err := os.Stat(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(copyDir, name)
+		if err := os.WriteFile(dst, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		setFeedTime(t, dst, st.ModTime())
+	}
+	was := podcastLstat
+	t.Cleanup(func() { podcastLstat = was })
+	swapped := false
+	podcastLstat = func(p string) (os.FileInfo, error) {
+		if p == filepath.Join(dir, "feed.json") && !swapped {
+			// The folder's look answered: now it becomes the link.
+			swapped = true
+			swapForLink(t, dir, copyDir)
+		}
+		return was(p)
+	}
+	got, err := read()
+	if !swapped {
+		t.Fatal("the swap never ran")
+	}
+	if err == nil || bytes.Equal(got, bytes.Repeat([]byte("x"), len(inside))) {
+		t.Fatalf("the episode after its show folder became a link out of the library = %d bytes, %v; want it refused", len(got), err)
 	}
 }

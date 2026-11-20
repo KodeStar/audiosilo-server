@@ -1241,8 +1241,8 @@ func TestSelfServicePassword(t *testing.T) {
 	if hasPw, _ := e.meFlags(t, memberTok); hasPw {
 		t.Fatal("password-less member should report has_password=false")
 	}
-	if resp, body := e.do(t, "POST", "/api/v1/auth/password", memberTok, `{"password":"longenough"}`); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("set own password = %d %s, want 204", resp.StatusCode, body)
+	if resp, body := e.do(t, "POST", "/api/v1/auth/password", memberTok, `{"password":"longenough"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("set own password = %d %s, want 200", resp.StatusCode, body)
 	}
 	if hasPw, _ := e.meFlags(t, memberTok); !hasPw {
 		t.Fatal("member should report has_password=true after setting one")
@@ -1401,8 +1401,8 @@ func TestPasswordChangeRequiresCurrent(t *testing.T) {
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser) // password-less
 	tok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
 
-	if resp, b := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":"firstpass1"}`); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("first set = %d %s, want 204", resp.StatusCode, b)
+	if resp, b := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":"firstpass1"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first set = %d %s, want 200", resp.StatusCode, b)
 	}
 	// Empty password is rejected (self-clear would risk lockout).
 	if resp, _ := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":""}`); resp.StatusCode != http.StatusBadRequest {
@@ -1416,8 +1416,8 @@ func TestPasswordChangeRequiresCurrent(t *testing.T) {
 		t.Fatalf("change with wrong current = %d, want 401", resp.StatusCode)
 	}
 	// Correct current password lets the change through; the new password logs in.
-	if resp, b := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":"secondpass1","current_password":"firstpass1"}`); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("change with correct current = %d %s, want 204", resp.StatusCode, b)
+	if resp, b := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":"secondpass1","current_password":"firstpass1"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("change with correct current = %d %s, want 200", resp.StatusCode, b)
 	}
 	if resp, _ := e.do(t, "POST", "/api/v1/auth/login", "", `{"username":"member","password":"secondpass1"}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("login with new password = %d, want 200", resp.StatusCode)

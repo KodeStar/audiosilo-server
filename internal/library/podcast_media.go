@@ -24,7 +24,9 @@ import (
 // share_not_answering), never the episode absent, so a share's hiccup never
 // asks the Bridge for an episode the library holds; and one the share refuses
 // for good (metadata.LastingFault: a permission, the device gone) is
-// ErrEpisodeRefused (the stream's 404), which no fetch would get past either.
+// ErrEpisodeRefused (the stream's 404), which no fetch would get past either;
+// ErrShowRefused when it is the show's folder, feed.json or publish barrier
+// that is refused, which a new download of the file would not mend.
 func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library, rel string) (*os.File, *feed.Fetch, error) {
 	show := path.Dir(rel)
 	if !feed.EpisodePath(show, rel) {
@@ -38,23 +40,9 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		if !pin.Present || !feed.ValidFetch(pin.Fetch) || pin.Fetch.DeletedAt != "" {
 			return nil, nil, ErrNotIndexable
 		}
-		dir, err := ContentJoin(lib.Root, show)
+		dir, filename, feedInfo, err := podcastShowLooks(lib.Root, show)
 		if err != nil {
-			// The join's look a share failed is never the episode absent; a
-			// link out of the root, a name no show has, are.
-			return nil, nil, podcastLookErr(err)
-		}
-		st, err := podcastLstat(filepath.Join(lib.Root, show))
-		if err != nil {
-			return nil, nil, podcastLookErr(err)
-		}
-		if !st.IsDir() {
-			return nil, nil, ErrNotIndexable
-		}
-		filename := filepath.Join(dir, "feed.json")
-		feedInfo, err := podcastLstat(filename)
-		if err != nil {
-			return nil, nil, podcastLookErr(err)
+			return nil, nil, err
 		}
 		if feedSignature(feedInfo) != pin.FeedSig {
 			return nil, nil, ErrNotIndexable
@@ -62,9 +50,9 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		if err := podcastBarrier(podcastLstat, dir, path.Base(rel)); err != nil {
 			return nil, nil, err
 		}
-		current, err := podcastFeeds.read(filename, show, feedInfo)
+		current, err := podcastFeeds.read(lib.Root, filename, show, feedInfo)
 		if err != nil {
-			return nil, nil, podcastLookErr(err)
+			return nil, nil, podcastShowLookErr(err)
 		}
 		if !current.holds(rel, pin.ShowID, pin.EpisodeID, *pin.Fetch) {
 			return nil, nil, ErrNotIndexable
@@ -77,7 +65,10 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		if !before.Mode().IsRegular() {
 			return nil, nil, ErrNotIndexable
 		}
-		f, err := os.Open(abs)
+		// Opened through the library's root, as every library file is: a
+		// show folder swapped for a link out of the library since its look
+		// above is refused, never followed.
+		f, err := metadata.OpenBelow(lib.Root, abs)
 		if err != nil {
 			return nil, nil, podcastLookErr(err)
 		}
@@ -110,22 +101,95 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 	return nil, nil, ErrNotIndexable
 }
 
+// podcastShowLooks is OpenPodcast's looks at the folder of show, under root,
+// above any episode's file: the join, the folder and its feed.json, which
+// ShowRefused makes too. dir is the folder joined, filename its feed.json and
+// feedInfo that file's Lstat; err is podcastShowLookErr's for a look that
+// failed (a lasting refusal ErrShowRefused), ErrNotIndexable for a show that
+// is no folder.
+func podcastShowLooks(root, show string) (dir, filename string, feedInfo os.FileInfo, err error) {
+	if dir, err = ContentJoin(root, show); err != nil {
+		// The join's look a share failed is never the episode absent; a
+		// link out of the root, a name no show has, are.
+		return "", "", nil, podcastShowLookErr(err)
+	}
+	st, err := podcastLstat(filepath.Join(root, show))
+	if err != nil {
+		return "", "", nil, podcastShowLookErr(err)
+	}
+	if !st.IsDir() {
+		return "", "", nil, ErrNotIndexable
+	}
+	filename = filepath.Join(dir, "feed.json")
+	if feedInfo, err = podcastLstat(filename); err != nil {
+		return "", "", nil, podcastShowLookErr(err)
+	}
+	return dir, filename, feedInfo, nil
+}
+
+// ShowRefused is ErrShowRefused (with the share's error) when the share
+// refuses for good the show folder of the episode at rel in lib, its
+// feed.json or the episode's publish barrier: OpenPodcast's looks above the
+// episode's file, made whatever the index holds of the episode (one not
+// downloaded yet among them), as one metadata.Bounded call (ctx, at most
+// timeout). The Bridge writes only the episode's file, which would sit behind
+// the same refusal, so a fetch would download the whole episode again for
+// nothing: the fetch routes answer it 409 show_unreadable, the stream its
+// 404, and the scheduler and the prefetch pass the show over. nil for any
+// other answer (no such folder yet, a share that stopped answering): a fetch
+// may still help there.
+func ShowRefused(ctx context.Context, lib catalog.Library, rel string, timeout time.Duration) error {
+	show := path.Dir(rel)
+	if !feed.EpisodePath(show, rel) {
+		return nil
+	}
+	_, err := metadata.Bounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(show)), timeout, func() (struct{}, error) {
+		dir, filename, _, err := podcastShowLooks(lib.Root, show)
+		if err != nil {
+			return struct{}{}, err
+		}
+		if err = podcastBarrier(podcastLstat, dir, path.Base(rel)); err != nil {
+			return struct{}{}, err
+		}
+		// Opened, not read: a refusal shows at the open, and a check made
+		// on every fetch ask and scheduler pass parses no feed.
+		f, err := metadata.OpenBelow(lib.Root, filename)
+		if err != nil {
+			return struct{}{}, podcastShowLookErr(err)
+		}
+		return struct{}{}, f.Close()
+	}, nil)
+	if errors.Is(err, ErrShowRefused) {
+		return err
+	}
+	return nil
+}
+
 // podcastLstat is OpenPodcast's and a scan's (podcastFolderSig,
 // podcastBarrier) look at a show's folder, its feed.json, its publish barrier
 // and an episode: a test injects a share's errors through it.
 var podcastLstat = os.Lstat
 
-// podcastLookErr is OpenPodcast's answer for a look that failed with err: a
-// share's fault a retry may get past (metadata.TransientFault) is a look given
-// up on (metadata.AsGaveUp), never the episode absent; a refusal a retry would
-// only meet again (metadata.LastingFault) ErrEpisodeRefused, with err; any
-// other ErrNotIndexable, the episode not there as pinned.
-func podcastLookErr(err error) error {
+// podcastLookErr is OpenPodcast's answer for a look at the episode's own file
+// that failed with err: a share's fault a retry may get past
+// (metadata.TransientFault) is a look given up on (metadata.AsGaveUp), never
+// the episode absent; a refusal a retry would only meet again
+// (metadata.LastingFault) ErrEpisodeRefused, with err; any other
+// ErrNotIndexable, the episode not there as pinned.
+func podcastLookErr(err error) error { return lookErrAs(err, ErrEpisodeRefused) }
+
+// podcastShowLookErr is podcastLookErr for a look above the episode's file
+// (the show's folder, its feed.json, the publish barrier), whose lasting
+// refusal is ErrShowRefused.
+func podcastShowLookErr(err error) error { return lookErrAs(err, ErrShowRefused) }
+
+// lookErrAs is podcastLookErr with refused the answer for a lasting refusal.
+func lookErrAs(err, refused error) error {
 	if err = transientGaveUp(err); metadata.GaveUp(err) {
 		return err
 	}
 	if metadata.LastingFault(err) {
-		return fmt.Errorf("%w: %w", ErrEpisodeRefused, err)
+		return fmt.Errorf("%w: %w", refused, err)
 	}
 	return ErrNotIndexable
 }
@@ -138,6 +202,15 @@ func podcastLookErr(err error) error {
 // so a scan, and every caller that only tells an episode there from one not,
 // reads it as before.
 var ErrEpisodeRefused = fmt.Errorf("%w: the share refuses the episode", ErrNotIndexable)
+
+// ErrShowRefused is ErrEpisodeRefused for a refusal above the episode's file:
+// its show folder, feed.json or publish barrier (podcastShowLookErr). A new
+// download writes only the file, so it would sit behind the same refusal: a
+// fetch asked for by name is refused up front (the API's 409
+// show_unreadable), never queued to download the whole episode again on every
+// ask. It is ErrEpisodeRefused (and so ErrNotIndexable) too, so the stream's
+// 404 and a scan read it as before.
+var ErrShowRefused = fmt.Errorf("%w: the share refuses the show's folder", ErrEpisodeRefused)
 
 // OpenPodcastBounded is OpenPodcast as one metadata.Bounded call (ctx, at most
 // timeout, on the episode's mount): its looks and open, on a share that
@@ -210,11 +283,12 @@ func (c *feedCopy) holds(rel, showID, id string, fetch feed.Fetch) bool {
 	return ok && c.showID == showID && ep.id == id && ep.fetch == fetch
 }
 
-// read is filename's copy (show's feed.json), remembered (once its mtime is
-// past feedRacyWindow) while the file is the one read, at the size and mtime
-// read; feed.ReadFile's error otherwise.
+// read is filename's copy (show's feed.json, under the library root root and
+// read through it), remembered (once its mtime is past feedRacyWindow) while
+// the file is the one read, at the size and mtime read; feed.ReadFile's error
+// otherwise.
 // before is filename's Lstat, taken by the caller before the call.
-func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, error) {
+func (m *feedMemo) read(root, filename, show string, before os.FileInfo) (*feedCopy, error) {
 	c, ok := m.feeds.Get(feedMemoGen, filename)
 	if ok && sameFeedFile(c.info, before) {
 		return c, nil
@@ -222,7 +296,7 @@ func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, e
 	// Asked before the read: a write that lands while it runs, or between it
 	// and the stat below, must fall outside the mtime's granule to be seen.
 	settled := time.Since(before.ModTime()) >= feedRacyWindow
-	f, err := feed.ReadFile(filename, show, nil)
+	f, err := feed.ReadFile(root, filename, show, nil)
 	if err != nil {
 		return nil, err
 	}

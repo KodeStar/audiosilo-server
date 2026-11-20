@@ -57,6 +57,29 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   use argon2id (`auth/hash.go`). Never log or persist plaintext secrets; the
   first-run banner prints them once and is the only place they appear (`reset-admin` prints a
   new admin password once, the same way; the later starts' reminder never prints a secret).
+- **The server's own 401s are marked (WS-401-MARK)**: every 401 the server writes carries
+  `X-AudioSilo-Unauthorized` (`headerUnauthorized`, `respond.go`), its value the body's `code` when the
+  401 has one (`invite_used`, `oidc_no_sign_in`, `current_password_incorrect`, ...), else `unauthorized`.
+  It is set in the one place every JSON answer goes through (`jsonHeader`, plus `markUnauthorized` in
+  `writeErrorCode`/`writeErrorReason`), so the middleware's (`requireAuth`, `mediaAuth`,
+  `requireFeedAuth`, `requireBridge`), the sign-in, pairing, OIDC and `writeSessionEnded` 401s all have
+  it; a new 401 must go through `writeError`/`writeErrorCode`/`writeJSON`, never `w.WriteHeader` or
+  `http.Error`, and one whose body has a `code` through `writeErrorCode`/`writeErrorReason` (a body
+  built by hand for `writeJSON` is marked `unauthorized`, whatever its code).
+  `cors` exposes it (`corsExposeHeaders`). The player reads it to tell the server refusing its token
+  from an auth proxy's own 401, or a proxy that rewrote the server's body; additive, the body is
+  unchanged. `GET /server` says so with the capability `unauthorized_mark` (always true), so a player
+  knows a 401 without the header was not this server's; an older server has neither.
+  Since a client ends its session on the marked 401, only a missing or refused token is one: a token
+  the server could not check (the database) is a 503 `could not check the token, try again` with no
+  mark, on every authenticated route (`refuseToken`: `requireAuth`, `mediaAuth`, `requireBridge`;
+  the address is charged for it as for a refusal). `TestUnauthorizedMarked` covers the middleware's
+  and the sign-in, pairing and OIDC routes' 401s end to end, `TestUnauthorizedMarkWriters` the
+  writers every other 401 goes through, `TestUncheckedTokenIsNot401` the 503, and
+  `TestNoUnmarkedUnauthorized` fails on a 401 written with `w.WriteHeader` or `http.Error`.
+  A proxy that serves an error page of its own in place of the server's 401 (nginx's `error_page`
+  with `proxy_intercept_errors`) drops the mark; the player then falls back to its older rules
+  (the body, and whether the request carried proxy headers).
 - **Connect / invite / pairing flow** (`internal/web` connect page + `api/qr.go`):
   the admin's **Copy invite** button mints an auth code and shares
   `<base>/connect#code=...` - the code rides in the URL **fragment** so it never
@@ -156,7 +179,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the user's other still-redeemable invites; `redeemed_at` records
   acceptance (first successful exchange) but the console buckets invites by whether
   they are still redeemable, not by `redeemed_at`. **Self-
-  service password**: `POST /auth/password` reuses `SetPassword`; setting a first
+  service password**: `POST /auth/password` calls `ChangePassword` (`SetPassword` answering the count below); setting a first
   password needs no challenge, but changing an existing one requires `current_password`
   (`CheckPassword`), an empty password is rejected (clearing is admin-only), and the
   admin-must-keep-a-password guard still holds.
@@ -167,7 +190,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   their own, keeps the device it was done on), in the same durable transaction (`endSessions`). The
   admin's **Sign out everywhere** (`POST /admin/users/{id}/sign-out`, `auth.SignOutEverywhere`,
   answers `{"signed_out": n}`, audit `user.sign_out_everywhere`) does the same without a password
-  change, and forgets the person's browsers. With the sessions go the ways back in a session can make
+  change, and forgets the person's browsers. The self-service change answers the same way (200
+  `{"signed_out": n}`, server#285, `auth.ChangePassword`; a server before v2.7.0 answered 204): the
+  caller's own other sessions it ended, 0 for a first password, never the members' sign-ins it ended
+  with them (nothing about another person), so the player names it without reading its devices. With the sessions go the ways back in a session can make
   without the password, which the person can neither see nor revoke: their open pairing codes
   (unlinked `pairing` tokens, `POST /auth/pair`), a single sign-on not yet finished (`oidc` tokens)
   and their recovery code (its linked pairing tokens
@@ -186,8 +212,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   editor token (`POST /cast/token`: dead as minted otherwise). A member's own paired device stays, with what was
   made on it, and `signed_out` counts the person's sessions only. The person's own API keys stay (listed
   and revoked on their own: the device lists, `/auth/tokens`), and so
-  do their calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no
-  lever for it) and Bridge tokens (the Bridge's); an invite is the admin's (listed and revoked in the
+  do their calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`) and Bridge tokens
+  (the Bridge's). The admin's lever for the first two is **End API keys and calendar link**
+  (`POST /admin/users/{id}/end-keys`, `auth.EndKeys`, server#285: every live key revoked and the feed
+  row deleted in one durable write, sessions kept; answers `{"api_keys": n, "calendar_link": bool}`,
+  audit `user.end_keys`; `GET /admin/users/{id}` says whether there is a link, `calendar_link
+  {active, created_at}`, never the secret); an invite is the admin's (listed and revoked in the
   console). A cast token needs no write (its parent is checked on every request, `castGrant`). The
   write moves the content generation, so the token cache refuses an ended token on the very next
   request, media `?token=` included. A password sign-in racing the change gets no session:
@@ -951,7 +981,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   use it (no per-listener field on a list book, and nothing a user-state rule lets
   through); a handler that adds one must leave the cache. The admin console's `GET /admin/books` first pages and
   `/admin/books/facets` use it too (keyed like a list, no scopes: an admin sees
-  every book), and so does the Health summary `GET /admin/issues` (server#245),
+  every book; not `?issue=no_chapters`, whose rows carry Bridge job state: see Health issues), and so does the Health summary `GET /admin/issues` (server#245),
   whose key also takes `cachedList`'s extra inputs: the kinds it counts, the listener
   generation (a new or removed progress row: Content generation) and the
   offline libraries (a filesystem probe made before the lookup, so a root going
@@ -1325,13 +1355,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestSafeJoinListedVariantCostsWhatMissingDoes`; a folder whose names pass the bound once a request). A
   link is read (`Readlink`), never followed: `followLink` walks its target one name at a time, from the
   link's folder or the filesystem's root, through the root and the folders above it unlooked at (the root is
-  resolved: no link in them), each name under the root looked at and a link among them read the same way (at
-  most `maxLinkHops`, a loop past it a name not there), and ends at the first name out of the root without
+  resolved: no link in them; `metadata.ResolveLinks`, which follows a Windows junction as a link, as `Below`
+  does, where `filepath.EvalSymlinks` fails a root reached through one and the join checked no link below it:
+  `SafeJoin`, `SafeJoinListed`, the scan's walk, `TestSafeJoinRootThroughAJunction` on Windows), each name under the root looked at and a link among them read the same way (at
+  most `metadata.MaxLinkHops`, a loop past it a name not there), and ends at the first name out of the root without
   looking at it. An absolute target that names the root as configured (a root that is itself a link,
   `/data/books` to `/mnt/books`, or macOS's `/var`) is walked from the resolved root, as the OS opens it
   (`throughRootAs`); one through any other link above the root is out of it. A Windows junction (Lstat's
   irregular entry that is no folder since Go 1.23, neither a link nor a folder) is read as a link
-  (`linkKind`), and another reparse point that doesn't read as one is a plain name
+  (`metadata.LinkKind`), and another reparse point that doesn't read as one is a plain name
   (`TestJoinLinkThroughTheRootAsConfigured`, `TestResolveBelowJunction`). A link or junction that is there and
   can't be read (a permission, a junction another process holds) is `ErrOutsideRoot` too (`linkRead`), and so is
   one with a name along its target whose look failed for anything but the name gone (a permission, a limit of
@@ -1360,15 +1392,23 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   with its page of file info, read through the open folder (`metadata.ReadDirBelow`, `DirBelow.Info`); the
   open refuses a link out of the root wherever it then is (a 404, a missing folder). `os.Root` also
   refuses a link a join allows, one that stays in the root by an absolute target or by climbing above it
-  and back, so `Below` opens the resolved path through the root then
+  and back, and a Windows junction (its target always absolute), so `Below` opens the resolved path through
+  the root then (`metadata.resolveLinks`: on Windows a junction is followed as a link, `walkLinks` by
+  `metadata.LinkKind`, the join's rule, since `filepath.EvalSymlinks` leaves one a plain name and fails a path
+  through it; one out of the root resolves out of it and is refused, as is a transcode's re-checked path
+  through one, `heldPathInput`: `TestWalkLinksFollowsJunctions`, and on Windows `TestJunctionBelowTheRoot`)
   (`TestOpenRegularBelowNeverLeavesTheRoot`, `TestReadDirBelowNeverLeavesTheRoot`,
   `TestStreamOpensThroughTheRootAfterASwap`). So does a transcode, whose ffmpeg reads the file opened there,
   never the path (`media.Transcode`, `fileInput`: ffmpeg's stdin as `fd:`, else the file as
   `metadata.ToolInput` hands every tool one, below; `TestTranscodeOpensThroughTheRoot`), and a remux's or a
   rendition's source: its look (`media.Source`, a stat through the root) and its run's open
   (`FileCache.make`), whose descriptor ffmpeg reads (`TestFileCacheSourceThroughTheRoot`). A podcast episode
-  checks the open file against the path again instead (`OpenPodcast`: `os.SameFile`); the reader's ebook does both (`OpenEbook`: opened through the root,
-  `metadata.OpenBelow`, then `os.SameFile`). The scan's reads and an asked book's (`resolveBook`, then
+  is read through the root too, its show's `feed.json` (`feed.ReadFile`, given the library's root, its looks
+  at the folders beside the show's included) and its file (`metadata.OpenBelow`), then checked against the path
+  again (`OpenPodcast`: `os.SameFile`; `TestOpenPodcastThroughTheRootAfterASwap`, `TestReadFileThroughTheRoot`);
+  the reader's ebook does both (`OpenEbook`: opened through the root, `metadata.OpenBelow`, then `os.SameFile`),
+  and so does a library's `library.json` marker (`ReadLibraryMarker`: `metadata.LstatBelow` and
+  `metadata.ReadRegularFile`, which always takes the library's root). The scan's reads and an asked book's (`resolveBook`, then
   `indexBook`) go through the root too, so a name swapped for a link out of it after the walk's or the join's
   check is never followed: the audio read, tags and the in-process probe (`metadata.ExtractTimeout` and
   `ExtractTags`, given the library's root), the fingerprint (`metadata.Fingerprint`), the files beside the
@@ -1395,10 +1435,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   folder can't open (a link to a folder beside it, an absolute target) is opened through the root's kept
   folder, then resolved as `Below` does (an lstat's up to its last name only, so `LstatBelow` is always the
   link's own: `TestLstatBelowIsTheLinksOwn`). An external tool is handed the file
-  opened so, never its path (`metadata.ToolInput`): ffprobe's fallback run (`runFFprobe`), the chapter
-  check's ffmpeg (`media.DetectSilences`, given the library's root) and a transcode on an ffmpeg without
-  `fd:` (`media.fileInput`, through `ToolInputBounded`: where its looks are on the share, Windows, a bounded
-  look whose late answer's handle is closed when it comes, `TestBoundedToolInputGivenUp`). On Unix the tool inherits the descriptor
+  opened so, never its path (`metadata.ToolInput`, the one entry point, always bounded where it looks at the
+  share, Windows: within the caller's time, a look whose late answer's handle is closed when it comes,
+  `TestBoundedToolInputGivenUp`, `TestToolInputBoundedWhereItLooks`): ffprobe's fallback run (`runFFprobe`,
+  within the probe's time, one given up on its `ErrProbeTimeout`), the chapter check's ffmpeg
+  (`media.DetectSilences`, given the library's root, within its window's time) and a transcode or a cached
+  copy on an ffmpeg without `fd:` (`media.fileInput`). On Unix the tool inherits the descriptor
   and is named a link to its own `/dev/fd/3` in a private folder, named for the file's extension (ffmpeg
   guesses a format by it; `TestProbeMatchesLiveFFprobe` holds parity), or, with no temporary folder it may
   write to (a read-only container), `/dev/fd/3` itself, its format guessed from its bytes
@@ -1423,9 +1465,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestAttachmentsReadThroughTheRootAfterASwap`, `TestReadalongMapReadThroughTheRootAfterASwap`,
   `TestLookArtStatsThroughTheRootAfterASwap`, `TestBridgeBookFilesStatThroughTheRoot`,
   `TestProberHandsFFmpegTheFileItOpened`, `TestBelowFolderNeverLeavesTheRoot`, `TestToolInputIsTheOpenedFile`).
-  Still a check and then a look by path: a podcast show's `feed.json` and a library's `library.json`
-  (`metadata.ReadRegularFile`: an lstat, an open and `os.SameFile`, all by path), and the looks (listings,
-  lstats) that only decide what a scan reads. The scan takes no link out of the root
+  Still a check and then a look by path: the looks (listings, lstats) that only decide what a scan reads. The scan takes no link out of the root
   either, by the same rule (`linkOut`: `SafeJoin` of each link the walk lists, looked at once the walk ends,
   width at a time, `linksInRoot`; a plain file never looked at again): a file or folder link out in a book
   folder is never a part, nor a cover (`coverLook.find`, which looks at a cover's own entry before any stat,
@@ -1809,9 +1849,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   of its own `.m4a` files, one encode at a time, 2 h timeout from its slot, the same 1 GiB disk guard (one
   reservation with the remux's: both under `<data>/cache`), `.part` synced then renamed, never cached when the
   source changed while read, ffmpeg's refusal (an exit status before anything was written, or a copy with no
-  audio track: ffmpeg exits 0 with one for an M4B whose index is at its end read through `pipe:0`, an ffmpeg
-  without the fd protocol; `metadata.MP4HasTrack`; or a short copy) remembered for an hour or until the file
-  changes. A failed run's error carries the first and last
+  audio track, `metadata.MP4HasTrack`; or a short copy) remembered for an hour or until the file
+  changes. A copy's run reads its source as a transcode does (`fileInput`): `fd:` on its stdin, else, on an
+  ffmpeg older than 6.1, `metadata.ToolInput`'s seekable `/dev/fd/3` link (the re-checked path on Windows),
+  never `pipe:0`, through which an M4B whose index sits at its end gave a copy with no track, the book's watch
+  rendition a 422 "holds no audio" and its MKA remux a refusal, for good (server#498's regression,
+  `TestRenditionWithoutFDReadsAnIndexAtTheEnd`, `TestFileCacheInputWithoutFD`). A failed run's error carries the first and last
   2 KiB of ffmpeg's log. The remux is unchanged (same dir, keys, ETags). `GET
   /libraries/{id}/stream?path=<file>&rendition=watch[&download=1]` (same auth as the stream: session, API key,
   `?token=`, a cast token for its book) is checked in this order: scope (403/404), kind (400 code `bad_rendition`
@@ -1886,12 +1929,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
     indexed. A podcast episode the share refuses so (its show folder, `feed.json`, publish barrier or file) is
     `library.ErrEpisodeRefused`: the stream's 404 `episode_not_found`, never a fetch asked of the Bridge by it,
     which would meet the same refusal (`TestPodcastStreamRefusedFolderIs404`). A fetch asked for by name reads
-    it as absent (shipped players use these routes, CROSS-REPO §15): a
+    a refused file as absent (shipped players use these routes, CROSS-REPO §15): a
     listener's `GET /libraries/{id}/podcasts/fetch` answers its fetch status and `POST` queues it (202), an
     admin's download (`POST /admin/libraries/{id}/podcasts/fetch`) too. A refused file is mended so (the Bridge
     writes a new one in its place: `TestPodcastAdminDownloadFetchesARefusedEpisode`,
     `TestPodcastListenerFetchQueuesARefusedEpisode`); a refused show folder, `feed.json` or barrier is not, the
-    new file sitting behind the same refusal (`TestPodcastStreamRefusedFolderIs404` checks its fetch status).
+    new file sitting behind the same refusal, so it is `library.ErrShowRefused` (`podcastShowLookErr`) and
+    those three routes answer it up front, 409 `show_unreadable` with nothing queued, rather than download the
+    whole episode again on every ask (`podcastPresent`, `writePodcastStorageError`;
+    `TestPodcastStreamRefusedFolderIs404`, `TestOpenPodcastReadsAShareFault`). An episode not downloaded yet
+    in such a show meets the same check, `library.ShowRefused` (OpenPodcast's looks above the file, whatever the
+    index holds): the fetch routes' 409, the stream's 404, and the scheduler and the prefetch pass the show over
+    (`TestShowRefusedForAnEpisodeNotDownloaded`, `TestSchedulerPassesOverARefusedShow`,
+    `TestPrefetchPassesOverARefusedShow`).
   - **The server's own limits** (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY) and any error on neither list: no share's
     fault, never a 503 `share_not_answering`; a route answers it as it did before the rule (an asked read's
     `lookRefused` 404, a stream's missing file, a 500 where the route logs one).
@@ -3063,7 +3113,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   request (the summary is kept in the list cache until the next content write, see List cache); each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
-  chapters, see The Bridge), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
+  chapters, see The Bridge; each row of that list, not the ignored one, carries `detect_job`, the book's
+  newest `chapters.detect` job in any state, read once for the page's books (`api.detectRows`,
+  `bridge.LatestForBooks`), so a book queued among hundreds shows its own and the console reads no job
+  list for it; a Bridge's reports are no content write, so that list is never kept in the list cache;
+  server#273), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
   out of the summary while metadata is off), `unknown_asin` (the book's own ASIN is one the unknown-ASIN report
   found unknown: `unknownASINExpr`, see Unknown ASIN report; still matched by `matchedExpr`, so Match
   automatically passes it by: the category's own card starts an `unknown_asin` match run (see Bulk matching);
@@ -3495,7 +3549,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and forgets the row (`UnpairBridge`). **The bridge token is narrow**: routes opt in to token kinds and only
   the Bridge's own list `auth.KindBridge` (`requireBridge` = `authenticate` with `bridgeKinds`,
   `/api/v1/bridge/*`, Authorization header only, never `?token=`; only a missing or refused token is a 401,
-  which stops the Bridge calling in until its 5-minute retry, so a failure to check one is a 503); `resolve` refuses it once its admin is
+  which stops the Bridge calling in until its 5-minute retry, so a failure to check one is a 503, `refuseToken`); `resolve` refuses it once its admin is
   demoted (lookupToken already refuses a disabled one); it is never a device, and never touched (its calls
   are not its admin's activity, the newest `last_seen` of their tokens). "Paired" has ONE statement,
   `auth.BridgeLiveSQL` (a live bridge token of an enabled admin, partial index `idx_tokens_bridge`), which

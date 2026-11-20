@@ -7,6 +7,7 @@ import type {
   UpdateStatus,
   AdminShare,
   AdminStats,
+  BridgeJob,
   Invite,
   InviteCreated,
   Device,
@@ -597,6 +598,31 @@ export function importRow(over: Partial<Import> = {}): Import {
     error: '',
     error_code: '',
     summary: null,
+    ...over,
+  };
+}
+
+/** A Bridge job: a queued chapters.detect of one book, nothing claimed yet. */
+export function bridgeJob(over: Partial<BridgeJob> = {}): BridgeJob {
+  return {
+    id: 1,
+    kind: 'chapters.detect',
+    library_id: 1,
+    path: 'Mosse/The Black Gate',
+    params: {},
+    state: 'queued',
+    progress: {},
+    result: {},
+    error: '',
+    requested_by: null,
+    priority: 0,
+    attempts: 0,
+    lease_until: null,
+    cancel_requested: false,
+    created_at: '2026-11-19T09:00:00Z',
+    updated_at: '2026-11-19T09:00:00Z',
+    claimed_at: null,
+    finished_at: null,
     ...over,
   };
 }

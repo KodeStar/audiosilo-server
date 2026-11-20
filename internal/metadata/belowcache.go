@@ -263,7 +263,7 @@ func FoldersKeptForTests(root string) int {
 		panic("metadata.FoldersKeptForTests called outside a test binary")
 	}
 	abs, _ := filepath.Abs(root)
-	resolved, _ := filepath.EvalSymlinks(abs)
+	resolved, _ := resolveLinks(abs)
 	n := 0
 	belowFolders.mu.Lock()
 	defer belowFolders.mu.Unlock()
@@ -291,9 +291,10 @@ func closeFolders(folders []*keptFolder) {
 // there (a show with no .audiosilo folder: one look through the root's). A name the folder can't
 // open (a link to a folder beside it, which the folder's own root refuses)
 // is opened through the root's kept folder, the whole path under it, and
-// failing that, the path resolved as Below does (Below itself answers: a
-// link with an absolute target). A folder whose handle went stale (ESTALE)
-// is kept no longer.
+// failing that, the path resolved as Below resolves it (a link with an
+// absolute target, a Windows junction), opened through that kept folder too,
+// the root not opened again for it where folders are kept. A folder whose handle went stale
+// (ESTALE) is kept no longer.
 func BelowFolder[T any](root, path string, open func(r *os.Root, rel string) (T, error)) (T, error) {
 	return belowFolder(root, path, true, open)
 }
@@ -303,7 +304,7 @@ func BelowFolder[T any](root, path string, open func(r *os.Root, rel string) (T,
 // it is in (an lstat's).
 func belowFolder[T any](root, path string, followLast bool, open func(r *os.Root, rel string) (T, error)) (T, error) {
 	var zero T
-	rootAbs, rel, _, err := underRoot(root, path)
+	rootAbs, rel, resolved, err := underRoot(root, path)
 	if err != nil {
 		return zero, err
 	}
@@ -324,15 +325,30 @@ func belowFolder[T any](root, path string, followLast bool, open func(r *os.Root
 		return v, err == nil || NotExist(err), err
 	}
 	dir, name := filepath.Dir(rel), filepath.Base(rel)
-	if v, ok, err := try(dir, name); ok {
+	v, ok, err := try(dir, name)
+	if ok {
 		return v, err
 	}
 	if dir != "." {
-		if v, ok, err := try(".", rel); ok {
+		if v, ok, err = try(".", rel); ok {
 			return v, err
 		}
 	}
-	return below(root, path, followLast, open)
+	// The path resolved, opened through the root's kept folder: the open
+	// through it failed just now, so it is not made again, nor the root
+	// opened once more where folders are kept (Windows keeps none: openOnly,
+	// so get opens it there; below's way, should the root not open here, or
+	// the kept handle have gone stale since its look: below's fresh root
+	// opens the path itself again).
+	if staleHandle(err) {
+		return below(root, path, followLast, open)
+	}
+	top, terr := belowFolders.get(rootAbs, ".")
+	if terr != nil {
+		return below(root, path, followLast, open)
+	}
+	defer belowFolders.put(top)
+	return openResolved(top.r, rootAbs, rel, resolved, followLast, err, open)
 }
 
 // openBelow opens the file at path, under root, for reading with openFlags

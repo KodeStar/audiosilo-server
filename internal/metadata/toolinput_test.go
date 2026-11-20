@@ -94,3 +94,33 @@ func TestBoundedToolInputGivenUp(t *testing.T) {
 		t.Fatalf("a tool input that answered = %q, %v; want it as made", input, err)
 	}
 }
+
+// TestToolInputBoundedWhereItLooks: ToolInput is the one way a tool is handed
+// a library file (the probe's, a silence detection's, a transcode's and a
+// copy's), bounded wherever it looks at the share: on Windows, whose input is
+// the path looked at again, a share that stopped answering since the open is
+// given up on within the call's time (GaveUp), never held for good; on Unix
+// it looks at nothing there, so it answers all the same. Not parallel: it
+// holds the opens under the library.
+func TestToolInputBoundedWhereItLooks(t *testing.T) {
+	root, _ := belowFixture(t)
+	file := filepath.Join(root, "Book", "01.mp3")
+	f, _, err := OpenRegularBelow(root, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	release := HoldOpensForTests(root)
+	defer release()
+	input, _, cleanup, err := ToolInput(context.Background(), f, root, file, 50*time.Millisecond)
+	if toolInputLooks {
+		if !GaveUp(err) {
+			t.Fatalf("ToolInput on a share that stopped answering = %q, %v; want it given up on", input, err)
+		}
+		return
+	}
+	if err != nil || input == "" {
+		t.Fatalf("ToolInput, which looks at nothing on the share here = %q, %v; want its input", input, err)
+	}
+	cleanup()
+}

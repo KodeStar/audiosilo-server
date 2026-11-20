@@ -120,7 +120,7 @@ func TestSetupPrintedPassword(t *testing.T) {
 		t.Fatal("a refused change replaced the printed password")
 	}
 	if resp, body := e.do(t, "POST", "/api/v1/auth/password", adminTok,
-		`{"password":"my-own-password","current_password":"`+pw+`"}`); resp.StatusCode != http.StatusNoContent {
+		`{"password":"my-own-password","current_password":"`+pw+`"}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("own password = %d %s", resp.StatusCode, body)
 	}
 	if printedPassword(t, e, adminTok) {
@@ -152,7 +152,7 @@ func TestAccountStepPasswordEndsThePrintedCode(t *testing.T) {
 		t.Fatalf("a refused change ended the printed code: redeem = %d", status)
 	}
 	if resp, body := e.do(t, "POST", "/api/v1/auth/password", adminTok,
-		`{"password":"my-own-password","current_password":"admin-password"}`); resp.StatusCode != http.StatusNoContent {
+		`{"password":"my-own-password","current_password":"admin-password"}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("own password = %d %s", resp.StatusCode, body)
 	}
 	if status, _, _ := e.redeemCode(t, printed); status != http.StatusUnauthorized {
@@ -193,7 +193,7 @@ func TestMemberPasswordKeepsTheHint(t *testing.T) {
 	}
 	_, memberTok := opsTokens(t, e)
 	if resp, body := e.do(t, "POST", "/api/v1/auth/password", memberTok,
-		`{"password":"new-member-password","current_password":"member-password"}`); resp.StatusCode != http.StatusNoContent {
+		`{"password":"new-member-password","current_password":"member-password"}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("member password = %d %s", resp.StatusCode, body)
 	}
 	if u, _ := e.auth.FirstAdminWaiting(ctx); u == nil {

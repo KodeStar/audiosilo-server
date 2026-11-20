@@ -195,7 +195,7 @@ func TestCORSWildcard(t *testing.T) {
 // out so a renamed constant fails the test.
 var (
 	opmlCountNames  = []string{"X-OPML-Exported", "X-OPML-Omitted-Private", "X-OPML-Omitted-Unavailable"}
-	corsExposeNames = append([]string{"Retry-After", "X-AudioSilo-Transcode-Sent"}, opmlCountNames...)
+	corsExposeNames = append([]string{"Retry-After", "X-AudioSilo-Transcode-Sent", "X-AudioSilo-Unauthorized"}, opmlCountNames...)
 )
 
 // wantCORSList fails unless the comma-separated header lists every name

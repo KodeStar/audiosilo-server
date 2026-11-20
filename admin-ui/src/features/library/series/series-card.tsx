@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Trans, useTranslation } from 'react-i18next';
 import { CalendarClock, Sparkles } from 'lucide-react';
@@ -23,21 +23,12 @@ import {
   releaseState,
   seriesStatus,
   spineColors,
-  spineFitsLabel,
   spineHeight,
   spineRow,
   type Placed,
   type SeriesStatus,
 } from './series-model';
 import { useInView } from '@/lib/use-in-view';
-
-/** The page's width, read once for every card (SeriesPage). */
-export interface ShelfLayout {
-  /** Wide enough for the fan of covers beside the spines (1024px and up). */
-  wide: boolean;
-  /** A phone's width: the shelf is shorter (spineFitsLabel). */
-  phone: boolean;
-}
 
 /**
  * One series: its name (a link to its books), author and what the server
@@ -52,7 +43,7 @@ export function SeriesCard({
   complete,
   metadata,
   generate = false,
-  layout,
+  wide,
 }: {
   series: SeriesCount;
   /** The series' books loaded so far, in series order. */
@@ -63,7 +54,11 @@ export function SeriesCard({
   metadata: boolean;
   /** An online Bridge offers characters and recaps: Generate for the series. */
   generate?: boolean;
-  layout: ShelfLayout;
+  /**
+   * The page is wide enough for the fan of covers beside the spines (1024px and
+   * up), read once for every card (SeriesPage).
+   */
+  wide: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -162,7 +157,7 @@ export function SeriesCard({
       {books.length === 0 && !complete ? (
         <div className="skel h-[200px] rounded-lg" role="status" aria-label={t('common.loading')} />
       ) : (
-        <Shelf name={s.name} placed={placed} status={known} fmt={fmt} fan={seen} layout={layout} />
+        <Shelf name={s.name} placed={placed} status={known} fmt={fmt} fan={seen} wide={wide} />
       )}
     </section>
   );
@@ -190,7 +185,7 @@ function Shelf({
   status,
   fmt,
   fan,
-  layout: { wide, phone },
+  wide,
 }: {
   name: string;
   /**
@@ -203,7 +198,7 @@ function Shelf({
   fmt: (n: number) => string;
   /** The card has come into view: its fan of covers may load. */
   fan: boolean;
-  layout: ShelfLayout;
+  wide: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -211,7 +206,7 @@ function Shelf({
   const now = new Date();
   // The server's own window for "new" (upcoming.window_days), as its job counts.
   const windowDays = useSettings().data?.metadata.upcoming_window_days;
-  // The fan only fits beside the spines on wide screens (layout.wide); elsewhere
+  // The fan only fits beside the spines on wide screens (wide); elsewhere
   // its covers aren't fetched.
   const spines = spineRow(placed, status?.missing ?? []);
   return (
@@ -229,10 +224,6 @@ function Shelf({
             const stateWord = state
               ? `${t(state === 'preorder' ? 'series.preorder' : 'series.newRelease')} · `
               : '';
-            // The date runs in a line of its own beside the title; the state word
-            // leads it only where the whole line fits (else a small mark does, the
-            // spine's label saying all of it).
-            const showState = Boolean(stateWord) && spineFitsLabel(height, stateWord + date, phone);
             const label =
               state === 'preorder'
                 ? t('series.gapPreorder', values)
@@ -255,15 +246,7 @@ function Shelf({
                   {date ? (
                     <span className="spine-lines">
                       <span className="spine-title">{sp.entry.title}</span>
-                      <span className="spine-date" data-state={state}>
-                        {showState ? (
-                          stateWord
-                        ) : state ? (
-                          // Too short for the word: a mark says it, not the colour alone.
-                          <StateMark state={state} />
-                        ) : null}
-                        {date}
-                      </span>
+                      <SpineDate state={state} stateWord={stateWord} date={date} />
                     </span>
                   ) : (
                     <span className="spine-title">{sp.entry.title}</span>
@@ -325,6 +308,88 @@ function Shelf({
       </ul>
     </div>
   );
+}
+
+/**
+ * A dated missing entry's date, in a line of its own beside the title: the
+ * state word leads it only where the whole line fits the spine (else a small
+ * mark does, the spine's label saying all of it). The fit is measured as laid
+ * out (server#279), not worked out from copies of the stylesheet's sizes: a
+ * hidden twin of the whole line, set in the same type, against the room the
+ * line has (useLineFits).
+ */
+function SpineDate({
+  state,
+  stateWord,
+  date,
+}: {
+  state?: 'preorder' | 'new';
+  /** The state's word and its separator ("Preorder · "), "" without a state. */
+  stateWord: string;
+  date: string;
+}) {
+  const line = useRef<HTMLSpanElement>(null);
+  const ruler = useRef<HTMLSpanElement>(null);
+  const fits = useLineFits(line, ruler, Boolean(stateWord));
+  return (
+    <>
+      <span ref={line} className="spine-date" data-state={state}>
+        {fits ? (
+          stateWord
+        ) : state ? (
+          // Too short for the word: a mark says it, not the colour alone.
+          <StateMark state={state} />
+        ) : null}
+        {date}
+      </span>
+      {stateWord ? (
+        <span ref={ruler} className="spine-date spine-ruler" aria-hidden="true">
+          {stateWord}
+          {date}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Whether the ruler's text (the whole line, out of the flow) fits the
+ * line's room: the line's inline size, which is vertical on a spine. Measured
+ * after layout, again whenever the line's size changes (the shelf's height on
+ * a phone) or the ruler's does (its words: another language, a preorder become
+ * a new release, a new date; a font loading late), and once the page's fonts
+ * have loaded. Before any layout (no size at all, as in jsdom) it fits.
+ */
+function useLineFits(
+  line: RefObject<HTMLElement | null>,
+  ruler: RefObject<HTMLElement | null>,
+  enabled: boolean,
+): boolean {
+  const [fits, setFits] = useState(true);
+  useLayoutEffect(() => {
+    const el = line.current;
+    if (!enabled || !el) return;
+    const measure = () => {
+      const r = ruler.current;
+      if (!r) return;
+      const room = el.getBoundingClientRect().height;
+      const need = r.getBoundingClientRect().height;
+      setFits(room === 0 || need <= room);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    // The line's size is its room, never its text: a change of words shows in
+    // the ruler's size alone.
+    if (ruler.current) ro.observe(ruler.current);
+    let live = true;
+    void document.fonts?.ready.then(() => live && measure());
+    return () => {
+      live = false;
+      ro.disconnect();
+    };
+  }, [line, ruler, enabled]);
+  return fits;
 }
 
 /**

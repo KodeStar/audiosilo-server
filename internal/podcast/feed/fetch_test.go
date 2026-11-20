@@ -29,7 +29,7 @@ func TestPodcastFetchInvalidKeepsEpisode(t *testing.T) {
 		if err = os.WriteFile(filename, changed, 0600); err != nil {
 			t.Fatal(err)
 		}
-		f, err := ReadFile(filename, "Fixture Show", nil)
+		f, err := ReadFile(filepath.Dir(filename), filename, "Fixture Show", nil)
 		if err != nil || len(f.Episodes) != 3 || ValidFetch(f.Episodes[0].Fetch) {
 			t.Fatalf("invalid fetch dropped episode: %+v %v", f, err)
 		}

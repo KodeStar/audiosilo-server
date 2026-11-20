@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
+  CalendarClock,
   KeyRound,
   LibraryBig,
   LifeBuoy,
@@ -20,6 +21,7 @@ import {
   forgetUsers,
   invalidateDevices,
   invalidatePeople,
+  keys as queryKeys,
   useDevices,
   useLibraries,
   useUser,
@@ -57,6 +59,8 @@ import { MemberChips } from './member-chips';
 import { signInProvider } from './pending-model';
 import { ListeningTab } from './user-listening';
 import {
+  endedKeysToast,
+  endKeysWhat,
   ruleLabel,
   shareLabel,
   signedIn,
@@ -187,6 +191,7 @@ function UserView({ detail }: { detail: UserDetail }) {
             user={u}
             devices={devices}
             sso={sso}
+            calendarLink={detail.calendar_link}
             onPair={kid ? undefined : () => setInviting(true)}
           />
         </TabsPanel>
@@ -266,21 +271,72 @@ function SignOutEverywhere({ user, sso }: { user: AdminUser; sso?: string }) {
 }
 
 /**
+ * Ends a person's API keys and their calendar link at once (server#285), the
+ * lever Sign out everywhere leaves out: their sessions stay. Offered while they
+ * have either, its button, title and body naming only what they have; the toast
+ * says what it ended.
+ */
+function EndKeys({ user, keys, link }: { user: AdminUser; keys: number; link: boolean }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const self = useCurrentUser().id === user.id;
+  const what = endKeysWhat(keys, link);
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="destructive-outline"
+        className="self-start"
+        onClick={() => setOpen(true)}
+      >
+        <KeyRound aria-hidden="true" />
+        {t(`user.devices.endKeys.${what}`)}
+      </Button>
+      <ConfirmDialog
+        open={open}
+        onOpenChange={setOpen}
+        icon={KeyRound}
+        title={t(`user.devices.endKeys.${self ? 'selfTitle' : 'title'}.${what}`, {
+          name: user.username,
+          count: keys,
+        })}
+        description={t(`user.devices.endKeys.${self ? 'selfBody' : 'body'}.${what}`, {
+          name: user.username,
+        })}
+        confirmLabel={t(`user.devices.endKeys.${what}`)}
+        onConfirm={async () => {
+          const ended = await api.endKeys(user.id);
+          invalidateDevices(qc);
+          // The detail alone (its calendar link), not the keys under it (the listening).
+          void qc.invalidateQueries({ queryKey: queryKeys.user(user.id), exact: true });
+          toast.add({ title: endedKeysToast(t, ended, user.username, self), type: 'success' });
+        }}
+      />
+    </>
+  );
+}
+
+/**
  * A person's devices; onPair is undefined for a kid, whose owner pairs them from
- * the player. sso names the single sign-on they sign in with, if any.
+ * the player. sso names the single sign-on they sign in with, if any; calendarLink
+ * whether they have a calendar link.
  */
 function DevicesTab({
   user,
   devices,
   sso,
+  calendarLink,
   onPair,
 }: {
   user: AdminUser;
   devices: ReturnType<typeof useDevices>;
   sso?: string;
+  calendarLink?: UserDetail['calendar_link'];
   onPair?: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
   if (devices.isError) {
     return (
       <QueryError
@@ -295,6 +351,7 @@ function DevicesTab({
   // person's API keys follow under their own heading.
   const sessions = signedIn(devices.data);
   const keys = devices.data.filter((d) => d.kind === 'api');
+  const link = calendarLink?.active ?? false;
   return (
     <div className="flex flex-col gap-5">
       {sessions.length ? (
@@ -329,6 +386,22 @@ function DevicesTab({
           <DeviceList devices={keys} showPerson={false} />
         </section>
       ) : null}
+      {link ? (
+        <section aria-labelledby="user-link-title" className="flex flex-col gap-1.5">
+          <h2 id="user-link-title" className="eyebrow">
+            {t('user.devices.calendarLink')}
+          </h2>
+          <p className="flex items-start gap-2 text-[13.5px] text-muted-foreground">
+            <CalendarClock className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            {calendarLink?.created_at
+              ? t('user.devices.calendarLinkSince', {
+                  when: formatRelative(calendarLink.created_at, lang),
+                })
+              : t('user.devices.calendarLinkOn')}
+          </p>
+        </section>
+      ) : null}
+      {keys.length || link ? <EndKeys user={user} keys={keys.length} link={link} /> : null}
     </div>
   );
 }

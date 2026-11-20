@@ -881,10 +881,11 @@
     opacity: 0.75;
   }
   /* A dated missing entry: its title and its release date in two lines side
-     by side, each the spine's full height (spineFitsLabel leaves the state word
+     by side, each the spine's full height (SpineDate leaves the state word
      out where the date's line won't hold it), cut short with an ellipsis. */
   .spine-lines {
     display: flex;
+    flex: 1;
     flex-direction: column;
     gap: 2px;
     min-inline-size: 0;
@@ -894,13 +895,20 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* spineFitsLabel (series-model.ts) mirrors this size, the shelf's height and
-     the spine's padding, border, number, font size and letter-spacing: change
-     them together. */
+  /* The lines fill the spine below its number (flex: 1 above), so a date line's
+     size is its room: SpineDate (series-card.tsx) measures the whole line, state
+     word and all, in .spine-ruler, its hidden twin in the same type (it is a
+     .spine-date too), against it. */
   .spine-date {
     font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 600;
+  }
+  .spine-ruler {
+    position: absolute;
+    inline-size: max-content;
+    visibility: hidden;
+    pointer-events: none;
   }
   .spine-date[data-state='preorder'] {
     color: var(--brand-ink);

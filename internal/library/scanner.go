@@ -1444,7 +1444,7 @@ func (l coverLook) find(dir string, anyImage bool) string {
 		p := filepath.Join(dir, name)
 		own, err := lstatLook(l.ctx, p, l.timeout)
 		if err == nil {
-			if link, _ := linkKind(own.Mode()); link {
+			if link, _ := metadata.LinkKind(own.Mode()); link {
 				switch out, ok := l.linkOut(relOf(p), own.Mode()); {
 				case !ok:
 					return ""
@@ -1659,7 +1659,8 @@ func partTitle(relPath string) string {
 //
 // The root is resolved first and the walk starts at its target: filepath.WalkDir
 // Lstat's its root, so a root that is itself a symlink (a NAS mount linked into
-// place) was one non-directory entry and indexed nothing. Links below the
+// place) or a Windows junction (metadata.EvalSymlinksBounded follows one) was
+// one non-directory entry and indexed nothing. Links below the
 // root are still not walked into, and a file link is a part only while it
 // stays inside the root (linkOut). Rel paths are taken against the folder walked and
 // folders are named under lib.Root, so both are the same whether or not the root
@@ -1974,7 +1975,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			side.epubs[dirOf(rel)] = append(side.epubs[dirOf(rel)], d)
 			return nil
 		}
-		link, _ := linkKind(d.Type())
+		link, _ := metadata.LinkKind(d.Type())
 		if seen := imageSeen(d); seen != 0 {
 			if link {
 				links = append(links, walkLink{dir: dirOf(rel), rel: rel, mode: d.Type(), seen: seen})
@@ -2019,7 +2020,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 	return dirs, side, hadErrors, err
 }
 
-// walkLink is a link (linkKind, by its entry's type: mode) the discovery walk
+// walkLink is a link (metadata.LinkKind, by its entry's type: mode) the discovery walk
 // listed (audioDirs) in the folder dir, at library-relative rel: an audio
 // file (part) or an image (seen, imageSeen's bits), and linksInRoot's look at
 // it (out, err; first for the link whose look left its folder unanswered).
@@ -2340,7 +2341,7 @@ func isAudioEntry(de fs.DirEntry, rel string, ignore *Ignore) bool {
 }
 
 // linkOut reports whether the entry of type mode at library-relative rel is a
-// link (or a name that may be one: linkKind) that leads out of the library
+// link (or a name that may be one: metadata.LinkKind) that leads out of the library
 // root: SafeJoin's ErrOutsideRoot, the rule every route opens a path by
 // (resolveBelow, followLink: no look past the root). The scan never takes such
 // an entry as a book's part or cover, so nothing is read from where it leads
@@ -2355,7 +2356,7 @@ func isAudioEntry(de fs.DirEntry, rel string, ignore *Ignore) bool {
 // Any other failure of the join reads as a link out, never followed
 // unchecked.
 func linkOut(ctx context.Context, root, rel string, mode fs.FileMode, timeout time.Duration) (bool, error) {
-	if link, _ := linkKind(mode); !link {
+	if link, _ := metadata.LinkKind(mode); !link {
 		return false, nil
 	}
 	_, err := SafeJoinBounded(ctx, root, rel, timeout)
