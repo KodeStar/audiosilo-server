@@ -50,17 +50,26 @@ func (a *API) podcastFetchStatuses(r *http.Request, lib int64, paths []string) (
 // OpenPodcast answers ErrNotIndexable or ErrNotFound for every other one, and
 // those mean absent; any other open failure is returned, a share that stopped
 // answering among them (the open a bounded look within fileWait,
-// metadata.GaveUp: a 503 share_not_answering). An episode the share refuses
-// for good (library.ErrEpisodeRefused) is an ErrNotIndexable, so absent here:
-// the fetch routes queue it when asked, and the Bridge writes a new file.
+// metadata.GaveUp: a 503 share_not_answering). An episode file the share
+// refuses for good (library.ErrEpisodeRefused) is an ErrNotIndexable, so
+// absent here: the fetch routes queue it when asked, and the Bridge writes a
+// new file. One whose show folder, feed.json or publish barrier is refused
+// (library.ErrShowRefused) is returned: a new file would sit behind the same
+// refusal, so every ask would download the whole episode again for nothing
+// (writePodcastStorageError's 409 show_unreadable); so is that refusal for an
+// episode not downloaded yet (library.ShowRefused, the scheduler's and the
+// prefetch's check too).
 func (a *API) podcastPresent(ctx context.Context, lib *catalog.Library, rel string, pin catalog.PodcastPin) (bool, error) {
 	if !pin.Present || !feed.ValidFetch(pin.Fetch) || pin.Fetch.DeletedAt != "" {
-		return false, nil
+		return false, library.ShowRefused(ctx, *lib, rel, a.fileWait)
 	}
 	f, _, err := library.OpenPodcastBounded(ctx, a.cat, *lib, rel, a.fileWait)
 	if err == nil {
 		_ = f.Close()
 		return true, nil
+	}
+	if errors.Is(err, library.ErrShowRefused) {
+		return false, err
 	}
 	if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, catalog.ErrNotFound) {
 		return false, nil

@@ -11,6 +11,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/modules"
 )
 
@@ -119,6 +120,18 @@ func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) 
 			if err != nil {
 				errs = append(errs, err)
 				continue
+			}
+			if len(candidates) > 0 {
+				// GetLibrary answers from the catalog's library cache.
+				lib, err := d.Catalog.GetLibrary(ctx, show.LibraryID)
+				switch {
+				case err != nil:
+					// No fetch unchecked; the show's retention below still runs.
+					errs = append(errs, err)
+					candidates = nil
+				case library.ShowRefused(ctx, *lib, candidates[0].Path, StreamWait) != nil:
+					candidates = nil // see library.ShowRefused
+				}
 			}
 			added := 0
 			for _, ep := range candidates {

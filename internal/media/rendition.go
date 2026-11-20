@@ -74,9 +74,9 @@ var errShortCopy = fmt.Errorf("%w: the rendition is shorter than its source", er
 
 // renditionCheck looks at the watch copy ffmpeg wrote at out from src (size
 // bytes): errNoAudio when it holds no audio track (ffmpeg exits 0 having
-// written an MP4 with no track when it read no audio at all: an M4B whose index
-// sits at its end, read through pipe:0 by an ffmpeg without the fd protocol,
-// which can't seek back to the samples), errShortCopy when it is short of the
+// written an MP4 with no track when it read no audio at all, as an M4B whose
+// index sits at its end did when read through pipe:0, which can't seek back
+// to the samples: a copy's input is seekable now, fileInput), errShortCopy when it is short of the
 // source's exact duration (metadata.ExactDuration, a VBR MP3 with no header
 // its frames counted; a source the probe is unsure of, or can't count in time,
 // isn't held to it, nor is a copy the probe can't measure).
@@ -107,14 +107,15 @@ func renditionCheck(ctx context.Context, src *os.File, size int64, out string) e
 }
 
 // renditionArgs is the ffmpeg command line that encodes the first audio stream
-// of the file on stdin (in) into the watch rendition at out: AAC-LC (ffmpeg's
+// of the source (in: fileInput's) into the watch rendition at out: AAC-LC (ffmpeg's
 // own encoder; HE-AAC needs the non-free libfdk_aac), one channel, 48 kbps,
 // 44.1 kHz, in MP4 with its index first (+faststart: a watch player starts
 // before the end arrives). No video (cover art), no metadata, no chapters (the
-// watch reads the book's from the API). The input may only be the descriptor
-// (-protocol_whitelist), so crafted bytes that probe as a playlist can't make
-// ffmpeg open other files, and only an audio container (inputArgs,
-// metadata.InputFormatArgs: a playlist is no input at all); the demuxer is
+// watch reads the book's from the API). ffmpeg may open in's one protocol
+// alone (-protocol_whitelist) and read only an audio container (inputArgs,
+// metadata.InputFormatArgs: a playlist is no input at all), so crafted bytes
+// that probe as a playlist can't make it open other files, the file
+// protocol's /dev/fd/3 link included; the demuxer is
 // ffmpeg's guess among those, since the library holds every audio format. The list changes
 // which inputs are read, never an encode (renditionVersion stays). Bitexact
 // output names no encoder version, so the same ffmpeg writes the same bytes

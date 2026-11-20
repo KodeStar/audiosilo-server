@@ -1350,13 +1350,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestSafeJoinListedVariantCostsWhatMissingDoes`; a folder whose names pass the bound once a request). A
   link is read (`Readlink`), never followed: `followLink` walks its target one name at a time, from the
   link's folder or the filesystem's root, through the root and the folders above it unlooked at (the root is
-  resolved: no link in them), each name under the root looked at and a link among them read the same way (at
-  most `maxLinkHops`, a loop past it a name not there), and ends at the first name out of the root without
+  resolved: no link in them; `metadata.ResolveLinks`, which follows a Windows junction as a link, as `Below`
+  does, where `filepath.EvalSymlinks` fails a root reached through one and the join checked no link below it:
+  `SafeJoin`, `SafeJoinListed`, the scan's walk, `TestSafeJoinRootThroughAJunction` on Windows), each name under the root looked at and a link among them read the same way (at
+  most `metadata.MaxLinkHops`, a loop past it a name not there), and ends at the first name out of the root without
   looking at it. An absolute target that names the root as configured (a root that is itself a link,
   `/data/books` to `/mnt/books`, or macOS's `/var`) is walked from the resolved root, as the OS opens it
   (`throughRootAs`); one through any other link above the root is out of it. A Windows junction (Lstat's
   irregular entry that is no folder since Go 1.23, neither a link nor a folder) is read as a link
-  (`linkKind`), and another reparse point that doesn't read as one is a plain name
+  (`metadata.LinkKind`), and another reparse point that doesn't read as one is a plain name
   (`TestJoinLinkThroughTheRootAsConfigured`, `TestResolveBelowJunction`). A link or junction that is there and
   can't be read (a permission, a junction another process holds) is `ErrOutsideRoot` too (`linkRead`), and so is
   one with a name along its target whose look failed for anything but the name gone (a permission, a limit of
@@ -1385,15 +1387,23 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   with its page of file info, read through the open folder (`metadata.ReadDirBelow`, `DirBelow.Info`); the
   open refuses a link out of the root wherever it then is (a 404, a missing folder). `os.Root` also
   refuses a link a join allows, one that stays in the root by an absolute target or by climbing above it
-  and back, so `Below` opens the resolved path through the root then
+  and back, and a Windows junction (its target always absolute), so `Below` opens the resolved path through
+  the root then (`metadata.resolveLinks`: on Windows a junction is followed as a link, `walkLinks` by
+  `metadata.LinkKind`, the join's rule, since `filepath.EvalSymlinks` leaves one a plain name and fails a path
+  through it; one out of the root resolves out of it and is refused, as is a transcode's re-checked path
+  through one, `heldPathInput`: `TestWalkLinksFollowsJunctions`, and on Windows `TestJunctionBelowTheRoot`)
   (`TestOpenRegularBelowNeverLeavesTheRoot`, `TestReadDirBelowNeverLeavesTheRoot`,
   `TestStreamOpensThroughTheRootAfterASwap`). So does a transcode, whose ffmpeg reads the file opened there,
   never the path (`media.Transcode`, `fileInput`: ffmpeg's stdin as `fd:`, else the file as
   `metadata.ToolInput` hands every tool one, below; `TestTranscodeOpensThroughTheRoot`), and a remux's or a
   rendition's source: its look (`media.Source`, a stat through the root) and its run's open
   (`FileCache.make`), whose descriptor ffmpeg reads (`TestFileCacheSourceThroughTheRoot`). A podcast episode
-  checks the open file against the path again instead (`OpenPodcast`: `os.SameFile`); the reader's ebook does both (`OpenEbook`: opened through the root,
-  `metadata.OpenBelow`, then `os.SameFile`). The scan's reads and an asked book's (`resolveBook`, then
+  is read through the root too, its show's `feed.json` (`feed.ReadFile`, given the library's root, its looks
+  at the folders beside the show's included) and its file (`metadata.OpenBelow`), then checked against the path
+  again (`OpenPodcast`: `os.SameFile`; `TestOpenPodcastThroughTheRootAfterASwap`, `TestReadFileThroughTheRoot`);
+  the reader's ebook does both (`OpenEbook`: opened through the root, `metadata.OpenBelow`, then `os.SameFile`),
+  and so does a library's `library.json` marker (`ReadLibraryMarker`: `metadata.LstatBelow` and
+  `metadata.ReadRegularFile`, which always takes the library's root). The scan's reads and an asked book's (`resolveBook`, then
   `indexBook`) go through the root too, so a name swapped for a link out of it after the walk's or the join's
   check is never followed: the audio read, tags and the in-process probe (`metadata.ExtractTimeout` and
   `ExtractTags`, given the library's root), the fingerprint (`metadata.Fingerprint`), the files beside the
@@ -1420,10 +1430,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   folder can't open (a link to a folder beside it, an absolute target) is opened through the root's kept
   folder, then resolved as `Below` does (an lstat's up to its last name only, so `LstatBelow` is always the
   link's own: `TestLstatBelowIsTheLinksOwn`). An external tool is handed the file
-  opened so, never its path (`metadata.ToolInput`): ffprobe's fallback run (`runFFprobe`), the chapter
-  check's ffmpeg (`media.DetectSilences`, given the library's root) and a transcode on an ffmpeg without
-  `fd:` (`media.fileInput`, through `ToolInputBounded`: where its looks are on the share, Windows, a bounded
-  look whose late answer's handle is closed when it comes, `TestBoundedToolInputGivenUp`). On Unix the tool inherits the descriptor
+  opened so, never its path (`metadata.ToolInput`, the one entry point, always bounded where it looks at the
+  share, Windows: within the caller's time, a look whose late answer's handle is closed when it comes,
+  `TestBoundedToolInputGivenUp`, `TestToolInputBoundedWhereItLooks`): ffprobe's fallback run (`runFFprobe`,
+  within the probe's time, one given up on its `ErrProbeTimeout`), the chapter check's ffmpeg
+  (`media.DetectSilences`, given the library's root, within its window's time) and a transcode or a cached
+  copy on an ffmpeg without `fd:` (`media.fileInput`). On Unix the tool inherits the descriptor
   and is named a link to its own `/dev/fd/3` in a private folder, named for the file's extension (ffmpeg
   guesses a format by it; `TestProbeMatchesLiveFFprobe` holds parity), or, with no temporary folder it may
   write to (a read-only container), `/dev/fd/3` itself, its format guessed from its bytes
@@ -1448,9 +1460,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestAttachmentsReadThroughTheRootAfterASwap`, `TestReadalongMapReadThroughTheRootAfterASwap`,
   `TestLookArtStatsThroughTheRootAfterASwap`, `TestBridgeBookFilesStatThroughTheRoot`,
   `TestProberHandsFFmpegTheFileItOpened`, `TestBelowFolderNeverLeavesTheRoot`, `TestToolInputIsTheOpenedFile`).
-  Still a check and then a look by path: a podcast show's `feed.json` and a library's `library.json`
-  (`metadata.ReadRegularFile`: an lstat, an open and `os.SameFile`, all by path), and the looks (listings,
-  lstats) that only decide what a scan reads. The scan takes no link out of the root
+  Still a check and then a look by path: the looks (listings, lstats) that only decide what a scan reads. The scan takes no link out of the root
   either, by the same rule (`linkOut`: `SafeJoin` of each link the walk lists, looked at once the walk ends,
   width at a time, `linksInRoot`; a plain file never looked at again): a file or folder link out in a book
   folder is never a part, nor a cover (`coverLook.find`, which looks at a cover's own entry before any stat,
@@ -1834,9 +1844,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   of its own `.m4a` files, one encode at a time, 2 h timeout from its slot, the same 1 GiB disk guard (one
   reservation with the remux's: both under `<data>/cache`), `.part` synced then renamed, never cached when the
   source changed while read, ffmpeg's refusal (an exit status before anything was written, or a copy with no
-  audio track: ffmpeg exits 0 with one for an M4B whose index is at its end read through `pipe:0`, an ffmpeg
-  without the fd protocol; `metadata.MP4HasTrack`; or a short copy) remembered for an hour or until the file
-  changes. A failed run's error carries the first and last
+  audio track, `metadata.MP4HasTrack`; or a short copy) remembered for an hour or until the file
+  changes. A copy's run reads its source as a transcode does (`fileInput`): `fd:` on its stdin, else, on an
+  ffmpeg older than 6.1, `metadata.ToolInput`'s seekable `/dev/fd/3` link (the re-checked path on Windows),
+  never `pipe:0`, through which an M4B whose index sits at its end gave a copy with no track, the book's watch
+  rendition a 422 "holds no audio" and its MKA remux a refusal, for good (server#498's regression,
+  `TestRenditionWithoutFDReadsAnIndexAtTheEnd`, `TestFileCacheInputWithoutFD`). A failed run's error carries the first and last
   2 KiB of ffmpeg's log. The remux is unchanged (same dir, keys, ETags). `GET
   /libraries/{id}/stream?path=<file>&rendition=watch[&download=1]` (same auth as the stream: session, API key,
   `?token=`, a cast token for its book) is checked in this order: scope (403/404), kind (400 code `bad_rendition`
@@ -1911,12 +1924,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
     indexed. A podcast episode the share refuses so (its show folder, `feed.json`, publish barrier or file) is
     `library.ErrEpisodeRefused`: the stream's 404 `episode_not_found`, never a fetch asked of the Bridge by it,
     which would meet the same refusal (`TestPodcastStreamRefusedFolderIs404`). A fetch asked for by name reads
-    it as absent (shipped players use these routes, CROSS-REPO §15): a
+    a refused file as absent (shipped players use these routes, CROSS-REPO §15): a
     listener's `GET /libraries/{id}/podcasts/fetch` answers its fetch status and `POST` queues it (202), an
     admin's download (`POST /admin/libraries/{id}/podcasts/fetch`) too. A refused file is mended so (the Bridge
     writes a new one in its place: `TestPodcastAdminDownloadFetchesARefusedEpisode`,
     `TestPodcastListenerFetchQueuesARefusedEpisode`); a refused show folder, `feed.json` or barrier is not, the
-    new file sitting behind the same refusal (`TestPodcastStreamRefusedFolderIs404` checks its fetch status).
+    new file sitting behind the same refusal, so it is `library.ErrShowRefused` (`podcastShowLookErr`) and
+    those three routes answer it up front, 409 `show_unreadable` with nothing queued, rather than download the
+    whole episode again on every ask (`podcastPresent`, `writePodcastStorageError`;
+    `TestPodcastStreamRefusedFolderIs404`, `TestOpenPodcastReadsAShareFault`). An episode not downloaded yet
+    in such a show meets the same check, `library.ShowRefused` (OpenPodcast's looks above the file, whatever the
+    index holds): the fetch routes' 409, the stream's 404, and the scheduler and the prefetch pass the show over
+    (`TestShowRefusedForAnEpisodeNotDownloaded`, `TestSchedulerPassesOverARefusedShow`,
+    `TestPrefetchPassesOverARefusedShow`).
   - **The server's own limits** (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY) and any error on neither list: no share's
     fault, never a 503 `share_not_answering`; a route answers it as it did before the rule (an asked read's
     `lookRefused` 404, a stream's missing file, a 500 where the route logs one).

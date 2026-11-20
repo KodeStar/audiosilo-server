@@ -110,7 +110,7 @@ func hasAudio(ctx context.Context, root, rel string, ignore *Ignore) bool {
 		if !isAudioEntry(de, p, ignore) || overLong(p) {
 			continue
 		}
-		if link, _ := linkKind(de.Type()); !link {
+		if link, _ := metadata.LinkKind(de.Type()); !link {
 			return true
 		}
 		links = append(links, de)

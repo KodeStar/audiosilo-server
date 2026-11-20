@@ -42,9 +42,9 @@ func NewRemuxer(dir string, log *slog.Logger) (*FileCache, error) {
 func remuxETag(key string, _ int64) string { return `"remux-` + key + `"` }
 
 // remuxArgs is the ffmpeg command line that copies the first audio stream of
-// the Matroska on stdin (in) into an MP3 at out, chapters included. The demuxer
-// is forced and the input may only be the descriptor, so crafted bytes can't
-// make ffmpeg open other files; -xerror fails the run on a read error, where
+// the Matroska source (in: the descriptor, fileInput's) into an MP3 at out,
+// chapters included. The demuxer is forced and the input may only be in's one
+// protocol, so crafted bytes can't make ffmpeg open other files; -xerror fails the run on a read error, where
 // ffmpeg would otherwise end the input there and exit 0 with a short copy (a
 // network mount's hiccup). Bitexact output is byte-identical every run,
 // so an If-Range resume holds across a re-remux. ID3v2.3 carries the chapters

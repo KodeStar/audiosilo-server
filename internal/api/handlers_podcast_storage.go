@@ -117,7 +117,9 @@ func (a *API) handleAdminPodcastRetention(w http.ResponseWriter, r *http.Request
 // generation opens, else its fetch asked of the Bridge (202). An episode the
 // share refuses the server for good (library.ErrEpisodeRefused: a file whose
 // permissions a copy or a restore left wrong) is fetched too: podcastPresent
-// reads it as absent.
+// reads it as absent. One whose show folder, feed.json or publish barrier is
+// refused (library.ErrShowRefused) is not: a 409 show_unreadable, since the
+// new file would sit behind the same refusal.
 func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 	lib, ok := a.podcastStorageLibrary(w, r)
 	if !ok {
@@ -204,6 +206,10 @@ func (a *API) handleBridgePodcastRetentionCheck(w http.ResponseWriter, r *http.R
 }
 func (a *API) writePodcastStorageError(w http.ResponseWriter, err error) {
 	switch {
+	// library.ErrShowRefused: the share refuses the show's folder, feed.json or
+	// publish barrier for good, which no download mends (podcastPresent).
+	case errors.Is(err, library.ErrShowRefused):
+		writeErrorCode(w, 409, "show_unreadable", "The server cannot read this show's folder, so a new download would not help. Check the folder's permissions on the share.")
 	// bridge.ErrNotFound: a fetch's target left the index (checkPodcastTarget);
 	// library.ErrEpisodeRefused: the share refuses the episode for good.
 	case errors.Is(err, catalog.ErrNotFound), errors.Is(err, bridge.ErrNotFound), errors.Is(err, library.ErrEpisodeRefused):
@@ -259,6 +265,12 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 			writePodcastFetchPending(w, bridge.UnavailableFetchStatus(bridge.FetchStatus{}, bridge.ErrKindUnavailable))
 			return
 		}
+		// An episode not downloaded yet in a show the share refuses for good
+		// is the 404 a refused one is (library.ShowRefused).
+		if library.ShowRefused(r.Context(), *lib, rel, metadata.WaitLeft(deadline)) != nil {
+			writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
+			return
+		}
 		var status bridge.FetchStatus
 		f, pin, status, err = a.podcastDemand.Fetch(r.Context(), *lib, rel, userFrom(r.Context()).ID, userFrom(r.Context()).IsDemo)
 		if err != nil {
@@ -266,6 +278,9 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 			case r.Context().Err() != nil: // the client left: no one to answer
 			case errors.Is(err, bridge.ErrIdentityChanged):
 				writePodcastIdentityBusy(w)
+			case errors.Is(err, library.ErrEpisodeRefused):
+				// Refused since the open above: the stream's one answer for it.
+				writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 			default:
 				a.writePodcastStorageError(w, err)
 			}

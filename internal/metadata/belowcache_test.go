@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -256,7 +257,7 @@ func TestToolInputWithNoTempFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	input, extra, cleanup, err := ToolInput(f, root, file)
+	input, extra, cleanup, err := ToolInput(context.Background(), f, root, file, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +327,7 @@ func TestToolInputIsTheOpenedFile(t *testing.T) {
 	}
 	defer f.Close()
 	swapForLink(t, filepath.Join(root, "Book"), outside)
-	input, extra, cleanup, err := ToolInput(f, root, file)
+	input, extra, cleanup, err := ToolInput(context.Background(), f, root, file, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,7 @@ func indexedFetchFixture(t *testing.T) (*Catalog, context.Context, *Library, *fe
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata/phase2c2", "../podcast/testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

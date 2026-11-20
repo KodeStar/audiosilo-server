@@ -17,7 +17,7 @@ import (
 
 func TestReadFeedFixture(t *testing.T) {
 	before := time.Now()
-	f, err := ReadFile("../testdata/feed-v1.json", "Example Show", nil)
+	f, err := ReadFile("../testdata", "../testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestReadFeedFixture(t *testing.T) {
 				t.Fatal(err)
 			}
 			var logs bytes.Buffer
-			got, err := ReadFile(filename, "Example Show", slog.New(slog.NewTextHandler(&logs, nil)))
+			got, err := ReadFile(filepath.Dir(filename), filename, "Example Show", slog.New(slog.NewTextHandler(&logs, nil)))
 			if tc.denied {
 				if err == nil {
 					t.Fatal("accepted unsupported feed")
@@ -83,7 +83,7 @@ func TestReadFeedFixture(t *testing.T) {
 	if err := os.Symlink(abs, filename); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadFile(filename, "Example Show", nil); err == nil {
+	if _, err := ReadFile(filepath.Dir(filename), filename, "Example Show", nil); err == nil {
 		t.Fatal("symlink accepted")
 	}
 }
@@ -383,7 +383,8 @@ func writeSized(t *testing.T, name string, size int64) {
 	}
 }
 
-// readRerooted writes f as dir's feed.json and reads it as show.
+// readRerooted writes f as dir's feed.json and reads it as show, through the
+// library's root (the folder holding dir), as a scan reads it.
 func readRerooted(t *testing.T, dir, show string, f File) *File {
 	t.Helper()
 	data, err := json.Marshal(f)
@@ -394,9 +395,47 @@ func readRerooted(t *testing.T, dir, show string, f File) *File {
 	if err := os.WriteFile(filename, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := ReadFile(filename, show, nil)
+	got, err := ReadFile(filepath.Dir(dir), filename, show, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return got
+}
+
+// TestReadFileThroughTheRoot (security): a show's feed.json is read through
+// the library's root (metadata.ReadRegularFile), so a show folder that is a
+// link out of the library (one swapped in since the scan's look at it) is
+// never read, where a look and an open by path, both following the folder's
+// link, found one regular file and read it. Allowed: the feed in place, and
+// through a link that stays in the library.
+func TestReadFileThroughTheRoot(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("../testdata/feed-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, outside := t.TempDir(), t.TempDir()
+	for _, dir := range []string{filepath.Join(root, "Example Show"), outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "feed.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ReadFile(root, filepath.Join(root, "Example Show", "feed.json"), "Example Show", nil); err != nil {
+		t.Fatalf("a feed.json in place = %v, want it read", err)
+	}
+	if err := os.Symlink("Example Show", filepath.Join(root, "Again")); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+	if _, err := ReadFile(root, filepath.Join(root, "Again", "feed.json"), "Example Show", nil); err != nil {
+		t.Fatalf("a feed.json through a link inside the library = %v, want it read", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "Away")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadFile(root, filepath.Join(root, "Away", "feed.json"), "Example Show", nil); err == nil {
+		t.Fatal("a feed.json through a show folder linked out of the library was read")
+	}
 }

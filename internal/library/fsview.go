@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -148,9 +147,13 @@ func safeJoin(root, relPath string, lk belowLooks) (string, error) {
 		return "", err
 	}
 	// Resolve symlinks in the root itself so containment is checked against the
-	// real directory (the root is operator-configured and expected to exist).
+	// real directory (the root is operator-configured and expected to exist), a
+	// Windows junction followed as a link (metadata.ResolveLinks, as Below
+	// resolves the root): filepath.EvalSymlinks fails a root reached through
+	// one (ENOTDIR), which left only resolveExisting's look, no link below the
+	// root checked.
 	rootAs := rootAbs
-	resolved, rerr := filepath.EvalSymlinks(rootAbs)
+	resolved, rerr := metadata.ResolveLinks(rootAbs)
 	if rerr == nil {
 		rootAbs = resolved
 	} else if err := unansweredLook(context.Background(), rerr); err != nil {
@@ -248,7 +251,7 @@ type belowLooks struct {
 	// failed otherwise (a permission, the server's own limits: lookFailed).
 	lstat func(path string) (fs.FileInfo, error)
 	// readlink is a link's own target as stored (relative or absolute), ""
-	// when the name is gone or is no link (maybe: linkKind's name that may be
+	// when the name is gone or is no link (maybe: metadata.LinkKind's name that may be
 	// one); err as lstat's, or ErrOutsideRoot for a link that can't be read
 	// (linkRead).
 	readlink func(path string, maybe bool) (string, error)
@@ -368,8 +371,8 @@ func (e failedLook) Unwrap() error { return e.err }
 // linkRead is a look's answer from a link's read (os.Readlink's to and err,
 // one that went unanswered or failed as a share does that a retry may get
 // past already the look's error): the target; "" for a name gone since its
-// lstat, and for one that may be a link (maybe: linkKind) and is none
-// (notALink; Go reads a Windows reparse point that is neither a link nor a
+// lstat, and for one that may be a link (maybe: metadata.LinkKind) and is none
+// (metadata.NotALink; Go reads a Windows reparse point that is neither a link nor a
 // junction as ENOENT); else ErrOutsideRoot. A link that is there and can't
 // be read (a permission, a junction another process holds open) points
 // nobody knows where: every path through it is refused, as one through a
@@ -379,7 +382,7 @@ func linkRead(to string, err error, maybe bool) (string, error) {
 	switch {
 	case err == nil:
 		return to, nil
-	case metadata.NotExist(err), maybe && notALink(err):
+	case metadata.NotExist(err), maybe && metadata.NotALink(err):
 		return "", nil
 	}
 	return "", fmt.Errorf("%w: %w: %w", ErrOutsideRoot, errLinkUnread, err)
@@ -390,16 +393,6 @@ func linkRead(to string, err error, maybe bool) (string, error) {
 // a link known to lead out from one whose target is not known (the scan's
 // linkOut, which keeps such a book as stored) asks for it.
 var errLinkUnread = errors.New("a link that can't be read")
-
-// notALink reports whether err is a read of a link's (os.Readlink's) saying
-// the name is no link: EINVAL, or Windows' ERROR_NOT_A_REPARSE_POINT (4390).
-func notALink(err error) bool {
-	return errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.Errno(4390))
-}
-
-// maxLinkHops is how many links one path's resolve follows (resolveBelow), as
-// filepath.EvalSymlinks allows: past it, a loop, which resolves to nothing.
-const maxLinkHops = 255
 
 // resolveBelow is resolveExisting(p) for a path p under rootAbs, a root with no
 // symlinks in it (a path inside the root is; one out of it is some path out of
@@ -442,7 +435,7 @@ func resolveBelow(rootAbs, rootAs, p string, lk belowLooks) (target string, ther
 		if err != nil || info == nil {
 			return rest(), false, err
 		}
-		if link, maybe := linkKind(info.Mode()); link {
+		if link, maybe := metadata.LinkKind(info.Mode()); link {
 			resolved, err := followLink(w, cur, next, maybe)
 			if err != nil || resolved == "" {
 				return rest(), false, err
@@ -470,28 +463,6 @@ type linkWalk struct {
 	hops            int
 }
 
-// linkKind is how resolveBelow, followLink and the scan (linkOut) read a name
-// by its mode (an Lstat's, or a listing's entry type): a symbolic link (link),
-// or a name that may be one (link and maybe): Lstat's
-// irregular entry that is no folder, which on Windows is a junction (a mount
-// point: since Go 1.23 neither ModeSymlink nor ModeDir, so walking through it
-// as a folder would read its target's names, out of the root as it may be)
-// or another reparse point (a cloud file's placeholder). Such a name is read
-// (os.Readlink reads a junction's target) and followed as a link when it
-// reads as one, else walked as a plain name, as it always was.
-func linkKind(m fs.FileMode) (link, maybe bool) {
-	switch {
-	case m&fs.ModeSymlink != 0:
-		return true, false
-	case m&fs.ModeIrregular != 0 && !m.IsDir():
-		return true, true
-	}
-	return false, false
-}
-
-// isPathSep reports whether r separates the names of a path (a link's target).
-func isPathSep(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) }
-
 // followLink resolves the link at link, in the folder dir (resolved, under
 // w.rootAbs), one hop at a time: its target is read (lk.readlink) and walked
 // name by name from dir (a relative one) or the filesystem's root (an
@@ -506,13 +477,13 @@ func isPathSep(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) }
 // or fails. A target that resolves to a folder above the root is returned as
 // it is (out of the root too). "" for a link that resolves to nothing (a name
 // along its target not there, a link gone since it was looked at, more than
-// maxLinkHops links: a loop); link itself for a name that may be a link
-// (maybe: linkKind) and does not read as one. err is a look's that went
+// metadata.MaxLinkHops links: a loop); link itself for a name that may be a link
+// (maybe: metadata.LinkKind) and does not read as one. err is a look's that went
 // unanswered, or ErrOutsideRoot for a link that can't be read (linkRead) or
 // one with a name along its target that can't be looked at (lookFailed):
 // where either leads is not known.
 func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
-	if w.hops++; w.hops > maxLinkHops {
+	if w.hops++; w.hops > metadata.MaxLinkHops {
 		return "", nil
 	}
 	to, err := w.lk.readlink(link, maybe)
@@ -524,10 +495,10 @@ func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
 	case to == "":
 		return "", nil
 	}
-	cur, names := dir, strings.FieldsFunc(to, isPathSep)
+	cur, names := dir, strings.FieldsFunc(to, metadata.IsPathSep)
 	if own := filepath.VolumeName(to); own != "" || os.IsPathSeparator(to[0]) {
 		vol := cmp.Or(own, filepath.VolumeName(w.rootAbs))
-		cur, names = vol+string(filepath.Separator), strings.FieldsFunc(to[len(own):], isPathSep)
+		cur, names = vol+string(filepath.Separator), strings.FieldsFunc(to[len(own):], metadata.IsPathSep)
 		if below, ok := w.throughRootAs(vol, names); ok {
 			cur, names = w.rootAbs, below
 		}
@@ -559,7 +530,7 @@ func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
 		if err != nil || info == nil {
 			return "", err
 		}
-		if link, maybe := linkKind(info.Mode()); link {
+		if link, maybe := metadata.LinkKind(info.Mode()); link {
 			resolved, err := followLink(w, cur, next, maybe)
 			if err != nil || resolved == "" || !withinRoot(w.rootAbs, resolved) {
 				return resolved, err
@@ -573,7 +544,8 @@ func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
 
 // throughRootAs is names, an absolute link target's on volume vol, less the
 // root's names as configured (w.rootAs) when they lead it: the OS resolves
-// that spelling to w.rootAbs, as this resolve's EvalSymlinks of the root did,
+// that spelling to w.rootAbs, as this resolve's look at the root
+// (metadata.ResolveLinks, EvalSymlinksBounded) did,
 // so the names after it are walked from w.rootAbs (a root that is itself a
 // link, /data/books to /mnt/books, or macOS's /var to /private/var, whose
 // links name its files through the configured path). ok false when they do
@@ -583,7 +555,7 @@ func (w *linkWalk) throughRootAs(vol string, names []string) (below []string, ok
 	if w.rootAs == "" || w.rootAs == w.rootAbs || vol != filepath.VolumeName(w.rootAs) {
 		return nil, false
 	}
-	as := strings.FieldsFunc(w.rootAs[len(vol):], isPathSep)
+	as := strings.FieldsFunc(w.rootAs[len(vol):], metadata.IsPathSep)
 	if len(as) == 0 || len(names) < len(as) || !slices.Equal(names[:len(as)], as) {
 		return nil, false
 	}
@@ -599,13 +571,14 @@ func withinRoot(rootAbs, p string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
-// resolveExisting resolves symlinks in the longest existing prefix of p and
-// re-appends the (not-yet-existing) remainder, so containment can be checked even
-// for a path that has not been created yet.
+// resolveExisting resolves symlinks (and Windows junctions: metadata.ResolveLinks)
+// in the longest existing prefix of p and re-appends the (not-yet-existing)
+// remainder, so containment can be checked even for a path that has not been
+// created yet.
 func resolveExisting(p string) string {
 	rest := ""
 	for cur := p; ; {
-		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+		if resolved, err := metadata.ResolveLinks(cur); err == nil {
 			return filepath.Join(resolved, rest)
 		}
 		parent := filepath.Dir(cur)

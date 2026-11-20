@@ -366,8 +366,8 @@ func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegP
 // fileInput is how ffmpeg reads f, the library file at path under root,
 // opened through root (Transcode), without resolving its path again: f as
 // its stdin through the fd: protocol when this ffmpeg has it (inputFor), else
-// handed over as metadata.ToolInput hands every tool a library file (its
-// ToolInputBounded: ctx, at most wait), read by the file protocol: on Unix
+// handed over as metadata.ToolInput hands every tool a library file (ctx, at
+// most wait), read by the file protocol: on Unix
 // the child's descriptor 3 through a link named for path's extension, read
 // seekably (an input -ss; an MP4 whose index sits at its end demuxes, which
 // pipe:0 can't), never a path in the library; elsewhere path resolved,
@@ -383,21 +383,22 @@ func fileInput(ctx context.Context, ffmpegPath string, f *os.File, root, path st
 		in.file = f
 		return in, func() {}, nil
 	}
-	input, extra, cleanup, err := toolInputBounded(ctx, f, root, path, wait)
+	input, extra, cleanup, err := toolInput(ctx, f, root, path, wait)
 	if err != nil {
 		return inputSpec{}, nil, transientGaveUp(err)
 	}
 	return inputSpec{proto: "file", url: "file:" + input, extra: extra}, cleanup, nil
 }
 
-// toolInputBounded is fileInput's metadata.ToolInputBounded, a test's to
+// toolInput is fileInput's metadata.ToolInput, a test's to
 // inject a share's errors: only Windows' re-check of the path looks at the
 // share, so no other platform meets them.
-var toolInputBounded = metadata.ToolInputBounded
+var toolInput = metadata.ToolInput
 
 // inputSpec is how ffmpeg reads its input: the descriptor file handed over as
-// its stdin through the fd: protocol (seekable) or pipe:0 (not seekable, for
-// an ffmpeg older than 6.1), or what metadata.ToolInput hands a tool, read by
+// its stdin through the fd: protocol (seekable) or pipe:0 (not seekable: a
+// podcast episode on an ffmpeg older than 6.1, TranscodeOpened), or what
+// metadata.ToolInput hands a tool (a library file on such an ffmpeg), read by
 // the file protocol: extra its inherited descriptors (exec.Cmd.ExtraFiles),
 // none for a path. proto is the one protocol ffmpeg may open
 // (-protocol_whitelist).
@@ -417,8 +418,9 @@ var (
 // first requests arrive together, and no transcode or seek (each ?t= starts
 // one) runs a probe of its own. A probe that couldn't run is no answer: one
 // that ran past fdProbeTimeout (a busy host, a cold binary) is dropped, and
-// the next request asks again, so a slow start never stands as "no fd:" (the
-// caches' pipe:0, which can't demux an MP4 whose index sits at its end); one
+// the next request asks again, so a slow start never stands as "no fd:" (a
+// podcast episode's pipe:0, which can't demux an MP4 whose index sits at its
+// end); one
 // that failed (no such binary, an exit status) stands for fdProbeRetry, so an
 // ffmpeg that won't answer is not asked again by every request.
 var fdSupport sync.Map

@@ -180,16 +180,20 @@ func timestamp(s string) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// ReadFile refuses links and non-regular files. Invalid episode paths are skipped;
+// ReadFile reads filename, show's feed.json under the library root root,
+// through root (metadata.ReadRegularFile), as every read of a library file is:
+// it refuses links and non-regular files, and a show folder swapped for a link
+// out of the library since its check is never followed; so are its looks at
+// the folders beside it (rerooter). Invalid episode paths are skipped;
 // diagnostics deliberately contain no feed data or enclosure URLs. An episode
 // path naming show in another Unicode spelling or case is read as show's
 // (inShow), one naming a show folder renamed by hand in show (rerooter).
-func ReadFile(filename, show string, log *slog.Logger) (*File, error) {
+func ReadFile(root, filename, show string, log *slog.Logger) (*File, error) {
 	if !ShowPath(show) {
 		return nil, ErrInvalidFeed
 	}
 	readAt := time.Now()
-	raw, err := metadata.ReadRegularFile(filename, MaxReadBytes, ErrInvalidFeed, ErrInvalidFeed)
+	raw, err := metadata.ReadRegularFile(root, filename, MaxReadBytes, ErrInvalidFeed, ErrInvalidFeed)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +227,7 @@ func ReadFile(filename, show string, log *slog.Logger) (*File, error) {
 	}
 	out := make([]Episode, 0, len(data.Episodes))
 	seen := map[string]bool{}
-	reroot := rerooter{dir: filepath.Dir(filename), show: show, nfc: norm.NFC.String(show), showID: data.ShowID}
+	reroot := rerooter{root: root, dir: filepath.Dir(filename), show: show, nfc: norm.NFC.String(show), showID: data.ShowID}
 	for _, e := range data.Episodes {
 		e.Path = reroot.inShow(e.Path)
 		e.Path = reroot.path(e)
@@ -308,9 +312,9 @@ func (r *rerooter) inShow(p string) string {
 // case, beside dir: whether it is read as show. A look that fails for now
 // (metadata.TransientFault) is no answer: not read as show this time (Unsure).
 func (r *rerooter) sameName(folder string, form bool) bool {
-	other, err := lstat(filepath.Join(filepath.Dir(r.dir), folder))
+	other, err := r.lstat(filepath.Join(filepath.Dir(r.dir), folder))
 	if err == nil {
-		self, err := lstat(r.dir)
+		self, err := r.lstat(r.dir)
 		if err == nil && os.SameFile(self, other) {
 			return true
 		}
@@ -344,6 +348,7 @@ func (r *rerooter) sameName(folder string, form bool) bool {
 // named) reads no episode in show's folder that it might have, and makes the
 // read Unsure: its caller keeps what it knows rather than drop the episode.
 type rerooter struct {
+	root              string // the library's root, every look made through it
 	dir, show, showID string
 	nfc               string           // show in NFC (inShow)
 	files             map[string]int64 // dir's regular files, each with its size
@@ -362,17 +367,20 @@ func (r *rerooter) path(e Episode) string {
 	r.looked = true
 	if r.files == nil {
 		r.files = map[string]int64{}
-		entries, err := os.ReadDir(r.dir)
+		d, err := metadata.ReadDirBelow(r.root, r.dir)
 		r.fault(err)
-		for _, en := range entries {
-			if !en.Type().IsRegular() {
-				continue
+		if err == nil {
+			for _, en := range d.Entries {
+				if !en.Type().IsRegular() {
+					continue
+				}
+				info, err := d.Info(en)
+				if err == nil && info.Mode().IsRegular() {
+					r.files[en.Name()] = info.Size()
+				}
+				r.fault(err)
 			}
-			info, err := en.Info()
-			if err == nil && info.Mode().IsRegular() {
-				r.files[en.Name()] = info.Size()
-			}
-			r.fault(err)
+			_ = d.Close()
 		}
 	}
 	if size, ok := r.files[file]; !ok || size != e.Fetch.Bytes || r.heldAt(folder) {
@@ -416,7 +424,7 @@ func (r *rerooter) heldAt(folder string) bool {
 // case or Unicode form, on a file system that ignores it; inShow reads most).
 func (r *rerooter) heldElsewhere(folder string) bool {
 	other := filepath.Join(filepath.Dir(r.dir), folder)
-	st, err := lstat(other)
+	st, err := r.lstat(other)
 	switch {
 	case metadata.NotExist(err):
 		return false
@@ -426,14 +434,14 @@ func (r *rerooter) heldElsewhere(folder string) bool {
 	case !st.IsDir():
 		return false
 	}
-	self, err := lstat(r.dir)
+	self, err := r.lstat(r.dir)
 	if r.fault(err) {
 		return true
 	}
 	if err == nil && os.SameFile(self, st) {
 		return false
 	}
-	raw, err := metadata.ReadRegularFile(filepath.Join(other, "feed.json"), MaxReadBytes, ErrInvalidFeed, ErrInvalidFeed)
+	raw, err := metadata.ReadRegularFile(r.root, filepath.Join(other, "feed.json"), MaxReadBytes, ErrInvalidFeed, ErrInvalidFeed)
 	if metadata.NotExist(err) {
 		return false
 	}
@@ -463,12 +471,13 @@ func FaultForTests(path string, err error) {
 	lookFaults.Store(path, err)
 }
 
-// lstat is the rerooter's os.Lstat, failing as FaultForTests asked.
-func lstat(name string) (os.FileInfo, error) {
+// lstat is the rerooter's os.Lstat of name, looked at through the library's
+// root (metadata.LstatBelow), failing as FaultForTests asked.
+func (r *rerooter) lstat(name string) (os.FileInfo, error) {
 	if err, ok := lookFaults.Load(name); ok {
 		return nil, &os.PathError{Op: "lstat", Path: name, Err: err.(error)}
 	}
-	return os.Lstat(name)
+	return metadata.LstatBelow(r.root, name)
 }
 
 func ValidHex(s string, n int) bool {
