@@ -415,6 +415,40 @@ func TestRateLimitBridgeRefusedTokenPaysTheAddress(t *testing.T) {
 	}
 }
 
+// A token the check couldn't finish (here the snapshot's read on a cancelled
+// request, which leaves the snapshot cold, so rateLimit lets every guess
+// through) is a 503 that still spends from the address: past its burst the
+// address is refused, never answered for free.
+func TestRateLimitBridgeUncheckedTokenPaysTheAddress(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.ipLimiter.burst = 3
+	const users = "/api/v1/bridge/users"
+	mux := http.NewServeMux()
+	mux.Handle("GET "+users, e.api.requireBridge(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("an unchecked token reached the handler")
+	}))
+	e.h = e.api.rateLimit(mux, mux)
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	send := func() int {
+		req := httptest.NewRequestWithContext(gone, http.MethodGet, users, nil)
+		req.RemoteAddr = "192.0.2.70:1234"
+		req.Header.Set("Authorization", "Bearer a-guess")
+		rec := httptest.NewRecorder()
+		e.h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for i := range 3 {
+		if code := send(); code != http.StatusServiceUnavailable {
+			t.Fatalf("unchecked token %d = %d, want 503", i, code)
+		}
+	}
+	if code := send(); code != http.StatusTooManyRequests {
+		t.Fatalf("unchecked token past the address's burst = %d, want 429", code)
+	}
+}
+
 // The healthcheck asks from the loopback address, which an untrusted reverse
 // proxy on the same host shares with everyone it forwards (server#217): with
 // that address's bucket empty, every other public route is refused while

@@ -83,10 +83,10 @@ var bridgeKinds = []string{auth.KindBridge}
 // busiest second of a 1,000-show podcast backlog held 199 of its 46,209 Bridge
 // requests. The rate is ten times that, and the burst ten more seconds of it.
 // A larger backlog lasts longer but runs no faster, so the pace sets the
-// budget, not the number of shows. Both stay far under the per-device token
-// tier (rate_limit.token), so a stolen Bridge token still meets a cap until an
-// unpair revokes it. Only an authenticated token gets a bucket, and a pairing
-// leaves one live, so the buckets stay few.
+// budget, not the number of shows. Both stay far under the default per-device
+// token tier (rate_limit.token), so a stolen Bridge token still meets a cap
+// until an unpair revokes it. Only an authenticated token gets a bucket, and a
+// pairing leaves one live, so the buckets stay few.
 const (
 	bridgeRate  = 2_000
 	bridgeBurst = 20_000
@@ -97,14 +97,16 @@ const (
 type bridgeHandler struct{ http.Handler }
 
 // requireBridge spends a paired request from its token ID's bucket. A missing
-// or refused bearer spends from the address bucket. When that bucket is empty,
-// only a candidate for the paired token gets a credential lookup, so a Bridge
-// behind a busy address can still work. A database fault is a retryable 503.
+// or refused bearer, or one a database fault left unchecked, spends from the
+// address bucket: rateLimit spent nothing for it, so an unchecked one (a
+// retryable 503, the snapshot's read failing on a cancelled request too) would
+// otherwise be free. When that bucket is empty, only a candidate for the paired
+// token gets a credential lookup, so a Bridge behind a busy address can still
+// work.
 func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 	return bridgeHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, failure, err := a.authenticate(r, false, bridgeKinds)
-		switch {
-		case failure == "":
+		if failure == "" {
 			// Unlike spendCredential, a refusal here leaves the address alone:
 			// players behind the Bridge's address don't pay for its pace.
 			key := strconv.FormatInt(credentialFrom(ctx).ID, 10)
@@ -113,16 +115,18 @@ func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 				return
 			}
 			next(w, r.WithContext(ctx))
-		case err != nil && !errors.Is(err, auth.ErrInvalidToken):
+			return
+		}
+		if ip := clientIP(r); !a.ipLimiter.Allow(ip) {
+			rateLimited(w, a.ipLimiter.Wait(ip))
+			return
+		}
+		if err != nil && !errors.Is(err, auth.ErrInvalidToken) {
 			a.log.Warn("bridge token check failed", "err", err)
 			writeError(w, http.StatusServiceUnavailable, "could not check the token, try again")
-		default:
-			if ip := clientIP(r); !a.ipLimiter.Allow(ip) {
-				rateLimited(w, a.ipLimiter.Wait(ip))
-				return
-			}
-			writeError(w, http.StatusUnauthorized, failure)
+			return
 		}
+		writeError(w, http.StatusUnauthorized, failure)
 	})}
 }
 
