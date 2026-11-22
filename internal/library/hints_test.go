@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -242,5 +243,55 @@ echo "[mov @ 0x1] moov atom not found" >&2; echo "$f: Invalid data found when pr
 	}
 	if failed() || countHinted(t, db) != 1 {
 		t.Errorf("after a Re-read: remembered %t, hinted %d; want the book read, nothing remembered", failed(), countHinted(t, db))
+	}
+}
+
+// With an ffprobe whose release the in-process probe has no rules for, one
+// that rejects a header-less VBR MP3 has the frames counted stand in for it,
+// at the index and at a backfill of the book's tag hints alike: the backfill
+// records the hints and remembers no rejected read (server#318), where its
+// index had no problem, rather than leave the hints waiting on ffprobe.
+func TestTagHintsOfACountedFileWithAnUnknownFFprobe(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the ffprobe stand-in is a shell script")
+	}
+	ctx := t.Context()
+	db, cat, lib, _ := headerlessBook(t)
+	// Not forced (stubProbe's ForceFFprobeForTests): the probe is off by its
+	// release, so the count runs as with a real ffprobe of a newer release.
+	rejecting := filepath.Join(t.TempDir(), "ffprobe")
+	script := `#!/bin/sh
+if [ "$1" = "-version" ]; then echo "ffprobe version 6.1.1 Copyright (c) 2007-2026"; exit 0; fi
+for f; do :; done
+echo "[mp3 @ 0x1] Failed to find two consecutive MPEG audio frames." >&2; echo "$f: Invalid data found when processing input" >&2; exit 1
+`
+	if err := os.WriteFile(rejecting, []byte(script), 0o755); err != nil { //nolint:gosec // G306: the stand-in must be executable
+		t.Fatal(err)
+	}
+	s := NewScanner(cat, rejecting, slog.Default())
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Added != 1 {
+		t.Fatalf("first scan = %+v, %v", res, err)
+	}
+	var scanErr string
+	if err := db.QueryRowContext(ctx, `SELECT scan_error FROM books`).Scan(&scanErr); err != nil || scanErr != "" {
+		t.Fatalf("indexed with scan error %q, %v; want the count standing in for ffprobe", scanErr, err)
+	}
+	if d := bookDuration(t, db); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
+		t.Fatalf("duration %v, want the frames counted, %v", d, headerlessSecs)
+	}
+	// As a row from before migration 0067: its hints unread.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET hints_checked = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 0 {
+		t.Fatalf("rescan = %+v, %v; want the hints backfilled, nothing re-indexed", res, err)
+	}
+	sigs, err := cat.Signatures(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sig := sigs["Author"]; sig.TagReadFailed || sig.HintsUnchecked {
+		t.Errorf("after the backfill: remembered as rejected %t, hints unchecked %t; want the hints read", sig.TagReadFailed, sig.HintsUnchecked)
 	}
 }

@@ -211,7 +211,9 @@ type noFrameCount struct{}
 // found unchanged): a VBR MP3 with no frame count in a header then takes the
 // first frame's bitrate's estimate rather than having its frames counted,
 // which reads the whole file (server#452). The length so read is not to be
-// stored: it is not Counted, and may be off.
+// stored: it is not Counted, and may be off. With the probe off for the
+// configured ffprobe, an MP3 that ffprobe fails on is counted all the same
+// (ExtractTimeout), as a read for its length would have the count stand in.
 func WithoutFrameCount(ctx context.Context) context.Context {
 	return context.WithValue(ctx, noFrameCount{}, true)
 }

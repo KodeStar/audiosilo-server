@@ -1750,7 +1750,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   counted); cut short (a read that fails ends it at once, never retried a byte on), the file goes to ffprobe (its estimate) as before, and with no ffprobe a count out of
   time is a `ProbeTimedOut`. A read that wants the tags alone (`metadata.WithoutFrameCount`: the setup preview's
   samples, a scan's tag backfill of an unchanged book) counts nothing and takes the first frame's bitrate's
-  estimate, never stored as a length. The result is `probeResult.Counted` (`ProbeView.Counted`: `Diff` leaves its
+  estimate, never stored as a length; with an ffprobe of a release with no rules that fails on the file, it
+  counts after all (`countFrames`), as the index's read had the count stand in, so a backfill does not wait
+  on, or remember as rejected, a file its index read. The result is `probeResult.Counted` (`ProbeView.Counted`: `Diff` leaves its
   duration out; `countedFixtures` in the golden test holds each fixture's decoded length). With an ffprobe
   whose release has no rules, an MP3's estimate is replaced the same way after ffprobe answers (`readFile`'s
   count, `Metadata.counted`), and when that ffprobe fails the count's whole answer stands in for it. A stored book read before this (`books.duration_rev` < `catalog.durationRev`,

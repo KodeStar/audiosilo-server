@@ -648,3 +648,35 @@ func BenchmarkCountFile(bm *testing.B) {
 		}
 	}
 }
+
+// With an ffprobe whose release the probe has no rules for, a read for the
+// tags alone (WithoutFrameCount) of a header-less VBR MP3 that ffprobe fails
+// on counts its frames after all, as the read for its length had the count
+// stand in: no ProbeErr where the book's index had none (a scan's tag
+// backfill would otherwise wait on it and remember the file as rejected,
+// server#318). A CBR file that ffprobe fails on keeps its error, as its index
+// did, and one ffprobe answers for is not counted.
+func TestTagsAloneCountWhenAnUnknownFFprobeFails(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	vbr, cbr := filepath.Join(dir, "vbr.mp3"), filepath.Join(dir, "cbr.mp3")
+	if err := os.WriteFile(vbr, vbrFrames(3000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cbr, bytes.Repeat(mp3Frame(9), 3000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithoutFrameCount(t.Context())
+	failing, _ := fakeFFprobe(t, "6.1.1", true)
+	md, err := ExtractTimeout(ctx, dir, vbr, failing, ProbeTimeout)
+	if want := framesSeconds(3000); err != nil || md.ProbeErr != nil || math.Abs(md.Duration-want) > 1e-6 {
+		t.Errorf("header-less VBR, ffprobe failing: %v %v duration %v, want %v counted", err, md.ProbeErr, md.Duration, want)
+	}
+	if md, _ := ExtractTimeout(ctx, dir, cbr, failing, ProbeTimeout); md.ProbeErr == nil {
+		t.Errorf("header-less CBR, ffprobe failing: duration %v, no ProbeErr; want ffprobe's", md.Duration)
+	}
+	answering, _ := fakeFFprobe(t, "6.1.1", false)
+	if md, _ := ExtractTimeout(ctx, dir, vbr, answering, ProbeTimeout); md.ProbeErr != nil || md.Duration != 1 {
+		t.Errorf("header-less VBR, ffprobe answering: %v duration %v, want ffprobe's, uncounted", md.ProbeErr, md.Duration)
+	}
+}
