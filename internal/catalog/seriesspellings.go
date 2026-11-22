@@ -13,8 +13,8 @@ import (
 // every filter already treat "He Who Fights With Monsters" and "...WIth..." as
 // one. The spellings still differ book by book, in the players' book details, the
 // Books list and the export. The issue lists such a series once per library, and
-// the console's fix sets one spelling on every book of it (a bulk edit of series,
-// as an author merge is; the files are not changed).
+// the console's fix sets one spelling on every book of it (MergeSpellings on
+// series, as an author merge is: one transaction; the files are not changed).
 
 // seriesSpellingsExpr is "another book of b's library spells b's series another
 // way": one spelling below b's or one above, each a range seek on
