@@ -1399,3 +1399,43 @@ func TestKeepEditedLeavesAdminEdits(t *testing.T) {
 		t.Errorf("description after an accepted community edit = %q", got)
 	}
 }
+
+// TestRevertCommunityTitleLocksTheFiles: an admin's revert of a community
+// title stores the title underneath as an edited override (a later fill keeps
+// it), unless that title is one an admin couldn't type in (too long), which is
+// reverted as before.
+func TestRevertCommunityTitleLocksTheFiles(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	long := strings.Repeat("Long Title ", 60)
+	for path, title := range map[string]string{"A/Short": "Original Name", "A/Long": long} {
+		b := scannedBook(lib.ID, path)
+		b.Title = title
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: map[string]string{FieldTitle: "Their Title"}, Source: SourceCommunity}); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.EditBook(ctx, lib.ID, path, BookEdit{Revert: []string{FieldTitle}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var v, src string
+	if err := c.db.QueryRowContext(ctx, `SELECT value, source FROM book_overrides
+		WHERE library_id = ? AND path = 'A/Short' AND field = ?`, lib.ID, FieldTitle).Scan(&v, &src); err != nil {
+		t.Fatal(err)
+	}
+	if v != "Original Name" || src != SourceEdited {
+		t.Errorf("reverted title override = %q (%s), want the files' title, edited", v, src)
+	}
+	var n int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM book_overrides
+		WHERE library_id = ? AND path = 'A/Long' AND field = ?`, lib.ID, FieldTitle).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("a revert onto an over-long title left %d overrides, want a plain revert", n)
+	}
+}

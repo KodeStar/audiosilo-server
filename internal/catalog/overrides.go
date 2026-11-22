@@ -1092,14 +1092,17 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		if err != nil {
 			return err
 		}
+		// Reverting the community title chooses the value underneath it.
+		// Store that choice like any admin edit so a later fill respects it;
+		// one an admin couldn't type in (none, too long) is a plain revert.
 		if l.overrides[FieldTitle].Source == SourceCommunity {
-			// Reverting the community title chooses the value underneath it.
-			// Store that choice like any admin edit so a later fill respects it.
-			set := make(map[string]string, len(edit.Set)+1)
-			maps.Copy(set, edit.Set)
-			set[FieldTitle] = l.unedited(FieldTitle)[FieldTitle].Value
-			edit.Set = set
-			edit.Revert = slices.DeleteFunc(slices.Clone(edit.Revert), func(field string) bool { return field == FieldTitle })
+			if under, err := normalizeOverride(FieldTitle, l.unedited(FieldTitle)[FieldTitle].Value); err == nil {
+				set := make(map[string]string, len(edit.Set)+1)
+				maps.Copy(set, edit.Set)
+				set[FieldTitle] = under
+				edit.Set = set
+				edit.Revert = slices.DeleteFunc(slices.Clone(edit.Revert), func(field string) bool { return field == FieldTitle })
+			}
 		}
 	}
 	set, revert := edit.Set, edit.Revert
