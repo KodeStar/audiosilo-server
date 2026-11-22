@@ -61,6 +61,7 @@ func (c *Catalog) MergeSpellings(ctx context.Context, libraryID int64, field str
 		args = append(args, libraryID)
 	}
 	if field == FieldSeries {
+		// Implied by the spellings sharing the target's key; it lets the query use idx_books_series_key.
 		where += " AND b.series_key = ?"
 		args = append(args, seriesKey(target))
 	}
@@ -74,13 +75,11 @@ func (c *Catalog) MergeSpellings(ctx context.Context, libraryID int64, field str
 		if err != nil {
 			return err
 		}
-		now := c.ts()
-		for _, b := range books {
-			if err := c.editTx(ctx, tx, b.Ref, edit, now); err != nil {
-				return err
-			}
+		refs := make([]Ref, len(books))
+		for i, b := range books {
+			refs[i] = b.Ref
 		}
-		return nil
+		return c.editRefsTx(ctx, tx, refs, edit)
 	})
 	if err != nil {
 		return nil, err
