@@ -856,8 +856,10 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 		}
 		return durUS
 	}
-	uncounted := func(skip int64) error {
-		// fastProbe counts its frames, under bounds of its own.
+	// fastProbe counts its frames, under bounds of its own, less what the
+	// decoder skips at the start: an encoder tag's delay is skipped whether or
+	// not its Xing header gives frames or bytes (start_skip_samples).
+	uncounted := func() error {
 		return &mp3Uncounted{d: d, chaps: ex.chaps, off: off, first: binary.BigEndian.Uint32(first), skip: skip}
 	}
 
@@ -882,11 +884,11 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 		// are counted as a header-less VBR file's are (server#452), less what
 		// the decoder skips at the start (the encoder delay and its own 529
 		// samples; the padding at the end is only cut with a frame count).
-		return nil, uncounted(skip)
+		return nil, uncounted()
 	default:
 		br, cbr := mp3ConstantBitrate(b, off, fh)
 		if !cbr {
-			return nil, uncounted(0)
+			return nil, uncounted()
 		}
 		durUS = estimate(br)
 	}

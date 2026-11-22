@@ -299,6 +299,52 @@ func TestXingWithoutFrameCountIsCounted(t *testing.T) {
 	}
 }
 
+// A Xing header that gives neither frames nor bytes, but an encoder tag with
+// its delay, is no header for the length (the frames are counted, the Xing
+// frame among them, as the decoder outputs it), yet the decoder still skips
+// that delay at the start (start_skip_samples): the count leaves it out too.
+func TestXingWithNoFramesNorBytesSkipsTheEncoderDelay(t *testing.T) {
+	t.Parallel()
+	// A VBR file whose Xing header has frames, bytes, a TOC and an encoder tag.
+	path, _ := encodeMP3(t, "sine=frequency=440:duration=20[a];anoisesrc=d=20:a=0.3[n];[a][n]amix", "-q:a", "4")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := 0
+	if string(data[:3]) == "ID3" {
+		off = 10 + int(syncsafeToSize(binary.BigEndian.Uint32(data[6:])))
+	}
+	m, ok := decodeMPA(binary.BigEndian.Uint32(data[off:]))
+	if !ok {
+		t.Fatal("no first frame")
+	}
+	end := off + m.frameSize
+	i := off + bytes.Index(data[off:end], []byte("Xing"))
+	if i < off {
+		t.Fatal("no Xing frame")
+	}
+	// The flags cleared, and the fields they named taken out, so the encoder
+	// tag follows the flags.
+	flags, n := binary.BigEndian.Uint32(data[i+4:]), 0
+	for bit, size := range map[uint32]int{1: 4, 2: 4, 4: 100, 8: 4} {
+		if flags&bit != 0 {
+			n += size
+		}
+	}
+	binary.BigEndian.PutUint32(data[i+4:], 0)
+	copy(data[i+8:end], data[i+8+n:end])
+	clear(data[end-n : end])
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	decoded := decodedSeconds(t, path)
+	md, err := Extract(path, "")
+	if err != nil || math.Abs(md.Duration-decoded) > 1e-6 {
+		t.Errorf("%v duration %v, want %v (the encoder delay skipped)", err, md.Duration, decoded)
+	}
+}
+
 // A read for the tags alone (WithoutFrameCount: the setup preview's samples,
 // a scan's tag backfill) counts no frames and samples none: a header-less MP3
 // takes the first frame's bitrate's estimate, the answer a CBR file gets
