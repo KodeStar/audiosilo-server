@@ -48,14 +48,20 @@ func (c *Catalog) RemoveFavourite(ctx context.Context, userID int64, ref Ref) er
 // (oldPath) to its new path, landing once where a listener already favourited it.
 // A book's favourite follows the book's own move (MoveDurableState); this is for a
 // navigation folder (an author, a series), which has no book of its own to move, so
-// the scanner passes each folder its moves say was renamed (renamedFolders). Like
-// MoveDurableState, a same-path call is a no-op.
+// the scanner passes each folder its moves say was renamed (renamedFolders). A
+// split book's ignore is its folder's (issueStorage), so it follows the folder
+// the same way: its discs' own moves don't carry it. Like MoveDurableState, a
+// same-path call is a no-op.
 func (c *Catalog) MoveFolderFavourites(ctx context.Context, libraryID int64, oldPath, newPath string) error {
 	if oldPath == newPath {
 		return nil
 	}
 	return c.db.WithTx(ctx, "MoveFolderFavourites", func(tx *sql.Tx) error {
 		if err := movePodcastState(ctx, tx, libraryID, oldPath, newPath); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE OR REPLACE issue_ignores SET path = ?
+			WHERE library_id = ? AND path = ? AND kind = 'split_disc_set'`, newPath, libraryID, oldPath); err != nil {
 			return err
 		}
 		return carryFavourites(ctx, tx, libraryID, oldPath, newPath)

@@ -400,6 +400,41 @@ func TestSplitDiscsIssue(t *testing.T) {
 	}
 }
 
+// A split book's ignore belongs to its folder, so a renamed folder keeps it: the
+// scan moves each disc (MoveDurableState), then the folder (MoveFolderFavourites).
+func TestSplitDiscIgnoreFollowsRenamedFolder(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/l"})
+	uid := seedUser(t, c, ctx)
+	put := func(p, parent string) {
+		t.Helper()
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, Title: "Box", IsFolder: true, SplitParent: parent}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("Box/CD1", "Box")
+	put("Box/CD2", "Box")
+	if err := c.IgnoreIssue(ctx, IssueSplitDiscs, []Ref{{lib.ID, "Box/CD1"}}, uid); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"CD1", "CD2"} {
+		put("Box 2/"+d, "Box 2")
+		if err := c.MoveDurableState(ctx, lib.ID, "Box/"+d, "Box 2/"+d); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.db.ExecContext(ctx, `DELETE FROM books WHERE library_id=? AND rel_path=?`, lib.ID, "Box/"+d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.MoveFolderFavourites(ctx, lib.ID, "Box", "Box 2"); err != nil {
+		t.Fatal(err)
+	}
+	if counts, err := c.IssueCounts(ctx, []string{IssueSplitDiscs}); err != nil || counts[0].Count != 0 || counts[0].Ignored != 1 {
+		t.Fatalf("renamed split book %+v (%v), want still ignored", counts, err)
+	}
+}
+
 // GetBookHolding answers a path below a folder book from the index: a disc folder
 // of a joined book, or a file in it, is that book (the innermost folder book
 // holding it); a folder's single-file books, a path no book's files are under, a

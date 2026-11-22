@@ -2012,7 +2012,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   above both rows. A favourite on a navigation folder (author, series) has no book to move:
   `detectMoves` re-keys it (`catalog.MoveFolderFavourites`) to the folder its moved books
   went to (`renamedFolders`), only when every move out of it agrees and it is gone from disk
-  by exact name (so a case-only rename, of it or a folder above it, counts). The on-demand move
+  by exact name (so a case-only rename, of it or a folder above it, counts). A split book's
+  Health ignore (`split_disc_set`, keyed on the disc set's folder) follows the folder the same way. The on-demand move
   (`IndexPath`'s `movedFrom`, `IndexMoved`) does the same from one listener's request: a move is a fact
   about the disk, so every listener's folder favourite follows it (owner decision on server#254,
   `TestIndexPathMovesEveryListenersFolderFavourite`).
