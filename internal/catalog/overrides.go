@@ -1125,6 +1125,11 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	if len(swapRevert) > 0 || len(labelRevert) > 0 {
 		revert = slices.Concat(edit.Revert, swapRevert, labelRevert)
 	}
+	if edit.KeepEdited {
+		if set, err = leaveEdited(ctx, tx, ref.LibraryID, path, set); err != nil {
+			return err
+		}
+	}
 	if len(set) == 0 && len(revert) == 0 && !edit.editsChapters() {
 		if edit.Match != nil && edit.Match.WorkID != "" {
 			// An anchor alone: the match is part of the book's community
@@ -1140,9 +1145,8 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 			 VALUES(?,?,?,?,?,?,?)
 			 ON CONFLICT(library_id, path, field) DO UPDATE SET
 			     value = excluded.value, source = excluded.source,
-			     updated_by = excluded.updated_by, updated_at = excluded.updated_at
-			 WHERE NOT (? AND book_overrides.source = '`+SourceEdited+`')`,
-			ref.LibraryID, path, field, v, edit.Source, editor, now, edit.KeepEdited); err != nil {
+			     updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+			ref.LibraryID, path, field, v, edit.Source, editor, now); err != nil {
 			return err
 		}
 	}
@@ -1205,6 +1209,41 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		}
 	}
 	return refreshEffective(ctx, tx, bookID)
+}
+
+// seriesFields are the fields a match run lays out together (matchrun's
+// planSeries): the main series, its position and the other series.
+var seriesFields = []string{FieldSeries, FieldSeriesIndex, FieldMoreSeries}
+
+// leaveEdited is a match run's set (BookEdit.KeepEdited) less the fields an
+// admin edited since the run read the book: a run never plans over an edit, so
+// an edited field in set is one made since. One of the series fields takes the
+// others out too, so the run's position or other series never go beside the
+// admin's series.
+func leaveEdited(ctx context.Context, tx *sql.Tx, libraryID int64, path string, set map[string]string) (map[string]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT field FROM book_overrides WHERE library_id = ? AND path = ? AND source = ?`,
+		libraryID, path, SourceEdited)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	edited := map[string]bool{}
+	for rows.Next() {
+		var field string
+		if err := rows.Scan(&field); err != nil {
+			return nil, err
+		}
+		if _, ok := set[field]; ok {
+			edited[field] = true
+		}
+	}
+	if err := rows.Err(); err != nil || len(edited) == 0 {
+		return set, err
+	}
+	series := slices.ContainsFunc(seriesFields, func(f string) bool { return edited[f] })
+	set = maps.Clone(set)
+	maps.DeleteFunc(set, func(field, _ string) bool { return edited[field] || (series && slices.Contains(seriesFields, field)) })
+	return set, nil
 }
 
 // seriesSwap is what an admin edit making one of a book's other series its main

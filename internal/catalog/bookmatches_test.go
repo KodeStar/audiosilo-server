@@ -1360,8 +1360,9 @@ func TestFieldShowsTheEnrichmentUnderAnOverride(t *testing.T) {
 }
 
 // TestKeepEditedLeavesAdminEdits: a match run's write (KeepEdited) leaves any
-// field an admin edited since it read the book, not only the title, and still
-// writes the others; without the flag a community edit replaces it.
+// field an admin edited since it read the book, not only the title, and the
+// run's other series fields beside an edited series, and still writes the
+// rest; without the flag a community edit replaces it.
 func TestKeepEditedLeavesAdminEdits(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -1370,7 +1371,7 @@ func TestKeepEditedLeavesAdminEdits(t *testing.T) {
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldDescription: "Mine"}}); err != nil {
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldDescription: "Mine", FieldSeries: "My Series"}}); err != nil {
 		t.Fatal(err)
 	}
 	override := func(field string) string {
@@ -1382,9 +1383,18 @@ func TestKeepEditedLeavesAdminEdits(t *testing.T) {
 		}
 		return v + "|" + src
 	}
-	theirs := map[string]string{FieldDescription: "Theirs", FieldTitle: "Their Title"}
+	theirs := map[string]string{FieldDescription: "Theirs", FieldTitle: "Their Title", FieldSeries: "Their Series", FieldSeriesIndex: "3"}
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: theirs, Source: SourceCommunity, KeepEdited: true}); err != nil {
 		t.Fatal(err)
+	}
+	// The run's position for its series doesn't go beside the admin's series.
+	var positions int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM book_overrides WHERE library_id = ? AND path = ? AND field = ?`,
+		lib.ID, p, FieldSeriesIndex).Scan(&positions); err != nil || positions != 0 {
+		t.Errorf("series_index overrides after a run's write = %d (%v), want none", positions, err)
+	}
+	if got := override(FieldSeries); got != "My Series|"+SourceEdited {
+		t.Errorf("series after a run's write = %q, want the admin's", got)
 	}
 	if got := override(FieldDescription); got != "Mine|"+SourceEdited {
 		t.Errorf("description after a run's write = %q, want the admin's", got)
