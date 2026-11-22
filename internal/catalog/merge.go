@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 )
 
@@ -53,9 +54,14 @@ func (c *Catalog) MergeSpellings(ctx context.Context, libraryID int64, field str
 		}
 	}
 
-	where := inBookLibrary + " AND " + column + " IN (" + placeholders(len(sources)) + ") AND " + column + " <> ?"
-	args := append([]any{field}, anyOf(sources)...)
-	args = append(args, target)
+	// The spellings go in as one JSON list, so the statement's text (the
+	// statement cache's key) is the same however many there are.
+	list, err := json.Marshal(sources)
+	if err != nil {
+		return nil, err
+	}
+	where := inBookLibrary + " AND " + column + " IN (SELECT value FROM json_each(?)) AND " + column + " <> ?"
+	args := []any{field, string(list), target}
 	if libraryID != 0 {
 		where += " AND b.library_id = ?"
 		args = append(args, libraryID)
@@ -67,7 +73,7 @@ func (c *Catalog) MergeSpellings(ctx context.Context, libraryID int64, field str
 	}
 	var books []MergedBook
 	err = c.db.WithTx(ctx, "MergeSpellings", func(tx *sql.Tx) error {
-		books, err = queryRows(ctx, tx, func(r *sql.Rows, b *MergedBook) error {
+		found, err := queryRows(ctx, tx, func(r *sql.Rows, b *MergedBook) error {
 			return r.Scan(&b.LibraryID, &b.Path, &b.Previous, &b.Source)
 		}, `SELECT b.library_id, b.rel_path, o.value, COALESCE(o.source, '') FROM books b
 		    LEFT JOIN book_overrides o ON o.library_id = b.library_id AND o.path = b.rel_path AND o.field = ?
@@ -75,6 +81,7 @@ func (c *Catalog) MergeSpellings(ctx context.Context, libraryID int64, field str
 		if err != nil {
 			return err
 		}
+		books = found
 		refs := make([]Ref, len(books))
 		for i, b := range books {
 			refs[i] = b.Ref

@@ -86,6 +86,15 @@ func TestMergeSpellingsScope(t *testing.T) {
 	if got := mustBook(t, c, ctx, pods, "Solo").Narrator; got != "Reader" {
 		t.Fatalf("podcast narrator = %q", got)
 	}
+	// A whole co-credit is a spelling too, matched as written (json.Marshal sends
+	// its "&" escaped).
+	if got, err := c.MergeSpellings(ctx, a, FieldNarrator, []string{"Reader & Friend"}, "R. Reader & Friend", 0); err != nil ||
+		len(got) != 1 || got[0].Ref != (Ref{a, "Duo"}) {
+		t.Fatalf("co-credit merge = %+v, %v", got, err)
+	}
+	if got := mustBook(t, c, ctx, a, "Duo").Narrator; got != "R. Reader & Friend" {
+		t.Fatalf("merged co-credit = %q", got)
+	}
 }
 
 // A suggestion can cover more than the bulk endpoint's 1,000 explicit paths.
