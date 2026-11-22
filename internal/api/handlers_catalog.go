@@ -741,6 +741,114 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"updated": len(distinct)})
 }
 
+// handleAdminMergeSpellings serves POST /admin/books/merge. The reply holds only
+// the books the transaction changed and the prior overrides needed for Undo.
+func (a *API) handleAdminMergeSpellings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LibraryID int64               `json:"library_id"`
+		Field     string              `json:"field"`
+		Sources   boundedList[string] `json:"sources"`
+		Target    string              `json:"target"`
+	}
+	if err := decodeJSON(r, &req, maxBulkEditBytes); errors.Is(err, errTooManyEntries) {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, fmt.Sprintf("at most %d source spellings per merge", maxBulkBooks))
+		return
+	} else if err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	books, err := a.cat.MergeSpellings(r.Context(), req.LibraryID, req.Field, req.Sources, req.Target, userFrom(r.Context()).ID)
+	if err != nil {
+		writeMergeError(a, w, err, "merge spellings failed", "could not merge the spellings")
+		return
+	}
+	if len(books) > 0 {
+		details := (editRequest{Set: editFieldValues{req.Field: req.Target}}).details()
+		details["books"] = len(books)
+		details["merged"] = auditNames(req.Sources)
+		if req.LibraryID != 0 {
+			details["library"] = a.libraryName(r, req.LibraryID)
+		}
+		a.audit(r, "book.bulk_edit", "", details)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"books": books})
+}
+
+// undoMergeBodyMax bounds an Undo's body: catalog.MaxMergeBooks books, each a
+// path at catalog.MaxPathBytes and a previous value of up to 500 characters
+// (an author, narrator or series), every one escaped, with room for the rest.
+const undoMergeBodyMax = catalog.MaxMergeBooks*(catalog.MaxPathBytes+6*500+128) + 64<<10
+
+// mergedBooks is a merge reply's books sent back for Undo: at most
+// catalog.MaxMergeBooks, past boundedList's cap.
+type mergedBooks []catalog.MergedBook
+
+func (l *mergedBooks) UnmarshalJSON(data []byte) error {
+	list, err := decodeBounded[catalog.MergedBook](bytes.NewReader(data), catalog.MaxMergeBooks)
+	*l = list
+	return err
+}
+
+// handleAdminUndoMerge serves POST /admin/books/merge/undo: a merge's reply
+// (its books with their previous overrides) and its field and target, put back
+// in one transaction (catalog.UndoMerge). A book a scan moved since, or edited
+// since, is left as it is and named in "skipped"; the rest still go back.
+func (a *API) handleAdminUndoMerge(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Field  string      `json:"field"`
+		Target string      `json:"target"`
+		Books  mergedBooks `json:"books"`
+	}
+	if err := decodeJSON(r, &req, undoMergeBodyMax); err != nil {
+		if errors.Is(err, errTooManyEntries) {
+			err = catalog.ErrMergeTooLarge
+		}
+		writeMergeError(a, w, err, "", "")
+		return
+	}
+	done, err := a.cat.UndoMerge(r.Context(), req.Field, req.Target, req.Books, userFrom(r.Context()).ID)
+	if err != nil {
+		writeMergeError(a, w, err, "undo merge failed", "could not undo the merge")
+		return
+	}
+	if done.Restored > 0 {
+		details := (editRequest{Revert: []string{req.Field}}).details()
+		details["books"] = done.Restored
+		a.audit(r, "book.bulk_edit", "", details)
+	}
+	writeJSON(w, http.StatusOK, done)
+}
+
+// writeMergeError answers a merge's or its Undo's error: a body that doesn't
+// decode (op ""), a library that isn't there, too many books, else as
+// writeCatalogError does.
+func writeMergeError(a *API, w http.ResponseWriter, err error, op, genericMsg string) {
+	switch {
+	case errors.Is(err, catalog.ErrMergeTooLarge):
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("a merge changes at most %d books; merge one library at a time", catalog.MaxMergeBooks))
+	case op == "":
+		writeDecodeError(w, err)
+	case errors.Is(err, catalog.ErrNotFound):
+		writeError(w, http.StatusNotFound, "library not found")
+	default:
+		a.writeCatalogError(w, err, op, genericMsg)
+	}
+}
+
+// auditNames is a list of names for an audit entry: the first 20, each cut
+// as the edit's values are (editRequest.details).
+func auditNames(names []string) []string {
+	out := make([]string, 0, min(len(names), 20))
+	for _, name := range names[:min(len(names), 20)] {
+		if r := []rune(name); len(r) > 120 {
+			name = string(r[:119]) + "…"
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
 // handleAdminMatch serves GET /admin/libraries/{id}/book/match?path=: community
 // works the book might be. ?q= adds that text to the book's own facts (its tags
 // and its library path) and ?asin= / ?isbn= look an identifier up; with none,

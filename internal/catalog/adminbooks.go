@@ -838,7 +838,8 @@ type PersonCount struct {
 
 // MergeSuggestion is a set of spellings that look like one person ("Sanderson,
 // Brandon" / "Brandon Sanderson", "J.R.R. Tolkien" / "J. R. R. Tolkien"). Merging
-// is a bulk override of the field to Suggested; the server never merges on its own.
+// overrides the field to Suggested on every book carrying another of the names
+// (MergeSpellings, asked for by the console); the server never merges on its own.
 type MergeSuggestion struct {
 	Names     []string `json:"names"`
 	Suggested string   `json:"suggested"`

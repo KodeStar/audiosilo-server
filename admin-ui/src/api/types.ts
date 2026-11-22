@@ -1835,6 +1835,22 @@ export interface NarratorsResponse {
 /** The two people aggregates (each person a credit names is one; see PersonCount). */
 export type PersonField = 'author' | 'narrator';
 
+export type MergeField = PersonField | 'series';
+
+/** One changed book from POST /admin/books/merge. A null previous value means
+ * Undo should remove the field override and follow the book's metadata again. */
+export interface MergedBook extends BookRef {
+  previous: string | null;
+  source?: 'edited' | 'community';
+}
+
+/** POST /admin/books/merge/undo: how many books went back, and the books left as
+ * they are (gone from the index, or their field edited since the merge). */
+export interface MergeUndone {
+  restored: number;
+  skipped: (BookRef & { reason: 'not_found' | 'changed' })[];
+}
+
 /** Either people aggregate as the console reads it (api.people; not a wire shape). */
 export interface PeopleResponse {
   people: PersonCount[];

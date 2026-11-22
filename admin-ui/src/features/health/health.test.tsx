@@ -1420,7 +1420,14 @@ describe('library health', () => {
         'GET /admin/books': (req) => ({
           body: { books: req.query.get('series') ? tagged : [] },
         }),
-        'POST /admin/books/bulk': { body: { updated: 0 } },
+        'POST /admin/books/merge': {
+          body: {
+            books: [
+              { library_id: 1, path: 'M/1', previous: null },
+              { library_id: 1, path: 'M/3', previous: null },
+            ],
+          },
+        },
         'POST /admin/issues/ignore': { status: 204 },
       }),
     );
@@ -1437,17 +1444,14 @@ describe('library health', () => {
     const keep = screen.getByRole('combobox', { name: 'Spelling to keep' });
     await user.selectOptions(keep, 'He Who Fights With Monsters');
     expect(screen.getByText(/2 books are tagged with the other spelling/)).toBeInTheDocument();
-    await user.selectOptions(keep, 'He Who Fights with Monsters');
 
     await user.click(screen.getByRole('button', { name: 'Use this spelling' }));
     await waitFor(() =>
-      expect(calls.find((c) => c.path === '/admin/books/bulk')?.body).toEqual({
-        books: [
-          { library_id: 1, path: 'M/2' },
-          { library_id: 1, path: 'M/3' },
-          { library_id: 1, path: 'M/4' },
-        ],
-        set: { series: 'He Who Fights with Monsters' },
+      expect(calls.find((c) => c.path === '/admin/books/merge')?.body).toEqual({
+        library_id: 1,
+        field: 'series',
+        sources: ['He Who Fights with Monsters', 'He Who Fights WIth Monsters'],
+        target: 'He Who Fights With Monsters',
       }),
     );
 

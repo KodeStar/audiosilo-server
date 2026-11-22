@@ -68,6 +68,9 @@ import type {
   SessionPage,
   NarratorsResponse,
   PeopleResponse,
+  MergedBook,
+  MergeField,
+  MergeUndone,
   PersonField,
   SeriesCount,
   AdminLibrary,
@@ -837,6 +840,16 @@ export const api = {
   /** One field edit over many books, all or nothing (at most BULK_LIMIT). */
   bulkEdit: (books: BookRef[], edit: Omit<BookEditRequest, 'chapters' | 'match'>) =>
     request<{ updated: number }>('POST', '/admin/books/bulk', { books, ...edit }),
+  mergeSpellings: (field: MergeField, sources: string[], target: string, libraryId?: number) =>
+    request<{ books: MergedBook[] }>('POST', '/admin/books/merge', {
+      field,
+      sources,
+      target,
+      library_id: libraryId,
+    }),
+  /** Puts a merge's books back (its reply sent back) in one transaction. */
+  undoMerge: (field: MergeField, target: string, books: MergedBook[]) =>
+    request<MergeUndone>('POST', '/admin/books/merge/undo', { field, target, books }),
   /** GET /admin/authors or /admin/narrators, as one shape. */
   people: async (field: PersonField, libraryId?: number): Promise<PeopleResponse> => {
     const query = bookQuery({ library_id: libraryId });

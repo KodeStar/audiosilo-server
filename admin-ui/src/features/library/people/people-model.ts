@@ -1,20 +1,5 @@
-import { BULK_LIMIT } from '@/api/client';
-import type {
-  AdminBook,
-  BookEditRequest,
-  BookRef,
-  MergeSuggestion,
-  PersonCount,
-  PersonField,
-} from '@/api/types';
-import { refOf } from '@/lib/book-route';
-import { chunk, fold } from '@/lib/utils';
-
-// The Authors and Narrators screens' pure parts: ordering and filtering the
-// people aggregate, and the bulk edits a merge (and its undo) send. The list
-// counts each person a co-credit names, but a merge rewrites whole fields: only
-// the books whose whole credit is a spelling ("Michael Kramer & Kate Reading"
-// stays as it is when "Michael Kramer" is merged).
+import type { MergeSuggestion, PersonCount } from '@/api/types';
+import { fold } from '@/lib/utils';
 
 /** How many tiles a page of Authors or Narrators holds. */
 export const PEOPLE_PAGE = 120;
@@ -40,46 +25,4 @@ export function sortByDuration(people: PersonCount[]): PersonCount[] {
 /** The spellings a merge rewrites: every name but the suggested one. */
 export function otherSpellings(s: MergeSuggestion): string[] {
   return s.names.filter((n) => n !== s.suggested);
-}
-
-/** A field a merge rewrites: a person's (Authors, Narrators) or a series' (Health). */
-export type MergeField = PersonField | 'series';
-
-/** One POST /admin/books/bulk request. */
-export interface BulkStep {
-  books: BookRef[];
-  edit: Pick<BookEditRequest, 'set' | 'revert'>;
-}
-
-/** The requests that set `field` to `suggested` on every book. */
-export function mergeSteps(books: AdminBook[], field: MergeField, suggested: string): BulkStep[] {
-  return chunk(books.map(refOf), BULK_LIMIT).map((refs) => ({
-    books: refs,
-    edit: { set: { [field]: suggested } },
-  }));
-}
-
-/**
- * The requests that put each merged book back, from the books as they were before
- * the merge. A book whose field had no override reverts it (back to what the scan
- * found, unlocked); one whose field had an override gets its old spelling set
- * again, one request per spelling. Edits to other fields don't matter.
- */
-export function undoSteps(books: AdminBook[], field: MergeField): BulkStep[] {
-  const overridden = (b: AdminBook) => b.edited_fields.includes(field);
-  const steps: BulkStep[] = chunk(books.filter((b) => !overridden(b)).map(refOf), BULK_LIMIT).map(
-    (refs) => ({ books: refs, edit: { revert: [field] } }),
-  );
-  const bySpelling = new Map<string, BookRef[]>();
-  for (const b of books.filter(overridden)) {
-    const refs = bySpelling.get(b[field]) ?? [];
-    refs.push(refOf(b));
-    bySpelling.set(b[field], refs);
-  }
-  for (const [spelling, refs] of bySpelling) {
-    for (const part of chunk(refs, BULK_LIMIT)) {
-      steps.push({ books: part, edit: { set: { [field]: spelling } } });
-    }
-  }
-  return steps;
 }

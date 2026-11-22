@@ -958,19 +958,32 @@ func (c *Catalog) EditBooks(ctx context.Context, refs []Ref, edit BookEdit) erro
 		return err
 	}
 	err = c.db.WithTx(ctx, "EditBooks", func(tx *sql.Tx) error {
-		now := c.ts()
-		for _, ref := range refs {
-			if err := c.editTx(ctx, tx, ref, edit, now); err != nil {
-				if oe, ok := errors.AsType[*OverrideError](err); ok {
-					return invalid(oe.Field, oe.Reason+" ("+CleanRelPath(ref.Path)+")")
-				}
-				return err
-			}
-		}
-		return nil
+		return c.editRefsTx(ctx, tx, refs, edit)
 	})
 	if err == nil {
 		c.changed()
+	}
+	return err
+}
+
+// editRefsTx writes one normalized edit to every book in refs inside tx. A
+// refused book's error names its path.
+func (c *Catalog) editRefsTx(ctx context.Context, tx *sql.Tx, refs []Ref, edit BookEdit) error {
+	now := c.ts()
+	for _, ref := range refs {
+		if err := c.editRefTx(ctx, tx, ref, edit, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// editRefTx is editTx for one of many books: an edit the book refuses names
+// its path.
+func (c *Catalog) editRefTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit, now string) error {
+	err := c.editTx(ctx, tx, ref, edit, now)
+	if oe, ok := errors.AsType[*OverrideError](err); ok {
+		return invalid(oe.Field, oe.Reason+" ("+CleanRelPath(ref.Path)+")")
 	}
 	return err
 }
