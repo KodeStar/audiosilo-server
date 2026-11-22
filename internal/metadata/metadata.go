@@ -265,23 +265,25 @@ func ExtractTimeout(ctx context.Context, root, path, ffprobePath string, timeout
 		applyProbe(m, p)
 	case ffprobePath != "":
 		// ffprobe for duration + chapters + richer container tags (best-effort).
-		switch p, err := probe(ctx, root, path, ffprobePath, timeout); {
-		case err == nil:
+		if p, err := probe(ctx, root, path, ffprobePath, timeout); err == nil {
 			if m.counted != nil {
 				// The probe is off for this ffprobe's release, but its estimate of a
 				// VBR MP3 with no Xing/VBRI frame count is no better: the frames counted.
 				p.Duration = m.counted.Duration
 			}
 			applyProbe(m, p)
-		default:
+		} else {
 			if m.counted == nil && count && m.Format == "mp3" && !frameCountWanted(ctx) && !m.tagsUnread && ctx.Err() == nil {
 				// A read for the tags alone counted no frames, but ffprobe fails
 				// on the file, where a read for its length had the count stand
 				// in: counted now, so this read answers as that one did, not
 				// with a failure the book's index never had (a scan's tag
 				// backfill would wait on it, and remember the file as
-				// rejected: server#318).
-				m.counted = countFrames(ctx, root, path, timeout)
+				// rejected: server#318). A count cut short for now is
+				// LengthUncounted, as that read's would be, so the scan reads
+				// it again (alone, or at its next run) rather than taking
+				// ffprobe's failure for the file's.
+				countFrames(ctx, m, root, path, timeout)
 			}
 			if m.counted != nil {
 				// ffprobe failed on a file the probe read whole, its frames
@@ -298,17 +300,19 @@ func ExtractTimeout(ctx context.Context, root, path, ffprobePath string, timeout
 	return m, nil
 }
 
-// countFrames is the frames of the MP3 at path under root counted as
+// countFrames counts the frames of the MP3 at path under root into m as
 // readFile counts them with the probe off, for a read under WithoutFrameCount
-// that needs them after all: the probe's answer by noFFprobeRules when the
-// file is a VBR one with no frame count in a header and its count succeeds,
-// else nil. The file is opened and read again, bounded as readFile is.
-func countFrames(ctx context.Context, root, path string, timeout time.Duration) *probeResult {
-	m := &Metadata{Format: fileFormat(path)}
-	if _, _, err := readFile(context.WithValue(ctx, noFrameCount{}, nil), m, root, path, ffNone, true, timeout); err != nil {
-		return nil
+// that needs them after all: m.counted, the probe's answer by noFFprobeRules,
+// when the file is a VBR one with no frame count in a header and its count
+// succeeds; m.uncounted and m.countOutOfTime as that count leaves them
+// (LengthUncounted, CountOutOfTime). The file is opened and read again,
+// bounded as readFile is.
+func countFrames(ctx context.Context, m *Metadata, root, path string, timeout time.Duration) {
+	c := &Metadata{Format: m.Format}
+	if _, _, err := readFile(context.WithValue(ctx, noFrameCount{}, nil), c, root, path, ffNone, true, timeout); err != nil {
+		return
 	}
-	return m.counted
+	m.counted, m.uncounted, m.countOutOfTime = c.counted, c.uncounted, c.countOutOfTime
 }
 
 // ExtractTags reads only the tags of the file at path under root, opened

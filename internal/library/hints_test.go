@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
@@ -243,6 +244,45 @@ echo "[mov @ 0x1] moov atom not found" >&2; echo "$f: Invalid data found when pr
 	}
 	if failed() || countHinted(t, db) != 1 {
 		t.Errorf("after a Re-read: remembered %t, hinted %d; want the book read, nothing remembered", failed(), countHinted(t, db))
+	}
+}
+
+// A rejection whose file's frames, counted to stand in for ffprobe, went
+// uncounted for now (a read error: metadata.Metadata.LengthUncounted) is not
+// remembered: the next count may finish, as the index's did, so the book's
+// hints are read again by the next scan. One whose count ran out of its own
+// time read alone (CountOutOfTime) would only do so again, and is remembered.
+func TestTagHintsForgetARejectionWithACountForNow(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	for _, tc := range []struct {
+		name     string
+		mark     func(*metadata.Metadata) *metadata.Metadata
+		remember bool
+	}{
+		{"uncounted for now", metadata.UncountedForTests, false},
+		{"count out of its time", metadata.CountOutOfTimeForTests, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cat, lib, _, _ := uncheckedHints(t, "One")
+			rejecting := stubProbe(t, `for f; do :; done
+echo "[mov @ 0x1] moov atom not found" >&2; echo "$f: Invalid data found when processing input" >&2; exit 1`)
+			s := NewScanner(cat, rejecting, slog.Default())
+			s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+				return tc.mark(extractFile(ctx, root, p, ffprobe, timeout))
+			}
+			if _, err := s.Scan(ctx, *lib); err != nil {
+				t.Fatal(err)
+			}
+			sigs, err := cat.Signatures(ctx, lib.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := sigs["Herbert/One"].TagReadFailed; got != tc.remember {
+				t.Errorf("remembered as rejected %t, want %t", got, tc.remember)
+			}
+		})
 	}
 }
 

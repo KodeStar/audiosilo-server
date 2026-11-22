@@ -1752,7 +1752,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   samples, a scan's tag backfill of an unchanged book) counts nothing and takes the first frame's bitrate's
   estimate, never stored as a length; with an ffprobe of a release with no rules that fails on the file, it
   counts after all (`countFrames`), as the index's read had the count stand in, so a backfill does not wait
-  on, or remember as rejected, a file its index read. The result is `probeResult.Counted` (`ProbeView.Counted`: `Diff` leaves its
+  on, or remember as rejected, a file its index read (a count it cut short for now is `LengthUncounted`, read
+  again). The result is `probeResult.Counted` (`ProbeView.Counted`: `Diff` leaves its
   duration out; `countedFixtures` in the golden test holds each fixture's decoded length). With an ffprobe
   whose release has no rules, an MP3's estimate is replaced the same way after ffprobe answers (`readFile`'s
   count, `Metadata.counted`), and when that ffprobe fails the count's whole answer stands in for it. A stored book read before this (`books.duration_rev` < `catalog.durationRev`,
@@ -2459,7 +2460,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   data (`metadata.ErrProbeRejected`) is remembered (`books.tag_read_failed_at`, `0091`, the row's
   `indexed_at` then: `Signature.TagReadFailed`, `Catalog.SetTagReadFailed`), so those bytes are not
   read for them again on every scan (server#318); the next index of the book (its files changed, a
-  Re-read) clears it, and a time-out or a run that failed reads again. A current `@rev` 1 to 4 snapshot it doesn't flag
+  Re-read) clears it, and a time-out, a run that failed or a count standing in for it cut short for now
+  (`uncountedForNow`) reads again. A current `@rev` 1 to 4 snapshot it doesn't flag
   (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at today's revision by that
   scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 to 4,
   `revOlderOwn`), so later scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a

@@ -502,9 +502,12 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// Names or hints left waiting on ffprobe, which rejects the file's
 			// data where the index read it: the same bytes are rejected again,
 			// so the read is remembered until the book is indexed again
-			// (server#318), not made on every scan. A time-out, or ffprobe
-			// failing to run, may pass, and is read again.
-			if (r.names || r.hints) && old.ScanError != problemProbe && errors.Is(md.ProbeErr, metadata.ErrProbeRejected) {
+			// (server#318), not made on every scan. A time-out, ffprobe
+			// failing to run, or a frame count standing in for it that a read
+			// may yet finish (uncountedForNow: a read error, others read
+			// beside it) may pass, and is read again.
+			if (r.names || r.hints) && old.ScanError != problemProbe && errors.Is(md.ProbeErr, metadata.ErrProbeRejected) &&
+				!uncountedForNow(md) {
 				failedBackfill[b.RelPath] = old.IndexedAt
 			}
 		}
