@@ -16,14 +16,20 @@ import (
 // Each pair needs its own evidence: a third copy can share an identifier with
 // only one of the other two. In-library groups keep their transitive joins.
 type crossMatches struct {
-	signals map[string]map[int64][]int
-	pairs   map[[2]int]dupSet
+	libraryID int64                      // the library asked for, 0 for all
+	signals   map[string]map[int64][]int // signal -> library -> rows, in row order
 }
 
-func (c *crossMatches) add(rows []dupRow, i int, sig string, libraryID int64) {
+// maxCrossCopies bounds the pairs one signal makes. Pairs multiply across
+// libraries (k copies here and m there make k*m), so a signal more books in one
+// library share than this is a placeholder (a series ASIN, a publisher's dummy
+// ISBN), not one book's identity: it makes no cross pairs, and its copies still
+// group within their library.
+const maxCrossCopies = 16
+
+func (c *crossMatches) add(rows []dupRow, i int, sig string) {
 	if c.signals == nil {
 		c.signals = make(map[string]map[int64][]int)
-		c.pairs = make(map[[2]int]dupSet)
 	}
 	r := rows[i]
 	if sig[0] == 'h' {
@@ -34,37 +40,53 @@ func (c *crossMatches) add(rows []dupRow, i int, sig string, libraryID int64) {
 		libraries = make(map[int64][]int)
 		c.signals[sig] = libraries
 	}
-	for lib, others := range libraries {
-		if lib == r.libraryID || (libraryID != 0 && lib != libraryID && r.libraryID != libraryID) {
-			continue
-		}
-		for _, j := range others {
-			other := rows[j]
-			matchLength := sameLength(r.duration, other.duration)
-			if sig[0] == 'm' && !matchLength {
-				continue
-			}
-			key := [2]int{j, i}
-			s := c.pairs[key]
-			if s.members == nil {
-				s.members = []int{j, i}
-			}
-			switch sig[0] {
-			case 'h':
-				s.sameFiles = true
-			case 'a', 'i':
-				s.joins |= joinID
-				s.lengthsDiffer = r.duration > 0 && other.duration > 0 && !matchLength
-			}
-			c.pairs[key] = s
-		}
-	}
 	libraries[r.libraryID] = append(libraries[r.libraryID], i)
 }
 
-func (c *crossMatches) sets() []dupSet {
-	sets := make([]dupSet, 0, len(c.pairs))
-	for _, s := range c.pairs {
+// sets pairs each signal's copies across libraries, one comparison per pair of
+// books, with what each signal says about them.
+func (c *crossMatches) sets(rows []dupRow) []dupSet {
+	pairs := map[[2]int]dupSet{}
+	for sig, libraries := range c.signals {
+		placeholder := false
+		for _, copies := range libraries {
+			placeholder = placeholder || len(copies) > maxCrossCopies
+		}
+		if len(libraries) < 2 || placeholder {
+			continue
+		}
+		for lib, here := range libraries {
+			for other, there := range libraries {
+				if other <= lib || (c.libraryID != 0 && lib != c.libraryID && other != c.libraryID) {
+					continue
+				}
+				for _, x := range here {
+					for _, y := range there {
+						j, i := min(x, y), max(x, y)
+						matchLength := sameLength(rows[i].duration, rows[j].duration)
+						if sig[0] == 'm' && !matchLength {
+							continue
+						}
+						key := [2]int{j, i}
+						s := pairs[key]
+						if s.members == nil {
+							s.members = []int{j, i}
+						}
+						switch sig[0] {
+						case 'h':
+							s.sameFiles = true
+						case 'a', 'i':
+							s.joins |= joinID
+							s.lengthsDiffer = rows[i].duration > 0 && rows[j].duration > 0 && !matchLength
+						}
+						pairs[key] = s
+					}
+				}
+			}
+		}
+	}
+	sets := make([]dupSet, 0, len(pairs))
+	for _, s := range pairs {
 		sets = append(sets, s)
 	}
 	return sets

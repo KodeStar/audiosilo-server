@@ -2,7 +2,9 @@ package catalog
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -274,5 +276,50 @@ func TestCrossLibraryPairsUseDirectEvidence(t *testing.T) {
 	page, err = c.DuplicatePage(ctx, DuplicateQuery{LibraryID: m.ID, Across: true})
 	if err != nil || page.Total != 1 || page.Groups[0].Reason != dupIDLengthDiffers {
 		t.Fatalf("library M comparisons %+v, %v", page, err)
+	}
+}
+
+// A shared identifier makes a cross pair per two copies, so one more copies in a
+// library share than maxCrossCopies is a placeholder: its copies group in their
+// library and make no cross pairs. Below the bound every pair is offered.
+func TestCrossLibraryPairsSkipAPlaceholderIdentifier(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	l, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/l"})
+	m, _ := c.CreateLibrary(ctx, Library{Name: "M", Root: "/m"})
+	put := func(lib int64, path, isbn string) {
+		t.Helper()
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib, RelPath: path, Title: path, ISBN: isbn}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range maxCrossCopies + 1 {
+		put(l.ID, fmt.Sprintf("Dummy %02d", i), "0000000000")
+	}
+	put(m.ID, "Dummy", "0000000000")
+	put(l.ID, "Real 1", "123")
+	put(l.ID, "Real 2", "123")
+	put(m.ID, "Real 3", "123")
+	put(m.ID, "Real 4", "123")
+	page, err := c.DuplicatePage(ctx, DuplicateQuery{Across: true, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var placeholder, inLibrary, cross int
+	for _, g := range page.Groups {
+		switch {
+		case g.Books[0].LibraryID != g.Books[len(g.Books)-1].LibraryID:
+			cross++
+			if strings.HasPrefix(g.Books[0].Path, "Dummy") {
+				t.Fatalf("placeholder cross pair %s / %s", g.Books[0].Path, g.Books[1].Path)
+			}
+		case len(g.Books) == maxCrossCopies+1:
+			placeholder++
+		default:
+			inLibrary++
+		}
+	}
+	if placeholder != 1 || inLibrary != 2 || cross != 4 || page.Total != 7 {
+		t.Fatalf("placeholder %d, in-library %d, cross %d, total %d; want 1, 2, 4, 7", placeholder, inLibrary, cross, page.Total)
 	}
 }

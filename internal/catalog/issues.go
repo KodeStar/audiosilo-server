@@ -432,14 +432,14 @@ func findDuplicateSets(ctx context.Context, db rowQuerier, libraryID int64, acro
 	byMeta := map[string][]int{}    // every book with this author/title/narrator
 	// Across-library comparisons are direct pairs. Keep each signal's copies by
 	// library so a large group within one library still takes a single join.
-	cross := crossMatches{}
+	cross := crossMatches{libraryID: libraryID}
 	for i := range rows {
 		r := &rows[i]
 		lib := strconv.FormatInt(r.libraryID, 10) + ":"
 		audio[i] = -1
 		for _, sig := range identitySignals(r.quality()) {
 			if across {
-				cross.add(rows, i, sig, libraryID)
+				cross.add(rows, i, sig)
 			}
 			switch {
 			case strings.HasPrefix(sig, "m:"):
@@ -473,7 +473,7 @@ func findDuplicateSets(ctx context.Context, db rowQuerier, libraryID int64, acro
 			}
 		}
 	}
-	sets := cross.sets()
+	sets := cross.sets(rows)
 	for _, members := range set.groups() {
 		if len(members) < 2 {
 			continue
