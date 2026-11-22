@@ -119,7 +119,7 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	// other's bytes. It is chosen by the request, before any gzipping, so a 304
 	// costs none; a map gzip can't shrink goes out plain under it, which is
 	// still the one answer that ETag ever names.
-	wantGzip := spa.AcceptsGzip(r.Header.Get("Accept-Encoding"))
+	wantGzip := gzipAccepted(r)
 	etag := fileETag(info)
 	if wantGzip {
 		etag = etag[:len(etag)-1] + `-gz"`

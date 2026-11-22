@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/quota"
 )
 
 // limiter is the brute-force lockout behind login + auth-code redemption. The
@@ -78,12 +79,15 @@ func TestLimiterReset(t *testing.T) {
 	}
 }
 
-// rateLimiter is the token bucket on request rate (per IP, or per credential for media).
+func newRateLimiter(rate, burst float64) *quota.Limiter {
+	return quota.PerSecond(rate, burst, nil)
+}
+
+// The shared limiter is the token bucket on request rate (per IP, or per credential for media).
 func TestRateLimiterBucket(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	r := newRateLimiter(10, 2) // 10 tokens/sec, burst of 2
-	r.now = func() time.Time { return now }
+	r := quota.PerSecond(10, 2, func() time.Time { return now }) // 10 tokens/sec, burst of 2
 	const ip = "9.9.9.9"
 
 	if !r.Allow(ip) {
@@ -107,8 +111,7 @@ func TestRateLimiterBucket(t *testing.T) {
 func TestRateLimiterReady(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	r := newRateLimiter(10, 2)
-	r.now = func() time.Time { return now }
+	r := quota.PerSecond(10, 2, func() time.Time { return now })
 	const ip = "9.9.9.9"
 
 	for range 5 {
@@ -138,8 +141,7 @@ func TestRateLimiterReady(t *testing.T) {
 func TestRateLimiterCharge(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	r := newRateLimiter(10, 2)
-	r.now = func() time.Time { return now }
+	r := quota.PerSecond(10, 2, func() time.Time { return now })
 	const ip = "9.9.9.9"
 
 	// Four requests passed Ready on a full bucket of two before any was charged.
@@ -173,47 +175,6 @@ func TestRateLimiterCharge(t *testing.T) {
 	}
 }
 
-// A flood of distinct IPs must not grow the bucket map without bound.
-func TestRateLimiterEviction(t *testing.T) {
-	t.Parallel()
-	now := time.Now()
-	r := newRateLimiter(20, 40)
-	r.now = func() time.Time { return now }
-	for i := 0; i < 100; i++ {
-		r.Allow(fmt.Sprintf("10.0.0.%d", i))
-	}
-	if len(r.buckets) != 100 {
-		t.Fatalf("expected 100 buckets, got %d", len(r.buckets))
-	}
-	// Advance past the idle TTL; the next call sweeps the now-stale buckets.
-	now = now.Add(r.idleTTL + time.Second)
-	r.Allow("10.0.0.200")
-	if len(r.buckets) > 1 {
-		t.Fatalf("stale buckets not evicted: %d remain", len(r.buckets))
-	}
-}
-
-// The idle TTL is two refills, floored at a minute and capped at maxIdleTTL, on
-// every architecture: a configured rate and burst whose refill time is more
-// nanoseconds than a Duration holds still sweep a day later.
-func TestRateLimiterIdleTTL(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		rate, burst float64
-		want        time.Duration
-	}{
-		{50, 200, time.Minute},
-		{1, 3600, 2 * time.Hour},
-		{0.001, 1000, maxIdleTTL},
-		{1, 1e12, maxIdleTTL},
-		{1e-9, 1e12, maxIdleTTL},
-	} {
-		if got := newRateLimiter(c.rate, c.burst).idleTTL; got != c.want {
-			t.Errorf("rate %g, burst %g: idleTTL %v, want %v", c.rate, c.burst, got, c.want)
-		}
-	}
-}
-
 // The login/redeem failure limiter must likewise evict stale, unlocked entries.
 func TestLimiterEviction(t *testing.T) {
 	t.Parallel()
@@ -238,8 +199,7 @@ func TestLimiterEviction(t *testing.T) {
 func TestRateLimiterWait(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	r := newRateLimiter(2, 1) // 2 tokens/s, burst 1
-	r.now = func() time.Time { return now }
+	r := quota.PerSecond(2, 1, func() time.Time { return now }) // 2 tokens/s, burst 1
 	if d := r.Wait("k"); d != 0 {
 		t.Fatalf("fresh bucket Wait = %v, want 0", d)
 	}
@@ -259,11 +219,10 @@ func TestRateLimiterWait(t *testing.T) {
 
 	// A rate so slow its wait is more nanoseconds than a Duration holds is capped
 	// at maxIdleTTL, never wrapped round to a negative (a Retry-After of 1).
-	slow := newRateLimiter(1e-12, 1)
-	slow.now = func() time.Time { return now }
+	slow := quota.PerSecond(1e-12, 1, func() time.Time { return now })
 	slow.Allow("k")
-	if d := slow.Wait("k"); d != maxIdleTTL {
-		t.Fatalf("very slow bucket Wait = %v, want %v", d, maxIdleTTL)
+	if d := slow.Wait("k"); d != 24*time.Hour {
+		t.Fatalf("very slow bucket Wait = %v, want %v", d, 24*time.Hour)
 	}
 }
 

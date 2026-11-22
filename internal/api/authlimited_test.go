@@ -9,6 +9,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/quota"
 )
 
 // TestAuthLimitedBothWrappers: requireAuth and mediaAuth run one sequence
@@ -24,10 +25,8 @@ func TestAuthLimitedBothWrappers(t *testing.T) {
 	e := newTestEnvWith(t, func(c *config.Config) { c.CORSOrigins = []string{"http://localhost:8081"} })
 	ctx := context.Background()
 	now := time.Now()
-	for _, l := range []*rateLimiter{e.api.ipLimiter, e.api.tokenLimiter, e.api.mediaLimiter} {
-		l.now = func() time.Time { return now }
-		l.burst, l.rate = 3, 0.5 // 2 s to the next token
-	}
+	frozen := func() *quota.Limiter { return quota.PerSecond(0.5, 3, func() time.Time { return now }) }
+	e.api.ipLimiter, e.api.tokenLimiter, e.api.mediaLimiter = frozen(), frozen(), frozen()
 	session, err := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
 	if err != nil {
 		t.Fatal(err)

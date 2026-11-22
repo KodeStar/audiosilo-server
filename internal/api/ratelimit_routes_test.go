@@ -8,10 +8,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/quota"
 )
 
 // routeLimitEnv is a test env whose token buckets are frozen in time, so a test
@@ -20,7 +23,8 @@ import (
 // so each refusal path the tests below reach is covered.
 type routeLimitEnv struct {
 	*testEnv
-	h http.Handler
+	h   http.Handler
+	now func() time.Time
 
 	mu        sync.Mutex
 	noRetryAt []string // "METHOD path" of each 429 sent without Retry-After
@@ -30,10 +34,9 @@ func newRouteLimitEnv(t *testing.T) *routeLimitEnv {
 	t.Helper()
 	e := newTestEnv(t)
 	now := time.Now()
-	for _, l := range []*rateLimiter{e.api.ipLimiter, e.api.bridgeLimiter, e.api.tokenLimiter, e.api.mediaLimiter} {
-		l.now = func() time.Time { return now }
-	}
-	re := &routeLimitEnv{testEnv: e, h: e.api.Handler()}
+	clock := func() time.Time { return now }
+	e.api.initRateLimits(clock)
+	re := &routeLimitEnv{testEnv: e, h: e.api.Handler(), now: clock}
 	t.Cleanup(func() {
 		re.mu.Lock()
 		defer re.mu.Unlock()
@@ -215,7 +218,7 @@ func TestRateLimitOverLongPathBounded(t *testing.T) {
 func TestRateLimitMediaPerCredential(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	e.api.mediaLimiter.burst = 3
+	e.api.mediaLimiter = quota.PerSecond(config.DefaultMediaRateLimit.Rate, 3, e.now)
 	libID, _ := seedCovers(t, e.testEnv)
 	first, second := e.session(t), e.session(t)
 	const ip = "192.0.2.30"
@@ -240,7 +243,7 @@ func TestRateLimitMediaPerCredential(t *testing.T) {
 func TestRateLimitMediaPastBudgetBounded(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	e.api.mediaLimiter.burst = 3
+	e.api.mediaLimiter = quota.PerSecond(config.DefaultMediaRateLimit.Rate, 3, e.now)
 	libID, _ := seedCovers(t, e.testEnv)
 	tok := e.session(t)
 	const ip = "192.0.2.35"
@@ -293,7 +296,7 @@ func TestRateLimitBridgePodcastBacklog(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
 	now := time.Now()
-	e.api.bridgeLimiter.now = func() time.Time { return now }
+	e.api.bridgeLimiter = quota.PerSecond(bridgeRate, bridgeBurst, func() time.Time { return now })
 	token := pairTestBridge(t, e.testEnv)
 	mix := []struct {
 		method, path string
@@ -332,7 +335,8 @@ func TestRateLimitBridgePodcastBacklog(t *testing.T) {
 func TestRateLimitBridgeRoutesOwnBucket(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	e.api.ipLimiter.burst, e.api.bridgeLimiter.burst = 2, 2
+	e.api.ipLimiter = quota.PerSecond(config.DefaultAddressRateLimit.Rate, 2, e.now)
+	e.api.bridgeLimiter = quota.PerSecond(bridgeRate, 2, e.now)
 	const players, other = "192.0.2.50", "192.0.2.51"
 	const users = "/api/v1/bridge/users"
 	tok := pairTestBridge(t, e.testEnv)
@@ -422,7 +426,7 @@ func TestRateLimitBridgeRefusedTokenPaysTheAddress(t *testing.T) {
 func TestRateLimitBridgeUncheckedTokenPaysTheAddress(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	e.api.ipLimiter.burst = 3
+	e.api.ipLimiter = quota.PerSecond(config.DefaultAddressRateLimit.Rate, 3, e.now)
 	const users = "/api/v1/bridge/users"
 	mux := http.NewServeMux()
 	mux.Handle("GET "+users, e.api.requireBridge(func(w http.ResponseWriter, _ *http.Request) {
@@ -457,7 +461,7 @@ func TestRateLimitSkipsHealthz(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
 	const ip = "127.0.0.1"
-	e.api.ipLimiter.burst = 2
+	e.api.ipLimiter = quota.PerSecond(config.DefaultAddressRateLimit.Rate, 2, e.now)
 	for range 2 {
 		if code := e.get(ip, "/api/v1/server", ""); code != http.StatusOK {
 			t.Fatalf("API call within the burst = %d, want 200", code)
@@ -589,7 +593,7 @@ func TestRateLimitDemoSessionByAddress(t *testing.T) {
 func TestRateLimitDemoMediaByAddress(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	e.api.ipLimiter.burst, e.api.ipLimiter.rate = 4, 0.25 // 4 s to the next token
+	e.api.ipLimiter = quota.PerSecond(0.25, 4, e.now) // 4 s to the next token
 	libID, _ := seedCovers(t, e.testEnv)
 	cover := func(ip, tok string) (int, string) {
 		rec := e.record(ip, "GET", mediaURL(libID, "cover", "Sidecar", tok), "", "")
@@ -633,7 +637,7 @@ func TestRateLimitDemoMediaByAddress(t *testing.T) {
 func TestAllowCredentialDemoRefusalPays(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	e.api.ipLimiter.burst, e.api.ipLimiter.rate = 1, 1
+	e.api.ipLimiter = quota.PerSecond(1, 1, e.now)
 	ctx := withCredential(context.Background(), &auth.User{IsDemo: true}, auth.Credential{ID: 1})
 	const ip = "192.0.2.65"
 	e.api.ipLimiter.Charge(ip) // the bucket is spent: the next token is 1 s away
@@ -688,7 +692,7 @@ func TestRateLimitRefusesSpentAddressFirst(t *testing.T) {
 func TestRateLimitTokenBudget(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	e.api.tokenLimiter.burst = 5
+	e.api.tokenLimiter = quota.PerSecond(config.DefaultTokenRateLimit.Rate, 5, e.now)
 	first, second := e.session(t), e.session(t)
 	const ip = "192.0.2.44"
 	for i := range 5 {
@@ -726,7 +730,7 @@ func TestRateLimitTokenBudget(t *testing.T) {
 func TestRateLimitPerCredentialRetryAfter(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	e.api.tokenLimiter.burst, e.api.tokenLimiter.rate = 2, 0.25 // 4 s to the next token
+	e.api.tokenLimiter = quota.PerSecond(0.25, 2, e.now) // 4 s to the next token
 	tok := e.session(t)
 	retryAfter := func(ip string) (int, string) {
 		rec := e.record(ip, "GET", "/api/v1/me", tok, "")
@@ -746,7 +750,7 @@ func TestRateLimitPerCredentialRetryAfter(t *testing.T) {
 
 	// The address's bucket is the last token: the refusal's charge empties it,
 	// and its 10 s refill outlasts the credential's 4 s.
-	e.api.ipLimiter.burst, e.api.ipLimiter.rate = 1, 0.1
+	e.api.ipLimiter = quota.PerSecond(0.1, 1, e.now)
 	const tight = "192.0.2.47"
 	if code, ra := retryAfter(tight); code != http.StatusTooManyRequests || ra != "10" {
 		t.Fatalf("credential refused, address spent by the charge = %d, Retry-After %q; want 429, 10", code, ra)
@@ -799,7 +803,7 @@ func TestRateLimitAuthRoutesByAddress(t *testing.T) {
 	tok := e.session(t)
 	// Room for the three checks from another address only: one request on these
 	// routes spent from the token's budget would leave one of them refused.
-	e.api.tokenLimiter.burst = 3
+	e.api.tokenLimiter = quota.PerSecond(config.DefaultTokenRateLimit.Rate, 3, e.now)
 	for _, tc := range []struct{ name, ip, method, path, body string }{
 		{"list keys", "192.0.2.60", "GET", "/api/v1/auth/tokens", ""},
 		{"pair", "192.0.2.61", "POST", "/api/v1/auth/pair", "{}"},
@@ -854,6 +858,7 @@ func TestRateLimitLoginLockoutWithToken(t *testing.T) {
 func TestRateLimitAuthLockoutsUnchanged(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
+	e.api.loginLimiter.now, e.api.redeemLimiter.now = e.now, e.now
 	for _, tc := range []struct{ name, ip, other, path, bad, good string }{
 		{"login", "192.0.2.50", "192.0.2.51", "/api/v1/auth/login",
 			`{"username":"admin","password":"wrong-password"}`,
@@ -869,11 +874,82 @@ func TestRateLimitAuthLockoutsUnchanged(t *testing.T) {
 				t.Fatalf("%s: failure %d = %d, want a refusal short of the lockout", tc.name, i+1, code)
 			}
 		}
-		if code := e.post(tc.ip, tc.path, tc.good); code != http.StatusTooManyRequests {
-			t.Fatalf("%s: right secret from a locked-out address = %d, want 429", tc.name, code)
+		rec := e.record(tc.ip, "POST", tc.path, "", tc.good)
+		if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "900" {
+			t.Fatalf("%s: right secret from a locked-out address = %d, Retry-After %q, want 429 and 900", tc.name, rec.Code, rec.Header().Get("Retry-After"))
+		}
+		if tc.name == "redeem" {
+			pair := e.record(tc.ip, "POST", "/api/v1/bridge/pair", "", `{"code":"WRONG-WRONG"}`)
+			if pair.Code != http.StatusTooManyRequests || pair.Header().Get("Retry-After") != "900" {
+				t.Fatalf("Bridge pairing after ten wrong codes = %d %v", pair.Code, pair.Header())
+			}
 		}
 		if code := e.post(tc.other, tc.path, tc.good); code != http.StatusOK {
 			t.Fatalf("%s: right secret from another address = %d, want 200", tc.name, code)
 		}
 	}
+}
+
+// Check the production buckets with a stopped clock. Each admits exactly its
+// burst, then exactly one second of refill, independently for each key.
+func TestAPIRateBudgets(t *testing.T) {
+	t.Parallel()
+	api := &API{boot: config.Default(t.TempDir())}
+	now := time.Unix(100, 0)
+	api.initRateLimits(func() time.Time { return now })
+	for _, tc := range []struct {
+		name        string
+		limiter     *quota.Limiter
+		rate, burst int
+	}{
+		{"address", api.ipLimiter, 50, 200},
+		{"authenticated", api.tokenLimiter, 50000, 100000},
+		{"media", api.mediaLimiter, 200, 2000},
+		{"bridge", api.bridgeLimiter, 2000, 20000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, allowance := range []int{tc.burst, tc.rate} {
+				for i := range allowance {
+					if !tc.limiter.Allow("first") {
+						t.Fatalf("refused token %d of %d", i+1, allowance)
+					}
+				}
+				if tc.limiter.Allow("first") {
+					t.Fatalf("admitted more than %d", allowance)
+				}
+				now = now.Add(time.Second)
+			}
+			if !tc.limiter.Allow("second") {
+				t.Fatal("another key was refused")
+			}
+		})
+	}
+}
+
+// OPML uses minute-based quotas. Check the retry in seconds and the instant
+// each production budget admits another transfer.
+func TestOPMLRateBudgets(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		transfers := newOPMLTransfers()
+		for _, tc := range []struct {
+			name           string
+			limiter        *quota.Limiter
+			burst, seconds int
+		}{
+			{"import", transfers.imports, 1, 30}, {"export", transfers.exports, 2, 10},
+		} {
+			for i := range tc.burst {
+				if !tc.limiter.Take("user").OK {
+					t.Fatalf("%s refused token %d", tc.name, i+1)
+				}
+			}
+			if d := tc.limiter.Take("user"); d.OK || d.Full || d.RetryAfter != tc.seconds {
+				t.Fatalf("%s at limit: %+v", tc.name, d)
+			}
+			time.Sleep(time.Duration(tc.seconds) * time.Second)
+			if !tc.limiter.Take("user").OK || tc.limiter.Take("user").OK {
+				t.Fatalf("%s expected one refill", tc.name)
+			}
+		}
+	})
 }

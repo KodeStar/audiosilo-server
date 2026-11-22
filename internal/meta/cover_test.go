@@ -42,6 +42,9 @@ func TestFetchCover(t *testing.T) {
 	mux.HandleFunc("/to-private", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://10.255.255.1/cover.jpg", http.StatusFound)
 	})
+	mux.HandleFunc("/to-userinfo", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://user:pass@"+r.Host+"/cover.jpg", http.StatusFound)
+	})
 	mux.HandleFunc("/to-file", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "file:///etc/passwd", http.StatusFound)
 	})
@@ -63,7 +66,8 @@ func TestFetchCover(t *testing.T) {
 	defer srv.Close()
 	s := NewService("http://meta.invalid", nil)
 	// Loopback stands in for the public internet; the private range stays refused.
-	s.covers = newCoverClient(func(ap netip.AddrPort) bool { return ap.Addr().IsLoopback() })
+	transport := coverTransport(func(ap netip.AddrPort) bool { return ap.Addr().IsLoopback() })
+	s.covers = media.NewArtFetcher(transport, coverTimeout, "")
 	ctx := context.Background()
 
 	for _, path := range []string{"/cover.jpg", "/moved.jpg"} {
@@ -74,8 +78,10 @@ func TestFetchCover(t *testing.T) {
 	if _, err := s.FetchCover(ctx, srv.URL+"/to-private", 1<<20); !errors.Is(err, netguard.ErrBlockedAddress) {
 		t.Errorf("redirect to a private address = %v, want netguard.ErrBlockedAddress", err)
 	}
-	if _, err := s.FetchCover(ctx, srv.URL+"/to-file", 1<<20); !errors.Is(err, ErrCoverURL) {
-		t.Errorf("redirect to file: = %v, want ErrCoverURL", err)
+	for _, path := range []string{"/to-file", "/to-userinfo"} {
+		if _, err := s.FetchCover(ctx, srv.URL+path, 1<<20); !errors.Is(err, ErrCoverURL) {
+			t.Errorf("%s = %v, want ErrCoverURL", path, err)
+		}
 	}
 	if _, err := s.FetchCover(ctx, srv.URL+"/loop", 1<<20); err == nil {
 		t.Error("a redirect loop was followed to the end")
@@ -94,7 +100,7 @@ func TestFetchCover(t *testing.T) {
 		t.Errorf("exactly the limit = %d bytes, %v", len(got), err)
 	}
 	for _, bad := range []string{"", "cover.jpg", "/cover.jpg", "ftp://example.com/c.jpg", "file:///etc/passwd",
-		"http://", "javascript:alert(1)", "https://example.com/" + string(bytes.Repeat([]byte("a"), maxCoverURLLen))} {
+		"http://", "https://user:pass@example.com/image", "javascript:alert(1)", "https://example.com/" + string(bytes.Repeat([]byte("a"), maxCoverURLLen))} {
 		if _, err := s.FetchCover(ctx, bad, 1<<20); !errors.Is(err, ErrCoverURL) {
 			t.Errorf("FetchCover(%.40q) = %v, want ErrCoverURL", bad, err)
 		}
@@ -129,12 +135,13 @@ func TestFetchCoverRefusesHTTPSDowngrade(t *testing.T) {
 	defer upgrade.Close()
 
 	s := NewService("http://meta.invalid", nil)
-	s.covers = newCoverClient(func(ap netip.AddrPort) bool { return ap.Addr().IsLoopback() })
+	transport := coverTransport(func(ap netip.AddrPort) bool { return ap.Addr().IsLoopback() })
+	s.covers = media.NewArtFetcher(transport, coverTimeout, "")
 	// Trust the test server's certificate, as the client trusts a public one.
-	s.covers.Transport.(*http.Transport).TLSClientConfig = secure.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	transport.TLSClientConfig = secure.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
 	ctx := context.Background()
-	if _, err := s.FetchCover(ctx, secure.URL+"/down", 1<<20); !errors.Is(err, errCoverDowngrade) {
-		t.Fatalf("https to http = %v, want errCoverDowngrade", err)
+	if _, err := s.FetchCover(ctx, secure.URL+"/down", 1<<20); !errors.Is(err, media.ErrArtDowngrade) {
+		t.Fatalf("https to http = %v, want media.ErrArtDowngrade", err)
 	}
 	if plainHit {
 		t.Fatal("the plain http cover was fetched")

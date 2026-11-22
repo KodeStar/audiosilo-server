@@ -1,11 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -82,4 +87,48 @@ func TestSearchDedupWire(t *testing.T) {
 	if b.LibraryID != libA.ID || len(b.OtherLocations) != 1 || b.OtherLocations[0].LibraryID != libB.ID {
 		t.Fatalf("unexpected winner/other_locations: %+v", b)
 	}
+}
+
+// A client leaving during a scope read keeps the error envelope quiet. A
+// server-side deadline or database failure still leaves a warning for the owner.
+func TestScopeFailureLog(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	var logs bytes.Buffer
+	e.api.log = slog.New(slog.NewTextHandler(&logs, nil))
+	ctx := withCredential(t.Context(), &auth.User{ID: e.adminID, Role: auth.RoleAdmin}, auth.Credential{})
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	deadline, stop := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer stop()
+	check := func(ctx context.Context, warn bool) {
+		t.Helper()
+		r := httptest.NewRequestWithContext(ctx, "GET", "/api/v1/search", nil)
+		for _, gated := range []bool{false, true} {
+			logs.Reset()
+			w := httptest.NewRecorder()
+			var ok bool
+			if gated {
+				_, _, ok = e.api.gatedScopes(w, r, "scope read failed")
+			} else {
+				_, ok = e.api.callerScopes(w, r, "scope read failed")
+			}
+			if ok || w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "scope read failed") {
+				t.Fatalf("gated=%t: scope failure = %t %d %s", gated, ok, w.Code, w.Body.String())
+			}
+			if warn {
+				if !strings.Contains(logs.String(), "load user scopes failed") || !strings.Contains(logs.String(), "level=WARN") {
+					t.Errorf("gated=%t: missing warning: %q", gated, &logs)
+				}
+			} else if logs.Len() != 0 {
+				t.Errorf("gated=%t: cancelled request logged %q", gated, &logs)
+			}
+		}
+	}
+	check(cancelled, false)
+	check(deadline, true)
+	if err := e.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	check(ctx, true)
 }

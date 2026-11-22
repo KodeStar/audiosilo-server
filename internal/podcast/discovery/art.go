@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"context"
-	"net/http"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -129,24 +128,7 @@ func (s *Service) queuedImage(ctx context.Context, raw string) ([]byte, *Error) 
 // Accept and the server's User-Agent), at most maxImageBytes decoded, and
 // re-encodes it: an SVG, HTML or anything image.Decode can't read fails.
 func (s *Service) fetchImage(ctx context.Context, raw string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "image/*")
-	req.Header.Set("User-Agent", "AudioSilo/"+s.opts.Version)
-	resp, err := s.artClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, errArtUnavailable
-	}
-	if resp.ContentLength > maxImageBytes {
-		return nil, errTooLarge
-	}
-	data, err := readLimited(resp.Body, maxImageBytes)
+	data, err := s.artFetcher.Fetch(ctx, raw, maxImageBytes)
 	if err != nil {
 		return nil, err
 	}

@@ -97,11 +97,9 @@ func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, 
 // a cross-library read or a request that reads more than one library; on a
 // failure it answers 500 with msg and returns false.
 func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) ([]catalog.Scope, bool) {
-	u := userFrom(r.Context())
 	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
-		a.log.Warn("load user scopes failed", "user", u.ID, "err", err)
-		writeError(w, http.StatusInternalServerError, msg)
+		a.writeScopeError(w, r, err, msg)
 		return nil, false
 	}
 	return scopes, true
@@ -114,11 +112,17 @@ func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) (
 func (a *API) gatedScopes(w http.ResponseWriter, r *http.Request, msg string) (scopes, keep []catalog.Scope, ok bool) {
 	scopes, keep, err := a.cat.GatedScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
-		a.log.Warn("load user scopes failed", "user", userFrom(r.Context()).ID, "err", err)
-		writeError(w, http.StatusInternalServerError, msg)
+		a.writeScopeError(w, r, err, msg)
 		return nil, nil, false
 	}
 	return scopes, keep, true
+}
+
+func (a *API) writeScopeError(w http.ResponseWriter, r *http.Request, err error, msg string) {
+	if !errors.Is(r.Context().Err(), context.Canceled) {
+		a.log.Warn("load user scopes failed", "user", userFrom(r.Context()).ID, "err", err)
+	}
+	writeError(w, http.StatusInternalServerError, msg)
 }
 
 // scopeIn is the caller's scope in one library out of their callerScopes, as the

@@ -37,14 +37,14 @@ func gunzip(t *testing.T, b []byte) []byte {
 
 func hasVaryAE(h http.Header) bool { return hasVary(h, "Accept-Encoding") }
 
-// serveCompress runs h behind compress for one request and returns the recorder.
+// serveCompress runs h as an opted-in route for one request.
 func serveCompress(h http.HandlerFunc, method, target string, headers map[string]string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, target, nil)
 	for k, v := range headers {
 		r.Header.Set(k, v)
 	}
 	w := httptest.NewRecorder()
-	compress(h).ServeHTTP(w, r)
+	compressJSON(h).ServeHTTP(w, r)
 	return w
 }
 
@@ -132,7 +132,7 @@ func TestCompressManyWrites(t *testing.T) {
 func TestCompressLeavesOtherAnswers(t *testing.T) {
 	t.Parallel()
 	const p = "/api/v1/libraries/1/item"
-	for _, ct := range []string{"audio/mpeg", "image/jpeg", "text/html; charset=utf-8", "application/epub+zip", ""} {
+	for _, ct := range []string{"audio/mpeg", "image/jpeg", "text/event-stream", "text/html; charset=utf-8", "application/epub+zip", ""} {
 		h := func(w http.ResponseWriter, _ *http.Request) {
 			if ct != "" {
 				w.Header().Set("Content-Type", ct)
@@ -164,6 +164,22 @@ func TestCompressLeavesOtherAnswers(t *testing.T) {
 	if w := serveCompress(etag, "GET", p, acceptGzip); w.Header().Get("Content-Encoding") != "" || !bytes.Equal(w.Body.Bytes(), bigJSON) {
 		t.Fatalf("with an ETag: %v", w.Header())
 	}
+	for _, tc := range []struct {
+		status       int
+		contentRange string
+	}{
+		{http.StatusPartialContent, ""}, {http.StatusOK, "bytes 0-1023/2048"},
+	} {
+		w := serveCompress(func(w http.ResponseWriter, r *http.Request) {
+			if tc.contentRange != "" {
+				w.Header().Set("Content-Range", tc.contentRange)
+			}
+			jsonHandler(tc.status, bigJSON)(w, r)
+		}, "GET", p, acceptGzip)
+		if w.Header().Get("Content-Encoding") != "" || !bytes.Equal(w.Body.Bytes(), bigJSON) {
+			t.Fatalf("partial response was encoded: %v", w.Header())
+		}
+	}
 	for _, code := range []int{http.StatusNoContent, http.StatusNotModified} {
 		w := serveCompress(jsonHandler(code, nil), "GET", p, acceptGzip)
 		if w.Code != code || w.Header().Get("Content-Encoding") != "" || w.Body.Len() != 0 {
@@ -180,6 +196,8 @@ func TestCompressLeavesOtherAnswers(t *testing.T) {
 // long-poll claim), however large the JSON.
 func TestCompressExclusions(t *testing.T) {
 	t.Parallel()
+	e := newTestEnv(t)
+	tok := adminSession(t, e)
 	for _, c := range []struct {
 		method, path string
 		headers      map[string]string
@@ -221,6 +239,13 @@ func TestCompressExclusions(t *testing.T) {
 		{"GET", "/api/v1/me/upcoming/cover", nil, false},
 		{"GET", "/api/v1/me/upcoming/calendar", nil, false},
 		{"GET", "/api/v1/admin/backups/audiosilo-2026.db", nil, false},
+		{"GET", "/api/v1/podcasts/discovery/artwork", nil, false},
+		{"GET", "/api/v1/podcasts/opml/export", nil, false},
+		{"GET", "/api/v1/admin/libraries/1/export", nil, false},
+		{"GET", "/api/v1/admin/logs", nil, false},
+		{"GET", "/api/v1/admin/audit", nil, false},
+		{"GET", "/api/v1/admin/settings", nil, false},
+		{"GET", "/api/v1/future-credential", nil, false},
 		{"GET", "/api/v1/bridge/jobs/next", nil, false},
 		{"GET", "/api/v1/bridge/libraries/1/book", nil, false},
 		{"GET", "/web/index.html", nil, false},
@@ -228,20 +253,56 @@ func TestCompressExclusions(t *testing.T) {
 		{"GET", "/setup", nil, false},
 		{"GET", "/healthz", nil, false},
 	} {
-		r := httptest.NewRequest(c.method, c.path, nil)
-		for k, v := range c.headers {
-			r.Header.Set(k, v)
+		resp, _ := e.raw(t, c.method, c.path, tok, true, c.headers)
+		// Even a small JSON answer on an opted-in route advertises its coding.
+		if got := strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") && hasVaryAE(resp.Header); got != c.want {
+			t.Errorf("%s %s %v: status %d, headers %v, want compression eligible %v", c.method, c.path, c.headers, resp.StatusCode, resp.Header, c.want)
 		}
-		if got := compressible(r); got != c.want {
-			t.Errorf("%s %s %v: compressible = %v, want %v", c.method, c.path, c.headers, got, c.want)
+		if !c.want && resp.Header.Get("Content-Encoding") == "gzip" && strings.HasPrefix(c.path, "/api/") {
+			t.Errorf("%s %s unexpectedly gzipped", c.method, c.path)
 		}
-		hdr := map[string]string{"Accept-Encoding": "gzip"}
-		for k, v := range c.headers {
-			hdr[k] = v
+	}
+}
+
+// A new route gets identity even if it returns large JSON. A stream or
+// upgrade also keeps its writer when its response happens to be a JSON error.
+func TestCompressionRequiresRouteOptIn(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	mux := http.NewServeMux()
+	h := jsonHandler(http.StatusOK, bigJSON)
+	mux.HandleFunc("GET /api/v1/books", compressJSON(h))
+	mux.HandleFunc("GET /api/v1/new", h)
+	mux.HandleFunc("GET /api/v1/events", h)
+	mux.HandleFunc("GET /api/v1/socket", h)
+	handler := e.api.middleware(mux)
+	for _, tc := range []struct {
+		path, header, value string
+		gzip                bool
+	}{
+		{"books", "", "", true},
+		{"new", "", "", false},
+		{"events", "Accept", "text/event-stream", false},
+		{"socket", "Upgrade", "websocket", false},
+		{"books", "Range", "bytes=0-20", false},
+		{"books", "Upgrade", "websocket", false},
+	} {
+		r := httptest.NewRequest("GET", "/api/v1/"+tc.path, nil)
+		r.Header.Set("Accept-Encoding", "gzip")
+		if tc.header != "" {
+			r.Header.Set(tc.header, tc.value)
 		}
-		w := serveCompress(jsonHandler(200, bigJSON), c.method, c.path, hdr)
-		if gz := w.Header().Get("Content-Encoding") == "gzip"; gz != c.want {
-			t.Errorf("%s %s: gzipped = %v, want %v", c.method, c.path, gz, c.want)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		body := w.Body.Bytes()
+		if w.Code != 200 || (w.Header().Get("Content-Encoding") == "gzip") != tc.gzip {
+			t.Fatalf("%+v: %d %v", tc, w.Code, w.Header())
+		}
+		if tc.gzip {
+			body = gunzip(t, body)
+		}
+		if !bytes.Equal(body, bigJSON) {
+			t.Errorf("%+v: wrong body", tc)
 		}
 	}
 }
@@ -402,6 +463,12 @@ func TestListCacheKeepsGzip(t *testing.T) {
 	// An identity client on the same entry gets the stored body.
 	if _, plain := e.raw(t, "GET", p, tok, false, nil); !bytes.Equal(plain, got.body) {
 		t.Fatal("identity hit is not the stored body")
+	}
+
+	// A Range request to the same cache entry may only take the identity bytes.
+	resp, ranged := e.raw(t, "GET", p, tok, true, map[string]string{"Range": "bytes=0-9"})
+	if resp.Header.Get("Content-Encoding") != "" || !bytes.Equal(ranged, got.body) {
+		t.Fatalf("cached list with Range: %d %v", resp.StatusCode, resp.Header)
 	}
 
 	// A content write: the gzip goes with the answer.

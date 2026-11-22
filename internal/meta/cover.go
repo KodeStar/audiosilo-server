@@ -26,9 +26,6 @@ var ErrCoverURL = errors.New("meta: not an http(s) cover URL")
 const (
 	// coverTimeout bounds one cover fetch, redirects included.
 	coverTimeout = 15 * time.Second
-	// maxCoverRedirects is how many redirects a cover fetch follows (a CDN
-	// moving an image, http to https).
-	maxCoverRedirects = 3
 	// maxCoverURLLen bounds a cover URL a caller may ask for.
 	maxCoverURLLen = 2048
 	// maxConcurrentCoverFetches bounds the cover fetches in flight across all
@@ -37,42 +34,15 @@ const (
 	maxConcurrentCoverFetches = 4
 )
 
-// errCoverDowngrade is a cover fetch that a redirect would take from https down
-// to plain http.
-var errCoverDowngrade = errors.New("meta: cover redirect from https to http")
-
-// newCoverClient is the HTTP client covers are fetched with. Every connection it
-// makes, a redirect's included, is checked after the name is resolved
-// (netguard's dialer Control, netguard.ErrBlockedAddress), so a public name
-// can't lead it into the server's own network, and a redirect never goes from
-// https down to http (errCoverDowngrade). It uses no proxy: through one, the
-// check would see only the proxy's address.
-func newCoverClient(allowed func(netip.AddrPort) bool) *http.Client {
-	dialer := netguard.Dialer(allowed, 5*time.Second)
-	return &http.Client{
-		Timeout: coverTimeout,
-		Transport: &http.Transport{
-			DialContext:           dialer.DialContext,
-			TLSHandshakeTimeout:   5 * time.Second,
-			ResponseHeaderTimeout: 10 * time.Second,
-			// Most covers come from one CDN: keep a connection per fetch slot warm.
-			MaxIdleConns:        maxConcurrentCoverFetches,
-			MaxIdleConnsPerHost: maxConcurrentCoverFetches,
-			IdleConnTimeout:     30 * time.Second,
-		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) > maxCoverRedirects {
-				return errors.New("meta: too many cover redirects")
-			}
-			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-				return ErrCoverURL
-			}
-			// Never from https down to http (server#219).
-			if netguard.Downgrade(req, via) {
-				return errCoverDowngrade
-			}
-			return nil
-		},
+// coverTransport checks every resolved address at dial time, including redirects.
+func coverTransport(allowed func(netip.AddrPort) bool) *http.Transport {
+	return &http.Transport{
+		DialContext:           netguard.Dialer(allowed, 5*time.Second).DialContext,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+		MaxIdleConns:          maxConcurrentCoverFetches,
+		MaxIdleConnsPerHost:   maxConcurrentCoverFetches,
+		IdleConnTimeout:       30 * time.Second,
 	}
 }
 
@@ -83,32 +53,24 @@ func newCoverClient(allowed func(netip.AddrPort) bool) *http.Client {
 // is the caller's to check.
 func (s *Service) FetchCover(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
 	u := httpURL(rawURL)
-	if u == nil || len(rawURL) > maxCoverURLLen {
+	if u == nil || u.User != nil || len(rawURL) > maxCoverURLLen {
 		return nil, ErrCoverURL
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, ErrCoverURL
-	}
-	req.Header.Set("Accept", "image/*")
 	select {
 	case s.coverSem <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 	defer func() { <-s.coverSem }()
-	resp, err := s.covers.Do(req)
-	if err != nil {
-		return nil, err
+	data, err := s.covers.Fetch(ctx, u.String(), limit)
+	if errors.Is(err, media.ErrArtURL) {
+		return nil, ErrCoverURL
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &statusError{code: resp.StatusCode, path: u.Host + u.EscapedPath()}
+	var status media.ArtStatusError
+	if errors.As(err, &status) {
+		return nil, &statusError{code: int(status), path: u.Host + u.EscapedPath()}
 	}
-	if resp.ContentLength > limit {
-		return nil, media.ErrImageTooLarge
-	}
-	return media.ReadLimited(resp.Body, limit)
+	return data, err
 }
 
 // HandsOutCover reports whether rawURL is a cover URL this envelope hands to a

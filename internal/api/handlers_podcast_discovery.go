@@ -16,7 +16,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/podcast"
 	"github.com/kodestar/audiosilo-server/internal/podcast/discovery"
 	"github.com/kodestar/audiosilo-server/internal/podcast/opml"
-	"github.com/kodestar/audiosilo-server/internal/podcast/quota"
+	"github.com/kodestar/audiosilo-server/internal/quota"
 )
 
 // Podcast discovery and OPML transfer (Bridge Phase 2c-3). Search, its
@@ -55,8 +55,8 @@ type opmlTransfers struct {
 
 func newOPMLTransfers() opmlTransfers {
 	return opmlTransfers{
-		imports: quota.New(opmlImportPerMin, opmlImportBurst, maxOPMLUsers, opmlBucketIdle, nil),
-		exports: quota.New(opmlExportPerMin, opmlExportBurst, maxOPMLUsers, opmlBucketIdle, nil),
+		imports: quota.PerMinute(opmlImportPerMin, opmlImportBurst, maxOPMLUsers, opmlBucketIdle, nil),
+		exports: quota.PerMinute(opmlExportPerMin, opmlExportBurst, maxOPMLUsers, opmlBucketIdle, nil),
 		slots:   quota.NewSlots(maxConcurrentOPML),
 	}
 }
@@ -108,8 +108,8 @@ func (a *API) mountPodcastTransfer(mux *http.ServeMux) {
 	for _, p := range []string{"/api/v1/podcasts/discovery/providers", "/api/v1/podcasts/discovery/search", "/api/v1/podcasts/discovery/artwork", "/api/v1/podcasts/opml/export"} {
 		mux.HandleFunc("HEAD "+p, headNotAllowed)
 	}
-	mux.Handle("GET /api/v1/podcasts/discovery/providers", listener(a.handleDiscoveryProviders))
-	mux.Handle("GET /api/v1/podcasts/discovery/search", listener(a.handleDiscoverySearch))
+	mux.Handle("GET /api/v1/podcasts/discovery/providers", listener(compressJSON(a.handleDiscoveryProviders)))
+	mux.Handle("GET /api/v1/podcasts/discovery/search", listener(compressJSON(a.handleDiscoverySearch)))
 	// The artwork is an <img> source: the media equivalent (?token= allowed for
 	// a session or API key only, the media rate limit).
 	mux.Handle("GET /api/v1/podcasts/discovery/artwork", a.requireMediaAuth(notKid(notDemo(a.requireModule(bridge.ModulePodcasts, http.HandlerFunc(a.handleDiscoveryArtwork))))))
