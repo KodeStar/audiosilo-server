@@ -285,22 +285,23 @@ const scannedStampKey = "@indexed_at"
 // a narrator tag over composer), which a snapshot stamped from an older
 // revision never had; one of revision 4 predates revision 5, when a book of
 // several files stopped taking its first file's title tag over the album that
-// tag extends (metadata.PartsTitle, server#272). The next scan reads such a
+// tag extends (metadata.PartsTitle, server#272). Revision 6 reads the folder
+// title for unconfirmed multi-file titles and the names a leaf states, including
+// the leaf above a disc folder (server#272, server#325). The next scan reads such a
 // book again where a newer revision may read it otherwise
 // (Signature.NamesCheck) and stamps the rest (StampScannedRev). A new revision
 // adds the one before it to revOlderOwn's list, so its snapshots are stamped
 // too.
 const (
 	scannedRevKey = "@rev"
-	scannedRev    = "5"
+	scannedRev    = "6"
 	// The revisions that brought a reading in, so a snapshot of one needs no read
-	// for it (Signature.NamesCheck): TitleNotSeries (MaybeSeriesTitle), a leaf
-	// that states a series (PathLeafSeries), the tag reading (tagReadingMayDiffer),
-	// a book of several files' title.
+	// for it (Signature.NamesCheck): TitleNotSeries, the tag reading, multi-file
+	// titles, and the latest folder and leaf rules.
 	revTitleNotSeries = 2
-	revLeafSeries     = 3
 	revTagReading     = 4
 	revPartsTitle     = 5
+	revFolderNames    = 6
 )
 
 // revNumber is a snapshot's revision as a number: 0 before revision 1 (none),
@@ -592,8 +593,8 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 // (overABS).
 //
 // The baseline also reads the title the way metadata.TitleNotSeries may take it
-// in place of an album that only names the series (metadata.PathTitle: "Mark
-// Tufo; Indian Hill; Book 05; Into the Fire"), which DeriveFromPath doesn't: a
+// in place of an album that only names the series (metadata.PathTitle can read
+// the parent of a disc as the title, where DeriveFromPath reads the disc): a
 // scanned title equal to that one is the baseline's.
 //
 // A series with no position takes the one its title gives
@@ -649,9 +650,9 @@ func (l *bookLayers) readScanned() (scanned, baseline, layout bookFields) {
 	if _, leaf := metadata.LeafSeries(raw.Title); !leaf && raw.Title != "" &&
 		strings.EqualFold(strings.TrimSpace(l.scanned[FieldTitle]), raw.Title) {
 		// The tag title IS the folder's name, number and all ("13 Reasons Why"):
-		// the number is part of the title, not a volume the layout can split off.
-		// A leaf named "Author; Series; Book NN[; Title]" is no such title (an
-		// untagged book's is the whole leaf): the layout reads its parts.
+		// the number is part of the title, not a volume the layout can split off,
+		// and its spelling is the tag's. A leaf named "Author; Series; Book NN[;
+		// Title]" is no such title: the layout reads its parts.
 		layout[FieldTitle], layout[FieldSeriesIndex] = l.scanned[FieldTitle], raw.Position
 	}
 	scanned = maps.Clone(l.scanned)
@@ -849,8 +850,13 @@ type BookEdit struct {
 	// ASIN, while that ASIN is no admin's own edit (one typed in since, the
 	// same value), else ErrMatchedSince. "" keeps the zero MatchIf's rule.
 	MatchIfASIN string
-	Source      string
-	UserID      int64
+	// KeepEdited leaves a field an admin edited after the match run read the
+	// book as it is: a run never plans over an admin's edit (matchrun's plan
+	// and tidyTitle), so one there now was made since (a revert of a
+	// community title included).
+	KeepEdited bool
+	Source     string
+	UserID     int64
 }
 
 // normalizeSource is where an edit or a custom cover came from, as stored:
@@ -1081,6 +1087,24 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 			return err
 		}
 	}
+	if edit.Source == SourceEdited && slices.Contains(edit.Revert, FieldTitle) {
+		l, err := loadLayers(ctx, tx, bookID)
+		if err != nil {
+			return err
+		}
+		// Reverting the community title chooses the value underneath it.
+		// Store that choice like any admin edit so a later fill respects it;
+		// one an admin couldn't type in (none, too long) is a plain revert.
+		if l.overrides[FieldTitle].Source == SourceCommunity {
+			if under, err := normalizeOverride(FieldTitle, l.unedited(FieldTitle)[FieldTitle].Value); err == nil {
+				set := make(map[string]string, len(edit.Set)+1)
+				maps.Copy(set, edit.Set)
+				set[FieldTitle] = under
+				edit.Set = set
+				edit.Revert = slices.DeleteFunc(slices.Clone(edit.Revert), func(field string) bool { return field == FieldTitle })
+			}
+		}
+	}
 	set, revert := edit.Set, edit.Revert
 	swapSet, swapRevert, err := seriesSwap(ctx, tx, bookID, edit)
 	if err != nil {
@@ -1100,6 +1124,11 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	}
 	if len(swapRevert) > 0 || len(labelRevert) > 0 {
 		revert = slices.Concat(edit.Revert, swapRevert, labelRevert)
+	}
+	if edit.KeepEdited {
+		if set, err = leaveEdited(ctx, tx, ref.LibraryID, path, set); err != nil {
+			return err
+		}
 	}
 	if len(set) == 0 && len(revert) == 0 && !edit.editsChapters() {
 		if edit.Match != nil && edit.Match.WorkID != "" {
@@ -1180,6 +1209,41 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		}
 	}
 	return refreshEffective(ctx, tx, bookID)
+}
+
+// seriesFields are the fields a match run lays out together (matchrun's
+// planSeries): the main series, its position and the other series.
+var seriesFields = []string{FieldSeries, FieldSeriesIndex, FieldMoreSeries}
+
+// leaveEdited is a match run's set (BookEdit.KeepEdited) less the fields an
+// admin edited since the run read the book: a run never plans over an edit, so
+// an edited field in set is one made since. One of the series fields takes the
+// others out too, so the run's position or other series never go beside the
+// admin's series.
+func leaveEdited(ctx context.Context, tx *sql.Tx, libraryID int64, path string, set map[string]string) (map[string]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT field FROM book_overrides WHERE library_id = ? AND path = ? AND source = ?`,
+		libraryID, path, SourceEdited)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	edited := map[string]bool{}
+	for rows.Next() {
+		var field string
+		if err := rows.Scan(&field); err != nil {
+			return nil, err
+		}
+		if _, ok := set[field]; ok {
+			edited[field] = true
+		}
+	}
+	if err := rows.Err(); err != nil || len(edited) == 0 {
+		return set, err
+	}
+	series := slices.ContainsFunc(seriesFields, func(f string) bool { return edited[f] })
+	set = maps.Clone(set)
+	maps.DeleteFunc(set, func(field, _ string) bool { return edited[field] || (series && slices.Contains(seriesFields, field)) })
+	return set, nil
 }
 
 // seriesSwap is what an admin edit making one of a book's other series its main

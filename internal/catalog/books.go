@@ -532,7 +532,8 @@ type Signature struct {
 	// (metadata.PathLeafSeries); before revision 4, one the tag reading may read
 	// otherwise (tagReadingMayDiffer); before revision 5 (a book of several
 	// files no longer takes its first file's title tag: metadata.PartsTitle),
-	// one of several files.
+	// one of several files. Before revision 6, a structured leaf or a disc under
+	// one, or a multi-file book with a different path title.
 	NamesCheck bool
 	// DurationStale: a book holding an MP3 whose lengths were read before
 	// today's revision (durationRev: books.duration_rev), or since by an
@@ -542,12 +543,13 @@ type Signature struct {
 	DurationStale bool
 	// TagReadFailed: a scan's backfill read of the book's primary file for its
 	// names or tag hints found ffprobe rejecting the file, where the index had
-	// not, and the book has not been indexed since (books.tag_read_failed_at,
+	// not, or found the last file of a book whose title turns on it
+	// (metadata.PartNamed) unopenable, and the book has not been indexed since (books.tag_read_failed_at,
 	// 0091), so its files are the bytes that read failed on: the next scan does
 	// not read it again for them (server#318). An index of the book (its files
 	// changed, a Re-read) clears it.
 	TagReadFailed bool
-	// RevStamp: a book whose snapshot is its own and of revision 1 to 4 (so
+	// RevStamp: a book whose snapshot is its own and of revision 1 to 5 (so
 	// PathOK) that needs no read (not NamesCheck), which the next scan stamps
 	// with today's revision (StampScannedRev), so it is never tested again.
 	RevStamp bool

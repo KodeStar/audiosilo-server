@@ -1358,3 +1358,94 @@ func TestFieldShowsTheEnrichmentUnderAnOverride(t *testing.T) {
 		t.Errorf("no enrichment = %+v, want none", f)
 	}
 }
+
+// TestKeepEditedLeavesAdminEdits: a match run's write (KeepEdited) leaves any
+// field an admin edited since it read the book, not only the title, and the
+// run's other series fields beside an edited series, and still writes the
+// rest; without the flag a community edit replaces it.
+func TestKeepEditedLeavesAdminEdits(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p = "A/Book"
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldDescription: "Mine", FieldSeries: "My Series"}}); err != nil {
+		t.Fatal(err)
+	}
+	override := func(field string) string {
+		t.Helper()
+		var v, src string
+		if err := c.db.QueryRowContext(ctx, `SELECT value, source FROM book_overrides
+			WHERE library_id = ? AND path = ? AND field = ?`, lib.ID, p, field).Scan(&v, &src); err != nil {
+			t.Fatal(err)
+		}
+		return v + "|" + src
+	}
+	theirs := map[string]string{FieldDescription: "Theirs", FieldTitle: "Their Title", FieldSeries: "Their Series", FieldSeriesIndex: "3"}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: theirs, Source: SourceCommunity, KeepEdited: true}); err != nil {
+		t.Fatal(err)
+	}
+	// The run's position for its series doesn't go beside the admin's series.
+	var positions int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM book_overrides WHERE library_id = ? AND path = ? AND field = ?`,
+		lib.ID, p, FieldSeriesIndex).Scan(&positions); err != nil || positions != 0 {
+		t.Errorf("series_index overrides after a run's write = %d (%v), want none", positions, err)
+	}
+	if got := override(FieldSeries); got != "My Series|"+SourceEdited {
+		t.Errorf("series after a run's write = %q, want the admin's", got)
+	}
+	if got := override(FieldDescription); got != "Mine|"+SourceEdited {
+		t.Errorf("description after a run's write = %q, want the admin's", got)
+	}
+	if got := override(FieldTitle); got != "Their Title|"+SourceCommunity {
+		t.Errorf("title after a run's write = %q", got)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: theirs, Source: SourceCommunity}); err != nil {
+		t.Fatal(err)
+	}
+	if got := override(FieldDescription); got != "Theirs|"+SourceCommunity {
+		t.Errorf("description after an accepted community edit = %q", got)
+	}
+}
+
+// TestRevertCommunityTitleLocksTheFiles: an admin's revert of a community
+// title stores the title underneath as an edited override (a later fill keeps
+// it), unless that title is one an admin couldn't type in (too long), which is
+// reverted as before.
+func TestRevertCommunityTitleLocksTheFiles(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	long := strings.Repeat("Long Title ", 60)
+	for path, title := range map[string]string{"A/Short": "Original Name", "A/Long": long} {
+		b := scannedBook(lib.ID, path)
+		b.Title = title
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: map[string]string{FieldTitle: "Their Title"}, Source: SourceCommunity}); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.EditBook(ctx, lib.ID, path, BookEdit{Revert: []string{FieldTitle}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var v, src string
+	if err := c.db.QueryRowContext(ctx, `SELECT value, source FROM book_overrides
+		WHERE library_id = ? AND path = 'A/Short' AND field = ?`, lib.ID, FieldTitle).Scan(&v, &src); err != nil {
+		t.Fatal(err)
+	}
+	if v != "Original Name" || src != SourceEdited {
+		t.Errorf("reverted title override = %q (%s), want the files' title, edited", v, src)
+	}
+	var n int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM book_overrides
+		WHERE library_id = ? AND path = 'A/Long' AND field = ?`, lib.ID, FieldTitle).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("a revert onto an over-long title left %d overrides, want a plain revert", n)
+	}
+}

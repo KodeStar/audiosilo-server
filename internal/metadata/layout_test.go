@@ -139,6 +139,10 @@ func TestFromPathLayout(t *testing.T) {
 		// A leaf named "Author; Series; Book NN[; Title]" (LeafSeries) states its
 		// series, position (a range, or none) and title part, file or folder.
 		{
+			path: "Bea Writer; The Crossing; Books 01-03; Homecoming/Disc 2", isFolder: true,
+			want: Metadata{Author: "Bea Writer", Series: "The Crossing", SeriesIndex: 1, SeriesIndexEnd: 3, Title: "Homecoming"},
+		},
+		{
 			path: "Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes", isFolder: true,
 			want: Metadata{Author: "Mark Tufo", Series: "Indian Hill", SeriesIndex: 4, Title: "From The Ashes"},
 		},

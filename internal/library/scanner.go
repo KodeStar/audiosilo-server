@@ -27,6 +27,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/mounts"
 	"github.com/kodestar/audiosilo-server/internal/pool"
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // Scanner walks library roots and keeps the catalog index up to date. The
@@ -438,7 +439,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books found unchanged whose ebook is new, changed or gone (or never looked
 	// for: indexed before 0056): recorded without a re-index (SetEbooks).
 	ebookBackfill := map[string]catalog.EbookReading{}
-	// Books found unchanged whose revision 1 to 4 snapshot needs no read
+	// Books found unchanged whose revision 1 to 5 snapshot needs no read
 	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
 	// later scans don't test them again.
 	var revBackfill []string
@@ -498,6 +499,13 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// unread now (stopped, unopenable, cut short), the next scan reads both.
 			if r.names && (md.ProbeErr == nil || old.ScanError == problemProbe) && (!partNamed(b, md) || tagsRead(r.last)) {
 				pathBackfill[b.RelPath] = readNames(b, md, r.last)
+			}
+			// A last file that won't open waits the same way as a primary file
+			// ffprobe rejects, below: until the book is indexed again (its files
+			// changed, a Re-read), not with two reads on every scan. Its title
+			// stays the one stored, never one guessed without those tags.
+			if r.names && partNamed(b, md) && unopened(r.last) {
+				failedBackfill[b.RelPath] = old.IndexedAt
 			}
 			// Names or hints left waiting on ffprobe, which rejects the file's
 			// data where the index read it: the same bytes are rejected again,
@@ -815,8 +823,8 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// Rows indexed before 0067 haven't had their ASIN, ISBN and language
 				// tags read: the same read, and they wait with the names, as the
 				// hints only ffprobe reads (an M4B's mdta items) would be recorded as none.
-				// A title that may be the album naming the series (before revision 2)
-				// or a leaf that states a series (before revision 3:
+				// A book a newer revision may read otherwise (an album naming the
+				// series, a structured leaf, a book of several files:
 				// catalog.Signature.NamesCheck) is the same read.
 				readPath, readHints := old.PathCheck == catalog.PathRead || old.NamesCheck, old.HintsUnchecked
 				if old.TagReadFailed {
@@ -1052,16 +1060,12 @@ func (l *runLog) finish() []catalog.RunEvent {
 const pathFlushEvery = 500
 
 // readNames is book b's title, author and series: the path's reading
-// (metadata.DeriveFromPath, the series and position a leaf named "Author;
-// Series; Book NN[; Title]" states included) as the baseline, then md's tags,
-// which are authoritative when present (an unreadable file's md carries none;
-// nil reads the same), except a book of several files' first title tag that
-// names that file (metadata.PartsTitle: the album instead, unless the book's
-// folder or last, its last file's tags, nil for unread, says the tag is the
-// book's, or the two tags share a name past the album), and an album tag that
-// only names the book's series, which gives way to the book's own title
-// (metadata.TitleNotSeries), and md's narrator. So the leaf's series fills
-// only a series the tags leave out.
+// (metadata.DeriveFromPath) as the baseline, then md's tags (nil, an unread
+// file, keeps the path's), and md's narrator. A leaf's position goes only with
+// its own series: a tag naming another series and no position clears it.
+// PartsTitle uses the last file's tags (last, nil for unread) to tell chapter
+// titles from book titles, and TitleNotSeries resolves albums that name a
+// known series.
 func readNames(b *catalog.Book, md, last *metadata.Metadata) *metadata.Metadata {
 	n := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	if md == nil {
@@ -1076,6 +1080,9 @@ func readNames(b *catalog.Book, md, last *metadata.Metadata) *metadata.Metadata 
 		n.Author = md.Author
 	}
 	if strings.TrimSpace(md.Series) != "" {
+		if md.SeriesIndex == 0 && n.SeriesIndex != 0 && !leafTagSeries(n.Series, md.Series) && metadata.PathLeafSeries(b.RelPath, b.IsFolder) {
+			n.SeriesIndex, n.SeriesIndexEnd = 0, 0
+		}
 		n.Series = md.Series
 	}
 	if md.SeriesIndex != 0 {
@@ -1084,6 +1091,19 @@ func readNames(b *catalog.Book, md, last *metadata.Metadata) *metadata.Metadata 
 	n.Title = metadata.TitleNotSeries(n.Title, md, b.RelPath, b.IsFolder, len(b.Files) > 1)
 	n.Narrator = md.Narrator
 	return n
+}
+
+// leafTagSeries reports whether a leaf's series and a series tag name one
+// series, the way the matcher reads a series name: by match.SameSeries, or with
+// a leading article or a trailing " Series" aside (match.NormalizeSeries: "The
+// Expanse" and "Expanse"), so a tag spelling the leaf's series its own way
+// keeps the leaf's position.
+func leafTagSeries(leaf, tag string) bool {
+	if match.SameSeries(leaf, tag) {
+		return true
+	}
+	n := match.NormalizeSeries(leaf)
+	return n != "" && n == match.NormalizeSeries(tag)
 }
 
 // partNamed reports whether book b's title turns on the tags of another of its
@@ -1102,6 +1122,12 @@ func lastPath(b *catalog.Book) string { return b.Files[len(b.Files)-1].RelPath }
 // Stop (nil), an open that failed or a read cut short.
 func tagsRead(md *metadata.Metadata) bool {
 	return md != nil && md.OpenErr == nil && !md.TagsUnread()
+}
+
+// unopened reports whether md is a file's reading whose open failed
+// (OpenErr), not one a Stop or a time limit cut short.
+func unopened(md *metadata.Metadata) bool {
+	return md != nil && md.OpenErr != nil
 }
 
 // setNames sets b's title, author, series and position (readNames), its

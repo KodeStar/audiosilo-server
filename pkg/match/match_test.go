@@ -550,3 +550,27 @@ func TestRecordings(t *testing.T) {
 		})
 	}
 }
+
+// TestTitlesShareWord: a word beyond articles and joining words, in any
+// script, a number or one letter included, is shared; case and punctuation
+// aside.
+func TestTitlesShareWord(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"Frankenstein", "Frankenstein; or, The Modern Prometheus", true},
+		{"The Eye of the World", "The Wheel of Time", false},
+		{"HARRY potter 1", "Harry Potter and the Philosopher's Stone", true},
+		{"Война и мир", "Мир", true},
+		{"Catch 22", "Fahrenheit 451", false},
+		{"Book 1", "Volume 1", true},
+		{"", "Anything", false},
+		{"Shogun", "Shōgun", true},
+		{"Les Mise\u0301rables", "Les Misérables, Volume 1", true},
+	} {
+		if got := TitlesShareWord(c.a, c.b); got != c.want {
+			t.Errorf("TitlesShareWord(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
