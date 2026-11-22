@@ -2450,14 +2450,20 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Agent's `secret_agent`), and nothing else.
   **Folder titles and leaf names** (`@rev` 6, server#272, server#325). For a book of several
   files without an album, a title tag that differs between the first and last files gives way
-  to `PathTitle`. If the files carry different chapter titles and agree on any album they both name,
+  to `PathTitle`, unless the two differ only by bracketed part markers ("Dune (Part 1)": "Dune").
+  If the files carry different chapter titles and agree on any album they both name,
   and the first has an album and no series tag, the scan uses a meaningful folder title when the album and folder
-  share no distinctive word. This preserves a fuller album title such as "Frankenstein; or, The
-  Modern Prometheus" in "Frankenstein". Filename tags such as "Part 01.mp3" leave the album in
-  place. Shared book names from revision 5 still apply.
+  share no distinctive word (brackets left out). This preserves a fuller album title such as "Frankenstein; or, The
+  Modern Prometheus" in "Frankenstein". Tags that name no chapter (`chapterNamed`: filename tags such as
+  "Part 01.mp3", track labels, the album and a number, "The Gunslinger 01") and a folder named as a
+  volume or a numbered slot (`folderSlot`: "Book One", "Books 1-3", "The Dark Tower 1") or for
+  what it holds (`containerFolder`: "Files", "MP3", "Unabridged"), and tags numbering one name in
+  turn (`numberedAlike`: "Harry Potter: Philosopher's Stone 01" to "... 17"), leave the album in
+  place; without an album such a folder leaves the first tag. Shared book names from revision 5 still apply.
   A structured leaf now supplies its title part, or its series and position when it has no title
   part ("Dark Road 1-5"). A tagged series can use the leaf's position only when both name the
-  same series (`match.SameSeries`). "Books 01-03" states the same range as "Book 01-03".
+  same series (`leafTagSeries`: `match.SameSeries`, or `match.NormalizeSeries` with a leading article
+  or a trailing " Series" aside, "The Expanse" and "Expanse"). "Books 01-03" states the same range as "Book 01-03".
   A disc folder indexed on its own takes the structured leaf above it as its book. At the
   library root the author comes from the first part of a structured leaf.
   **Backfill of revisions 2 to 6**: a snapshot older than today's that a newer revision may read
@@ -2467,8 +2473,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   series `SplitSeriesTag` splits, a non-ASCII letter in the title or path; before revision 5 a book
   of several files, which `Signatures` counts in `book_files` only for a folder book's older snapshot,
   and whose last file is read too where its title turns on it, `partNamed`; before revision 6 a
-  structured leaf, a disc directly under one, or a multi-file book whose path title differs from
-  the snapshot title)
+  structured leaf, a disc directly under one, or a multi-file book whose path title is not the
+  snapshot title, `metadata.SameName`: case and brackets aside)
   is read once by the next scan with the PathRead read and rewritten by `SetPathReading` (which
   skips only a snapshot already at `scannedRev`), no re-index and no migration (a
   `PathFromSnapshot` one waits for that read too, so an unreadable file never records today's

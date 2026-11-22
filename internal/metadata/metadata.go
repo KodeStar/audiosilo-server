@@ -788,6 +788,14 @@ func (m *Metadata) PartsTitle(pathTitle string, other *Metadata) string {
 		return m.Title
 	}
 	if m.AlbumTag == "" {
+		// Tags that differ only by their bracketed part markers name the book,
+		// as they do beside an album below.
+		if other != nil && canonTag(m.TitleTag) == canonTag(other.TitleTag) && !IsGenericTitle(cleanTag(m.TitleTag)) {
+			return cleanTag(m.TitleTag)
+		}
+		if containerFolder.MatchString(strings.TrimSpace(cleanTag(pathTitle))) {
+			return m.Title // "Files", "MP3": the folder names no book either
+		}
 		return pathTitle
 	}
 	if other == nil {
@@ -803,7 +811,8 @@ func (m *Metadata) PartsTitle(pathTitle string, other *Metadata) string {
 			return cleanTag(m.TitleTag)
 		}
 	}
-	if other.TitleTag != "" && !IsAudio(other.TitleTag) && (other.AlbumTag == "" || sameName(m.AlbumTag, other.AlbumTag)) && m.folderOverAlbum(pathTitle) {
+	if chapterNamed(m.AlbumTag, other.TitleTag) && !numberedAlike(m.TitleTag, other.TitleTag) &&
+		(other.AlbumTag == "" || sameName(m.AlbumTag, other.AlbumTag)) && m.folderOverAlbum(pathTitle) {
 		return pathTitle
 	}
 	return m.AlbumTag
@@ -812,11 +821,50 @@ func (m *Metadata) PartsTitle(pathTitle string, other *Metadata) string {
 // folderOverAlbum reports whether an unconfirmed album and the folder appear
 // to name different works. A longer album such as "Frankenstein; or, The
 // Modern Prometheus" still names the book in "Frankenstein". A known series
-// is handled separately by TitleNotSeries. A filename tag like "Part 01.mp3"
-// supplies no chapter name to weigh against the album.
+// is handled separately by TitleNotSeries. A title tag that names no chapter
+// (chapterNamed) has nothing to weigh against the album, and a folder named
+// as a volume or a numbered slot ("Book One", "Books 1-3", "The Dark Tower 1":
+// folderSlot) or for what it holds ("Files", "MP3", "Unabridged":
+// containerFolder) names no title of its own.
 func (m *Metadata) folderOverAlbum(pathTitle string) bool {
-	return m.Series == "" && !IsAudio(m.TitleTag) && !IsGenericTitle(cleanTag(pathTitle)) && !volumeMarker(pathTitle) &&
-		!sameName(pathTitle, m.AlbumTag) && !match.TitlesShareWord(pathTitle, m.AlbumTag)
+	folder := strings.TrimSpace(cleanTag(pathTitle))
+	return m.Series == "" && chapterNamed(m.AlbumTag, m.TitleTag) && !IsGenericTitle(folder) &&
+		!volumeMarker(pathTitle) && !folderSlot.MatchString(folder) && !containerFolder.MatchString(folder) &&
+		!sameName(pathTitle, m.AlbumTag) && !match.TitlesShareWord(cleanTag(pathTitle), cleanTag(m.AlbumTag))
+}
+
+// chapterNamed reports whether a title tag of one of a book's files names a
+// chapter of its own: not a file's name ("Part 01.mp3"), a track label
+// ("Track 01", "Chapter 3") or the album with a track marker before or after
+// it ("The Gunslinger 01", "01 - The Gunslinger"), each of which supplies no
+// name to weigh against the album.
+func chapterNamed(album, tag string) bool {
+	if tag == "" || IsAudio(tag) || IsGenericTitle(tag) || trackTail(album, tag) {
+		return false
+	}
+	_, rest := splitSeriesIndex(tag)
+	return !sameName(rest, album)
+}
+
+// folderSlot matches a folder name that is a volume label ("Book One", "Books
+// 1-3", "Volume II") or a name and a volume number ("The Dark Tower 1",
+// "Discworld 05"): a slot in a series, not a title to put over the album.
+var folderSlot = regexp.MustCompile(`^(?i:books?|vol\.?|volume|part)\s+(?i:\d[\d.\-–]*|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)$|\s#?\d{1,3}$`)
+
+// containerFolder matches a folder named for what it holds rather than which
+// book ("Files", "MP3", "Audiobook", "Unabridged", "New Folder").
+var containerFolder = regexp.MustCompile(`^(?i:files?|mp3s?|m4[ab]s?|audio|audio ?books?|unabridged|abridged|complete|full|media|tracks?|chapters?|parts?|discs?|cds?|(?:new )?folder|untitled|unknown)$`)
+
+// trailingTrack is a track number ending a title tag ("Philosopher's Stone 01").
+var trailingTrack = regexp.MustCompile(`[\s._-]+\d{1,3}$`)
+
+// numberedAlike reports whether two files' title tags are one name numbered in
+// turn ("Harry Potter: Philosopher's Stone 01" and "... 17"): the files name
+// the same thing, the book or its album, not chapters of their own.
+func numberedAlike(first, last string) bool {
+	f, l := cleanTag(first), cleanTag(last)
+	tf, tl := trailingTrack.ReplaceAllString(f, ""), trailingTrack.ReplaceAllString(l, "")
+	return tf != f && tl != l && tf != "" && sameName(tf, tl)
 }
 
 // partsName is the name two title tags of one book's files (first, last) share
@@ -876,7 +924,7 @@ func (m *Metadata) PartNamed(pathTitle string) bool {
 		return false
 	}
 	if m.AlbumTag == "" {
-		return pathTitle != m.TitleTag && !IsGenericTitle(m.TitleTag)
+		return !sameName(m.TitleTag, pathTitle) && !IsGenericTitle(m.TitleTag)
 	}
 	if m.Title == m.TitleTag && m.TitleTag != m.AlbumTag {
 		return !sameName(m.TitleTag, pathTitle) && !sameName(albumTail(m.AlbumTag, m.TitleTag), pathTitle)

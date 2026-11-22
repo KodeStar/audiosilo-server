@@ -371,6 +371,21 @@ func TestPartsTitle(t *testing.T) {
 		{"unrelated album, chapter names", "The Wheel of Time", "Ravens Rising", "The Dragon Reborn", "The Peddler", "The Dragon Reborn"},
 		{"filename tags keep the album", "Real Title", "Part 01.mp3", "Odd Name", "Part 02.mp3", "Real Title"},
 		{"album corroborated by folder", "The Odyssey", "The Voyage", "Odyssey", "Homecoming", "The Odyssey"},
+		// Tags naming no chapter (a track label, the album and a number), or a
+		// folder named as a volume or a numbered slot, keep the album.
+		{"track tags keep the album", "The Gunslinger", "Track 01", "The Dark Tower 1", "Track 12", "The Gunslinger"},
+		{"album and number tags keep the album", "The Gunslinger", "The Gunslinger 01", "Dark Tower", "The Gunslinger 05", "The Gunslinger"},
+		{"number and album tags keep the album", "The Gunslinger", "01 - The Gunslinger", "Dark Tower", "05 - The Gunslinger", "The Gunslinger"},
+		{"numbered folder keeps the album", "Sourcery", "Rincewind Runs", "Discworld 05", "The Sourcerer", "Sourcery"},
+		{"volume folder keeps the album", "The Fellowship of the Ring", "A Long-expected Party", "Book One", "The Breaking of the Fellowship", "The Fellowship of the Ring"},
+		{"box set range folder keeps the album", "The Expanse Box Set", "The Expanse Box Set: Leviathan Wakes", "Books 1-3", "The Expanse Box Set: Caliban's War", "The Expanse Box Set"},
+		{"no album, bracketed parts", "", "Dune (Part 1)", "Frank Herbert - Dune [2007]", "Dune (Part 2)", "Dune"},
+		// A folder named for what it holds, or files numbering one name in turn
+		// (the book under a series album), keep the album as before.
+		{"container folder keeps the album", "Pride and Prejudice", "Netherfield", "Unabridged", "Pemberley", "Pride and Prejudice"},
+		{"series album, numbered book tags, container folder", "Harry Potter", "Harry Potter: Philosopher's Stone 01", "Files", "Harry Potter: Philosopher's Stone 17", "Harry Potter"},
+		{"numbered book tags keep the album", "Harry Potter", "Philosopher's Stone 01", "Sorcerer Rip", "Philosopher's Stone 17", "Harry Potter"},
+		{"no album, container folder keeps the tag", "", "Ravens", "MP3", "The Peddler", "Ravens"},
 		{"no title tag", "Main Street", "", "Main Street", unread, "Main Street"},
 		// A box set's album beside each book's own title: the tail names the folder.
 		{"tail names the folder", "The Expanse Box Set", "The Expanse Box Set: Leviathan Wakes", "Leviathan Wakes", unread, "The Expanse Box Set: Leviathan Wakes"},
@@ -417,10 +432,12 @@ func TestPartsTitle(t *testing.T) {
 		want               bool
 	}{
 		{"", "Prologue", "The Dragon Reborn", true},
-		{"The Wheel of Time", "Chapter 1", "The Dragon Reborn", true},
-		{"The Odyssey", "Chapter 1", "Odyssey", false},
+		{"The Wheel of Time", "Ravens", "The Dragon Reborn", true},
+		{"The Wheel of Time", "Chapter 1", "The Dragon Reborn", false},
+		{"The Odyssey", "The Voyage", "Odyssey", false},
 		{"The Expanse", "The Expanse: Leviathan Wakes", "Leviathan Wakes", false},
 		{"", "The Dragon Reborn", "The Dragon Reborn", false},
+		{"", "The Dragon Reborn", "the dragon reborn", false},
 	} {
 		var m Metadata
 		m.setTitle(tc.album, tc.title)
