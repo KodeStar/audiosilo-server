@@ -848,10 +848,13 @@ type BookEdit struct {
 	// ASIN, while that ASIN is no admin's own edit (one typed in since, the
 	// same value), else ErrMatchedSince. "" keeps the zero MatchIf's rule.
 	MatchIfASIN string
-	// KeepEditedTitle protects a fill against a title edit made after it read the book.
-	KeepEditedTitle bool
-	Source          string
-	UserID          int64
+	// KeepEdited leaves a field an admin edited after the match run read the
+	// book as it is: a run never plans over an admin's edit (matchrun's plan
+	// and tidyTitle), so one there now was made since (a revert of a
+	// community title included).
+	KeepEdited bool
+	Source     string
+	UserID     int64
 }
 
 // normalizeSource is where an edit or a custom cover came from, as stored:
@@ -1133,8 +1136,8 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 			 ON CONFLICT(library_id, path, field) DO UPDATE SET
 			     value = excluded.value, source = excluded.source,
 			     updated_by = excluded.updated_by, updated_at = excluded.updated_at
-			 WHERE NOT (? AND book_overrides.source = 'edited')`,
-			ref.LibraryID, path, field, v, edit.Source, editor, now, edit.KeepEditedTitle && field == FieldTitle); err != nil {
+			 WHERE NOT (? AND book_overrides.source = '`+SourceEdited+`')`,
+			ref.LibraryID, path, field, v, edit.Source, editor, now, edit.KeepEdited); err != nil {
 			return err
 		}
 	}

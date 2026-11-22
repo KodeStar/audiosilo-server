@@ -1358,3 +1358,44 @@ func TestFieldShowsTheEnrichmentUnderAnOverride(t *testing.T) {
 		t.Errorf("no enrichment = %+v, want none", f)
 	}
 }
+
+// TestKeepEditedLeavesAdminEdits: a match run's write (KeepEdited) leaves any
+// field an admin edited since it read the book, not only the title, and still
+// writes the others; without the flag a community edit replaces it.
+func TestKeepEditedLeavesAdminEdits(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p = "A/Book"
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldDescription: "Mine"}}); err != nil {
+		t.Fatal(err)
+	}
+	override := func(field string) string {
+		t.Helper()
+		var v, src string
+		if err := c.db.QueryRowContext(ctx, `SELECT value, source FROM book_overrides
+			WHERE library_id = ? AND path = ? AND field = ?`, lib.ID, p, field).Scan(&v, &src); err != nil {
+			t.Fatal(err)
+		}
+		return v + "|" + src
+	}
+	theirs := map[string]string{FieldDescription: "Theirs", FieldTitle: "Their Title"}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: theirs, Source: SourceCommunity, KeepEdited: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := override(FieldDescription); got != "Mine|"+SourceEdited {
+		t.Errorf("description after a run's write = %q, want the admin's", got)
+	}
+	if got := override(FieldTitle); got != "Their Title|"+SourceCommunity {
+		t.Errorf("title after a run's write = %q", got)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: theirs, Source: SourceCommunity}); err != nil {
+		t.Fatal(err)
+	}
+	if got := override(FieldDescription); got != "Theirs|"+SourceCommunity {
+		t.Errorf("description after an accepted community edit = %q", got)
+	}
+}

@@ -837,7 +837,7 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 	edits := len(w.Set) > 0 || len(w.Revert) > 0 || w.Anchor != nil
 	if edits {
 		edit := catalog.BookEdit{Set: w.Set, Revert: w.Revert, Source: catalog.SourceCommunity, UserID: o.UserID,
-			KeepEditedTitle: o.Scope == ScopeFill}
+			KeepEdited: true}
 		if w.Anchor != nil {
 			how := catalog.MatchHowAccepted
 			if it.Outcome == catalog.OutcomeAuto {
