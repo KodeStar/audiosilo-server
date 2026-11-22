@@ -189,11 +189,12 @@ function CommunityCard({
       ? 'unknown'
       : 'retail';
   // An Unlink takes back the community's overrides (locked, source community),
-  // leaving what is under one (the files' value); any other value stays (an
-  // admin's edit, or an enrichment, which reads as community but isn't an
-  // override), so the book still shows as matched when one is an identifier.
+  // leaving what is under one (the Bridge's enrichment, else the files' value);
+  // any other value stays (an admin's edit, or an enrichment, which reads as
+  // community but isn't an override), so the book still shows as matched when
+  // one is an identifier (server#350).
   const keepsIdentifier = [detail.fields.asin, detail.fields.isbn].some((f) =>
-    f.locked && f.source === 'community' ? Boolean(f.scanned) : Boolean(f.value),
+    f.locked && f.source === 'community' ? Boolean(f.enrichment || f.scanned) : Boolean(f.value),
   );
 
   const b = detail.book;

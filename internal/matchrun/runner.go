@@ -79,6 +79,13 @@ const DetailDramatizationOnly = "dramatization_only"
 // review however high it scored (server#306).
 const DetailIdentifierDisagrees = "identifier_disagrees"
 
+// DetailIdentifierElsewhere is a review item's detail when the book's hint ASIN or
+// ISBN found a work the book doesn't agree with (as DetailIdentifierDisagrees),
+// so the run asked again by the book's own facts alone and found another work:
+// that one is proposed, held for review however confident, as the book still
+// carries an identifier naming something else (server#352).
+const DetailIdentifierElsewhere = "identifier_elsewhere"
+
 // DetailWeakMatch is a match item's detail when its best candidate scored
 // below ReviewFloor: recorded as no match (the community most likely doesn't
 // have the book), its score kept for the review's wording.
@@ -286,7 +293,8 @@ func (r *Runner) settleBeforeStart(ctx context.Context) {
 // settleOwn settles run id once its finishing write (FinishMatching,
 // FinishApply) failed, every worker of it done: left marked working it would
 // refuse every Unlink of its library until the next start (server#350), with
-// the Unlink's own settle (SettleOrphans) only a backstop.
+// the Unlink's own settle (SettleOrphans) only a backstop. A matching run that
+// recorded every book settles ready, its review kept (catalog.SettleMatchRuns).
 func (r *Runner) settleOwn(ctx context.Context, id int64) {
 	if _, err := r.cat.SettleMatchRun(context.WithoutCancel(ctx), id); err != nil {
 		r.log.Error("settle match run failed", "run", id, "err", err)
@@ -322,7 +330,7 @@ const (
 	Stopping
 	// Settled: the run was marked working with nothing behind it (a finishing
 	// write failed, or a stopped server left it) and is settled now: matching ->
-	// interrupted, applying -> ready.
+	// interrupted (ready once every book was recorded), applying -> ready.
 	Settled
 )
 
@@ -465,27 +473,89 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 	if err != nil {
 		return item, err
 	}
-	noRecording, narrated := false, false
-	if len(cands) > 0 {
-		rec := meta.DefaultRecording(&cands[0], b.Duration, o.Region, q.Narrators)
-		rec = meta.FitRecording(&cands[0], rec, b.Duration, o.Region, q.Narrators)
-		item.Proposal = Propose(&cands[0], rec)
-		noRecording = rec == nil && len(cands[0].Recordings) > 0
-		narrated = narratorReads(&cands[0], item.Proposal, q.Narrators)
+	m := judge(cands, q, b.Duration, o.Region)
+	if o.Mode == catalog.MatchModeMatch && len(cands) > 0 && !identifierAgrees(&cands[0]) &&
+		(q.BookASIN != "" || q.BookISBN != "") {
+		// The hint names another book (a wrong volume's ASIN, server#352), and
+		// metaserve answers one work per request, so the right one is lost
+		// behind it: asked again by the book's own facts alone. What that finds,
+		// when it is another work worth a look, is the item, held for review
+		// however confident (the book still carries an identifier naming
+		// something else); else, or when that ask fails, the hint's work
+		// stays held. Not an unknown_asin run's book: its ASIN is its own, no
+		// hint, and one the community knows now is never applied over
+		// (asinKnownSince), so a second ask would be spent for nothing.
+		bare := q
+		bare.BookASIN, bare.BookISBN = "", ""
+		again, err := r.matcher.Candidates(ctx, bare)
+		if err != nil && ctx.Err() == nil {
+			// Not the item's failure (the hint's work stands), so said here or
+			// nowhere.
+			r.log.Info("match run: asking again without the identifier failed", "library", b.LibraryID, "path", b.RelPath, "err", err)
+		}
+		if err == nil && len(again) > 0 && again[0].WorkID != cands[0].WorkID {
+			if other := judge(again, bare, b.Duration, o.Region); other.outcome != catalog.OutcomeNone {
+				m, cands = other, again
+				m.outcome = catalog.OutcomeReview
+				m.holds = slices.Insert(m.holds, 0, DetailIdentifierElsewhere)
+			}
+		}
 	}
-	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration, narrated)
+	item.Proposal, item.Outcome, item.Score, item.RunnerUp = m.proposal, m.outcome, m.score, m.runnerUp
 	switch {
-	case item.Outcome == catalog.OutcomeReview && !identifierAgrees(&cands[0]):
-		item.Detail = DetailIdentifierDisagrees
-	case item.Outcome == catalog.OutcomeReview && noRecording:
-		item.Detail = DetailDramatizationOnly
-	case item.Outcome == catalog.OutcomeReview && !lengthFits(item.Proposal, b.Duration, narrated):
-		item.Detail = DetailLengthDiffers
+	case len(m.holds) > 0:
+		// A review item: every reason it is held for, the first its detail
+		// (server#352).
+		item.Detail = m.holds[0]
+		if len(m.holds) > 1 {
+			item.Holds = m.holds
+		}
 	case item.Outcome == catalog.OutcomeNone && len(cands) > 0:
 		// A weak fit is no proposal: the review offers nothing to apply.
 		item.Detail, item.Proposal = DetailWeakMatch, catalog.MatchProposal{Values: map[string]string{}}
 	}
 	return item, nil
+}
+
+// judged is a match's verdict on its best candidate (judge): the proposal, the
+// outcome with the best score and the next one's, and every reason a review
+// item is held for (DetailIdentifierDisagrees, DetailDramatizationOnly,
+// DetailLengthDiffers, in that order; none for one only short of the score or
+// lead).
+type judged struct {
+	proposal        catalog.MatchProposal
+	outcome         string
+	score, runnerUp int
+	holds           []string
+}
+
+// judge is matchBook's verdict on cands, the answer to q for a book of seconds
+// in region's marketplace. The recording proposed is DefaultRecording's, or the
+// one the length agrees with when that is another edition (meta.FitRecording).
+func judge(cands []meta.MatchCandidate, q meta.MatchQuery, seconds float64, region string) judged {
+	j := judged{proposal: catalog.MatchProposal{Values: map[string]string{}}}
+	noRecording, narrated := false, false
+	if len(cands) > 0 {
+		rec := meta.DefaultRecording(&cands[0], seconds, region, q.Narrators)
+		rec = meta.FitRecording(&cands[0], rec, seconds, region, q.Narrators)
+		j.proposal = Propose(&cands[0], rec)
+		noRecording = rec == nil && len(cands[0].Recordings) > 0
+		narrated = narratorReads(&cands[0], j.proposal, q.Narrators)
+	}
+	j.outcome, j.score, j.runnerUp = Classify(cands, j.proposal, seconds, narrated)
+	if j.outcome != catalog.OutcomeReview {
+		return j
+	}
+	if !identifierAgrees(&cands[0]) {
+		j.holds = append(j.holds, DetailIdentifierDisagrees)
+	}
+	if noRecording {
+		j.holds = append(j.holds, DetailDramatizationOnly)
+	}
+	if !lengthFits(j.proposal, seconds, narrated) {
+		j.holds = append(j.holds, DetailLengthDiffers)
+	}
+	return j
 }
 
 // candidates asks the community service for q's candidates, marking item as the
@@ -735,7 +805,9 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 // change, or no book there now) or failed, with a code saying why. A community
 // match it records (Writes.Anchor) goes in with the fields, in one transaction:
 // made "auto" for a confident item, "accepted" for a review item the admin
-// included, and a refresh's heal keeps how the book was matched.
+// included, credited to this run. A refresh's heal or new identifier and a
+// repick's ASIN only rewrite the book's own match, which keeps how, when and by
+// whom it was made (catalog.MatchAnchor: the anchor write under a MatchIf).
 func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catalog.MatchRunItem, o ApplyOptions) (applied, detail string) {
 	mode := run.Mode
 	st, err := r.cat.BookMatchState(ctx, it.LibraryID, it.Path)
@@ -767,12 +839,7 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 		edit := catalog.BookEdit{Set: w.Set, Revert: w.Revert, Source: catalog.SourceCommunity, UserID: o.UserID}
 		if w.Anchor != nil {
 			how := catalog.MatchHowAccepted
-			switch {
-			case !newMatches(mode):
-				// The book's own match, healed or its identifiers recorded
-				// (planRefresh, planFor's repick): kept how it was made.
-				how = st.Anchor.How
-			case it.Outcome == catalog.OutcomeAuto:
+			if it.Outcome == catalog.OutcomeAuto {
 				how = catalog.MatchHowAuto
 			}
 			// Only while the book's match is still the one read here (for a

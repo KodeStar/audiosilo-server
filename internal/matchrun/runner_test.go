@@ -29,17 +29,19 @@ type fakeMatcher struct {
 	// matched by its work alone, or one whose ASIN and ISBN found nothing.
 	byWork map[string][]meta.MatchCandidate
 	// answer, when set, answers every match-mode query (one with no ASIN or ISBN).
-	answer  func(q meta.MatchQuery) []meta.MatchCandidate
-	fail    bool                    // every query fails
-	block   chan struct{}           // when set, each query waits on it (or the context)
-	before  func(q meta.MatchQuery) // when set, called first with each query
-	queries []meta.MatchQuery
+	answer func(q meta.MatchQuery) []meta.MatchCandidate
+	fail   bool // every query fails
+	// failWhen, when set, fails the queries it says so of.
+	failWhen func(q meta.MatchQuery) bool
+	block    chan struct{}           // when set, each query waits on it (or the context)
+	before   func(q meta.MatchQuery) // when set, called first with each query
+	queries  []meta.MatchQuery
 }
 
 func (f *fakeMatcher) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta.MatchCandidate, error) {
 	f.mu.Lock()
 	f.queries = append(f.queries, q)
-	block, fail, before := f.block, f.fail, f.before
+	block, fail, before := f.block, f.fail || (f.failWhen != nil && f.failWhen(q)), f.before
 	f.mu.Unlock()
 	if before != nil {
 		before(q)
@@ -521,25 +523,34 @@ func (e *env) refuseStatus(t *testing.T, status string) func() {
 // TestRunSettlesItselfWhenItsFinishFails: a run whose finishing write fails
 // (FinishMatching, FinishApply) settles itself once its workers are done,
 // rather than staying marked working, refusing every Unlink of its library
-// until the next start (server#350).
+// until the next start (server#350). A match run that recorded every book
+// settles ready, its review kept to apply, not interrupted.
 func TestRunSettlesItselfWhenItsFinishFails(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	e.book(t, "A/One", "One", "", nil)
 	e.matcher.byTitle["One"] = []meta.MatchCandidate{cand("the-martian", 97, "")}
 
-	lift := e.refuseStatus(t, catalog.MatchReady)
+	// FinishMatching's write alone (it stamps the finish; a settle keeps the
+	// start as the finish), so the settle after it goes through.
+	if _, err := e.db.ExecContext(ctx, `CREATE TRIGGER refuse_finish BEFORE UPDATE OF status ON match_runs
+		WHEN OLD.status = 'matching' AND NEW.finished_at <> NEW.started_at
+		BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
 	run := e.start(t, catalog.MatchModeMatch, "")
-	lift()
-	if run.Status != catalog.MatchInterrupted {
-		t.Fatalf("match whose finish failed = %s, want interrupted, not left matching", run.Status)
+	if _, err := e.db.ExecContext(ctx, `DROP TRIGGER refuse_finish`); err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != catalog.MatchReady || run.Done != run.Total || run.Counts.Auto != 1 {
+		t.Fatalf("complete match whose finish failed = %+v, want ready with its item, not interrupted", run)
 	}
 
 	run = e.start(t, catalog.MatchModeMatch, "")
 	if run.Status != catalog.MatchReady {
 		t.Fatalf("run = %+v", run)
 	}
-	lift = e.refuseStatus(t, catalog.MatchApplied)
+	lift := e.refuseStatus(t, catalog.MatchApplied)
 	e.applyAndWait(t, run, ScopeFill)
 	lift()
 	if got, _ := e.cat.GetMatchRun(ctx, run.ID); got.Status != catalog.MatchReady {

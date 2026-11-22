@@ -152,6 +152,11 @@ type MatchCandidate struct {
 	// the older search it is absent, except on an identifier lookup's hit,
 	// which carries the identifier it was found by.
 	Reasons *MatchReasons `json:"reasons,omitempty"`
+	// Recorded marks the book's recorded community match, added by the
+	// console's match search (the api's handleAdminMatch) when the book's own
+	// search missed it: named, not matched, so the console shows it as the
+	// current match rather than by its score (server#331).
+	Recorded bool `json:"recorded,omitempty"`
 }
 
 // IdentifierHit reports whether the identifier the query sent (the book's own

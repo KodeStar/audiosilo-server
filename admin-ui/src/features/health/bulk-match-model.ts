@@ -63,29 +63,39 @@ export function canApply(run: MatchRun): boolean {
   return run.status === 'ready';
 }
 
+/** The details a match run holds a review item for (matchrun's Detail* constants). */
+const HOLD_REASONS = [
+  'identifier_disagrees',
+  'identifier_elsewhere',
+  'dramatization_only',
+  'length_differs',
+] as const;
+
+/** One of them: what the review has wording for (the row's HOLD_TEXT). */
+export type HoldReason = (typeof HOLD_REASONS)[number];
+
 /**
- * How far a recording may be off the book's length before a match run holds it
- * for review (meta.PlausibleRuntimeOff; a recording the book's narrator reads
- * may be further off, which the console can't tell).
+ * Every reason a review item is held for: the run records them all (server#352),
+ * `holds` when there is more than one, else its detail alone.
  */
-const PLAUSIBLE_RUNTIME_OFF = 0.1;
+export function holdReasons(item: Pick<MatchRunItem, 'detail' | 'holds'>): HoldReason[] {
+  const all = item.holds ?? (item.detail ? [item.detail] : []);
+  return all.filter((d): d is HoldReason => (HOLD_REASONS as readonly string[]).includes(d));
+}
 
 /**
  * The book's length now and its proposed recording's, in seconds, for an item
- * held for its length, and for one held for its identifier whose recording is
- * that far off too (the run records only the first reason, server#352).
- * Undefined when either is unknown, or the item is held for neither.
+ * held for its length (among its reasons or alone). Undefined when either is
+ * unknown, or the item isn't held for it.
  */
 export function heldLengths(
-  item: Pick<MatchRunItem, 'detail' | 'proposal' | 'book'>,
+  item: Pick<MatchRunItem, 'detail' | 'holds' | 'proposal' | 'book'>,
 ): { book: number; recording: number } | undefined {
   const book = item.book.duration ?? 0;
-  const off = runtimeOff(item.proposal.runtime_min, book);
-  if (off === undefined) return undefined;
-  const held =
-    item.detail === 'length_differs' ||
-    (item.detail === 'identifier_disagrees' && off > PLAUSIBLE_RUNTIME_OFF);
-  return held ? { book, recording: (item.proposal.runtime_min ?? 0) * 60 } : undefined;
+  if (runtimeOff(item.proposal.runtime_min, book) === undefined) return undefined;
+  return holdReasons(item).includes('length_differs')
+    ? { book, recording: (item.proposal.runtime_min ?? 0) * 60 }
+    : undefined;
 }
 
 /**
@@ -264,9 +274,7 @@ export function hasCloseScore(item: MatchRunItem): boolean {
     item.outcome === 'review' &&
     item.runner_up > 0 &&
     item.score - item.runner_up < AUTO_LEAD &&
-    item.detail !== 'length_differs' &&
-    item.detail !== 'dramatization_only' &&
-    item.detail !== 'identifier_disagrees'
+    holdReasons(item).length === 0
   );
 }
 

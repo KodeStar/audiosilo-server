@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Radio } from '@base-ui/react/radio';
 import { RadioGroup } from '@base-ui/react/radio-group';
 import { useQueryClient } from '@tanstack/react-query';
@@ -188,10 +188,22 @@ function MatchBody({
   const [busy, setBusy] = useState(false);
   const search = useMatchCandidates(b.library_id, b.path, by, true);
   const candidates = search.data ?? [];
-  // The book's recorded match: its work starts picked when the search finds it.
+  // The book's recorded match: its work starts picked when the search finds it,
+  // else the candidate the server added for it (`recorded`: under the work it
+  // was merged into when its id was retired).
   const current = detail.community_match;
   const picked =
-    candidates.find((c) => c.work_id === (pickId ?? current?.work_id)) ?? candidates[0];
+    candidates.find((c) => c.work_id === (pickId ?? current?.work_id)) ??
+    (pickId === undefined ? candidates.find((c) => c.recorded) : undefined) ??
+    candidates[0];
+  // Keep the opening pick visible, even when the server appended it last.
+  const scrolled = useRef(false);
+  const scrollToInitialPick = useCallback((row: HTMLElement | null) => {
+    if (row && !scrolled.current) {
+      row.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+      scrolled.current = true;
+    }
+  }, []);
   // The recording chosen here, else the recorded one while its work still lists it,
   // else the likeliest.
   const recordingOf = (c: MatchCandidate, id = recId) => {
@@ -338,6 +350,7 @@ function MatchBody({
           search={search}
           candidates={candidates}
           picked={picked}
+          pickedRef={pickId === undefined && !search.isFetching ? scrollToInitialPick : undefined}
           bookSeconds={b.duration}
           addUrl={addBookUrl({
             asin: by.asin || b.asin,
@@ -445,6 +458,7 @@ function Candidates({
   search,
   candidates,
   picked,
+  pickedRef,
   bookSeconds,
   addUrl,
   bookTitle,
@@ -454,6 +468,7 @@ function Candidates({
   search: ReturnType<typeof useMatchCandidates>;
   candidates: MatchCandidate[];
   picked: MatchCandidate | undefined;
+  pickedRef?: (row: HTMLElement | null) => void;
   bookSeconds: number;
   /** Add it on the community site, for when nothing matches (server#370), or nothing well (server#392). */
   addUrl: string;
@@ -518,6 +533,7 @@ function Candidates({
           return (
             <Radio.Root
               key={c.work_id}
+              ref={c === picked ? pickedRef : undefined}
               value={c.work_id}
               className="group flex w-full cursor-pointer items-center gap-3 rounded-[12px] border bg-card px-3.5 py-3 text-left transition-colors duration-(--dur-1) outline-none hover:border-border-strong data-checked:border-brand data-checked:bg-[color-mix(in_oklab,var(--brand)_6%,var(--card))]"
             >
@@ -545,9 +561,15 @@ function Candidates({
                 ) : null}
               </span>
               <span className="flex shrink-0 flex-col items-end gap-1 text-right">
-                <Badge variant={scoreTone(c.score)}>
-                  {t('book.match.score', { score: Math.round(c.score) })}
-                </Badge>
+                {c.recorded ? (
+                  // Named, not matched: the book's recorded match, which the
+                  // search missed (server#331), says so instead of a score.
+                  <Badge variant="secondary">{t('book.match.recorded')}</Badge>
+                ) : (
+                  <Badge variant={scoreTone(c.score)}>
+                    {t('book.match.score', { score: Math.round(c.score) })}
+                  </Badge>
+                )}
                 {length ? (
                   <span className="text-[11.5px] text-subtle-foreground">
                     {lengthLabel(t, lang, length)}

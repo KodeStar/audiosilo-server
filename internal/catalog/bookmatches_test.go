@@ -205,13 +205,14 @@ func TestUnlinkWhileMatchRunWorks(t *testing.T) {
 }
 
 // SettleMatchRuns settles every run marked working but the one kept, in one
-// transaction (matching -> interrupted, applying -> ready), counting them;
-// SettleMatchRun settles one, only while it is marked working.
+// transaction (matching -> interrupted, or ready once it recorded every book:
+// server#350; applying -> ready), counting them; SettleMatchRun settles one,
+// only while it is marked working.
 func TestSettleMatchRuns(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	start := func(apply bool) int64 {
-		id, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeMatch})
+		id, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeMatch, Total: 2})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -232,12 +233,30 @@ func TestSettleMatchRuns(t *testing.T) {
 		}
 		return r.Status
 	}
-	matching, applying, kept := start(false), start(true), start(true)
-	if n, err := c.SettleMatchRuns(ctx, kept); n != 2 || err != nil {
-		t.Fatalf("settle = %d %v, want 2", n, err)
+	matching, complete, applying, kept := start(false), start(false), start(true), start(true)
+	// One book of two recorded; the other run recorded both (an item and a
+	// book with nothing worth keeping), so only its finishing write was lost.
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	item := func() *MatchRunItem {
+		return &MatchRunItem{LibraryID: lib.ID, Path: "A/Book", Outcome: OutcomeReview, Proposal: MatchProposal{WorkID: "w"}}
 	}
-	if status(matching) != MatchInterrupted || status(applying) != MatchReady || status(kept) != MatchApplying {
-		t.Fatalf("statuses = %s %s %s", status(matching), status(applying), status(kept))
+	for _, rec := range []struct {
+		run  int64
+		item *MatchRunItem
+	}{{matching, item()}, {complete, item()}, {complete, nil}} {
+		if err := c.RecordMatchItem(ctx, rec.run, rec.item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := c.SettleMatchRuns(ctx, kept); n != 3 || err != nil {
+		t.Fatalf("settle = %d %v, want 3", n, err)
+	}
+	if status(matching) != MatchInterrupted || status(complete) != MatchReady || status(applying) != MatchReady ||
+		status(kept) != MatchApplying {
+		t.Fatalf("statuses = %s %s %s %s", status(matching), status(complete), status(applying), status(kept))
+	}
+	if r, _ := c.GetMatchRun(ctx, complete); r.FinishedAt == nil || r.Counts.Review != 1 {
+		t.Fatalf("a complete run settled = %+v, want ready with its review and a finished_at", r)
 	}
 	if r, _ := c.GetMatchRun(ctx, matching); r.FinishedAt == nil {
 		t.Fatal("an interrupted run has no finished_at")
@@ -769,13 +788,14 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0HAND0001" || a.How != MatchHowAccepted {
 		t.Fatalf("a re-accept since = %+v, want it kept", a)
 	}
-	// Still the one read: written, with the rest of the edit.
+	// Still the one read: written, with the rest of the edit, the match keeping
+	// how it was made (TestBookkeepingKeepsTheMatchsProvenance).
 	read = anchorOf(t, c, ctx, lib.ID, p)
 	if err := edit("Written", &read); err != nil {
 		t.Fatal(err)
 	}
-	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0FILLED01" || a.How != MatchHowAuto {
-		t.Fatalf("still the one read = %+v, want it written", a)
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0FILLED01" || a.How != MatchHowAccepted {
+		t.Fatalf("still the one read = %+v, want it written, still accepted", a)
 	}
 	if got := field(FieldTitle); got != "Written" {
 		t.Fatalf("title = %q, want the edit applied", got)
@@ -996,5 +1016,345 @@ func TestMatchWorkIDs(t *testing.T) {
 		if got[ref] != sources[ref].MatchWorkID {
 			t.Errorf("%v: match work id %q, WorkSources' %q", ref, got[ref], sources[ref].MatchWorkID)
 		}
+	}
+}
+
+// matchProvenance is the book's recorded match's how, run, editor and time, as
+// stored (run and editor NULL as 0).
+func matchProvenance(t *testing.T, c *Catalog, ctx context.Context, libID int64, path string) (how string, runID, setBy int64, setAt string) {
+	t.Helper()
+	if err := c.db.QueryRowContext(ctx, `SELECT how, COALESCE(run_id, 0), COALESCE(set_by, 0), set_at
+	     FROM book_matches WHERE library_id = ? AND path = ?`, libID, path).Scan(&how, &runID, &setBy, &setAt); err != nil {
+		t.Fatal(err)
+	}
+	return how, runID, setBy, setAt
+}
+
+// TestBookkeepingKeepsTheMatchsProvenance (server#355 items 1-2): a run's
+// write of a match it read (MatchIf naming one: a refresh's heal or new
+// identifier, a repick's ASIN) rewrites the work, recording and offered
+// identifiers only, so the match keeps how, by whom, when and by which run it
+// was made, whatever the edit's own say. An accept by hand (no MatchIf) is a
+// match made again: its provenance replaces the old one's.
+func TestBookkeepingKeepsTheMatchsProvenance(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	uid := seedUser(t, c, ctx)
+	const p = "A/Book"
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{
+		Match: &MatchAnchor{WorkID: "the-work", RecordingID: "rec-1"}, Source: SourceCommunity, UserID: uid,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	how, run, by, at := matchProvenance(t, c, ctx, lib.ID, p)
+	if how != MatchHowAccepted || run != 0 || by != uid || at == "" {
+		t.Fatalf("accepted = %s run %d by %d at %q", how, run, by, at)
+	}
+	bookkeep := func(label string, a MatchAnchor) {
+		t.Helper()
+		was := anchorOf(t, c, ctx, lib.ID, p)
+		a.How, a.RunID = MatchHowAuto, 42
+		if err := c.EditBook(ctx, lib.ID, p, BookEdit{
+			Set: map[string]string{FieldDescription: label}, Match: &a, MatchIf: &was, Source: SourceCommunity,
+		}); err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		// A heal to another work id moves the time alone: the upcoming job
+		// reads a change of work by it.
+		heal := a.WorkID != was.WorkID
+		h, r, b, s := matchProvenance(t, c, ctx, lib.ID, p)
+		if h != how || r != run || b != by || (s != at) != heal {
+			t.Fatalf("%s: provenance = %s run %d by %d at %q, want %s run %d by %d kept (at %q, moved %v)",
+				label, h, r, b, s, how, run, by, at, heal)
+		}
+		at = s
+		if got := anchorOf(t, c, ctx, lib.ID, p); got.WorkID != a.WorkID || got.OfferedASIN != a.OfferedASIN {
+			t.Fatalf("%s: anchor = %+v, want %+v written", label, got, a)
+		}
+	}
+	// A refresh's new identifier, then a repick's ASIN: the same match.
+	bookkeep("identifier", MatchAnchor{WorkID: "the-work", RecordingID: "rec-1", OfferedASIN: "B0FILLED01"})
+	bookkeep("repick", MatchAnchor{WorkID: "the-work", RecordingID: "rec-1", OfferedASIN: "B0UKREPICK"})
+	// A heal: the work merged into another; still the match the admin made,
+	// its time the heal's.
+	bookkeep("heal", MatchAnchor{WorkID: "merged-work", RecordingID: "rec-1", OfferedASIN: "B0UKREPICK"})
+
+	// The match accepted again by hand: made anew, by its run-less editor now.
+	other := seedUserNamed(t, c, ctx, "other")
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{
+		Match: &MatchAnchor{WorkID: "merged-work", RecordingID: "rec-1"}, Source: SourceCommunity, UserID: other,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if h, r, b, s := matchProvenance(t, c, ctx, lib.ID, p); h != MatchHowAccepted || r != 0 || b != other || s == at {
+		t.Fatalf("re-accepted = %s run %d by %d at %q, want the new accept's", h, r, b, s)
+	}
+}
+
+// TestOfferedLeavesTheBooksOwnIdentifier (server#355 item 3): an identifier a
+// match offers that the book already holds of its own (its files', an
+// enrichment's, an admin's) is not recorded as offered, so a refresh fills it
+// once the book loses it; one that is a community value (an earlier match's),
+// or that the book doesn't hold, is.
+func TestOfferedLeavesTheBooksOwnIdentifier(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	for _, p := range []string{"A/Edited", "A/Enriched", "A/Community"} {
+		if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/Edited", BookEdit{Set: map[string]string{FieldASIN: "B0OWN00001"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.BackfillASIN(ctx, lib.ID, "A/Enriched", "B0OWN00001"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/Community", BookEdit{
+		Set: map[string]string{FieldASIN: "B0OWN00001"}, Source: SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	accept := func(p string) MatchAnchor {
+		t.Helper()
+		if err := c.EditBook(ctx, lib.ID, p, BookEdit{
+			Match:  &MatchAnchor{WorkID: "w", OfferedASIN: "b0own00001", OfferedISBN: "9780000000002"},
+			Source: SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return anchorOf(t, c, ctx, lib.ID, p)
+	}
+	for _, p := range []string{"A/Edited", "A/Enriched"} {
+		if a := accept(p); a.OfferedASIN != "" || a.OfferedISBN != "9780000000002" {
+			t.Errorf("%s: offered = %q %q, want the book's own ASIN left out, the ISBN kept", p, a.OfferedASIN, a.OfferedISBN)
+		}
+	}
+	if a := accept("A/Community"); a.OfferedASIN != "B0OWN00001" || a.OfferedISBN != "9780000000002" {
+		t.Errorf("community ASIN: offered = %q %q, want both recorded", a.OfferedASIN, a.OfferedISBN)
+	}
+}
+
+// TestOfferedReadsTheBookAsTheEditLeavesIt (server#355): the book's own
+// identifiers are read as the match's own edit leaves them. One the edit's
+// revert uncovers (an enrichment's under an earlier match's ASIN) is the
+// book's own, so not recorded as offered; one the edit writes as a community
+// value over the book's own, or uncovers nothing by reverting, is recorded;
+// and a community edit's revert never uncovers what an admin's edit hides.
+func TestOfferedReadsTheBookAsTheEditLeavesIt(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const own, other = "B0OWN00001", "B0OTHER001"
+	community := func(asin string) BookEdit {
+		return BookEdit{Set: map[string]string{FieldASIN: asin}, Source: SourceCommunity}
+	}
+	for p, before := range map[string][]BookEdit{
+		"A/Uncovered": {community(other)},                           // the enrichment's ASIN under an earlier match's
+		"A/Bare":      {community(own)},                             // an earlier match's ASIN over nothing
+		"A/Replaced":  nil,                                          // the enrichment's ASIN alone
+		"A/Edited":    {{Set: map[string]string{FieldASIN: other}}}, // an admin's ASIN over the enrichment's
+	} {
+		if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+			t.Fatal(err)
+		}
+		if p != "A/Bare" {
+			if err := c.BackfillASIN(ctx, lib.ID, p, own); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, e := range before {
+			if err := c.EditBook(ctx, lib.ID, p, e); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	accept := func(p, offered string, edit BookEdit) string {
+		t.Helper()
+		edit.Match, edit.Source = &MatchAnchor{WorkID: "w", OfferedASIN: offered}, SourceCommunity
+		if err := c.EditBook(ctx, lib.ID, p, edit); err != nil {
+			t.Fatal(err)
+		}
+		return anchorOf(t, c, ctx, lib.ID, p).OfferedASIN
+	}
+	revert := BookEdit{Revert: []string{FieldASIN}}
+	if got := accept("A/Uncovered", own, revert); got != "" {
+		t.Errorf("uncovered by the revert: offered = %q, want the book's own ASIN left out", got)
+	}
+	if st, err := c.BookMatchState(ctx, lib.ID, "A/Uncovered"); err != nil || st.Fields[FieldASIN].Value != own || st.Fields[FieldASIN].Locked {
+		t.Fatalf("uncovered = %+v %v, want the enrichment's ASIN showing", st.Fields[FieldASIN], err)
+	}
+	if got := accept("A/Bare", own, revert); got != own {
+		t.Errorf("reverted to nothing: offered = %q, want it recorded", got)
+	}
+	if got := accept("A/Replaced", other, BookEdit{Set: map[string]string{FieldASIN: other}}); got != other {
+		t.Errorf("written over the book's own: offered = %q, want it recorded", got)
+	}
+	if got := accept("A/Edited", own, revert); got != own {
+		t.Errorf("an admin's ASIN kept by the revert: offered = %q, want the hidden one recorded", got)
+	}
+}
+
+// TestUnlinkMarksTheRunsThatAppliedIt (server#331 item 6): an Unlink marks the
+// book's applied items of every kept run unlinked (still applied, so the run's
+// counts stay what its apply did), leaving its other items and other books'
+// alone; an Unlink of a book with nothing to take back marks nothing.
+func TestUnlinkMarksTheRunsThatAppliedIt(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	for _, p := range []string{"A/Book", "A/Other"} {
+		if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+			t.Fatal(err)
+		}
+		anchorBook(t, c, ctx, lib.ID, p, "the-work")
+	}
+	run, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeMatch, Total: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range []MatchRunItem{
+		{LibraryID: lib.ID, Path: "A/Book", Outcome: OutcomeAuto},
+		{LibraryID: lib.ID, Path: "A/Book", Outcome: OutcomeReview},
+		{LibraryID: lib.ID, Path: "A/Other", Outcome: OutcomeAuto},
+	} {
+		if err := c.RecordMatchItem(ctx, run, &it); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items := func() []MatchRunItem {
+		t.Helper()
+		got, _, err := c.ListMatchRunItems(ctx, run, "", 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		slices.SortFunc(got, func(a, b MatchRunItem) int { return int(a.ID - b.ID) })
+		return got
+	}
+	all := items()
+	if err := c.FinishMatching(ctx, run, MatchReady, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range []MatchRunItem{all[0], all[2]} {
+		if err := c.MarkMatchItem(ctx, run, it.ID, ItemApplied, "cover_failed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/Book", BookEdit{Match: &MatchAnchor{}}); err != nil {
+		t.Fatal(err)
+	}
+	got := items()
+	want := []struct{ applied, detail string }{
+		{ItemApplied, ItemDetailUnlinked}, {"", ""}, {ItemApplied, "cover_failed"},
+	}
+	for i, w := range want {
+		if got[i].Applied != w.applied || got[i].Detail != w.detail {
+			t.Errorf("item %d (%s) = %q %q, want %q %q", i, got[i].Path, got[i].Applied, got[i].Detail, w.applied, w.detail)
+		}
+	}
+	if r, _ := c.GetMatchRun(ctx, run); r.Counts.Applied != 2 {
+		t.Errorf("applied count = %d, want the apply's 2 kept", r.Counts.Applied)
+	}
+	// Nothing left to take back: the other book's item is not touched by a
+	// second Unlink of this one.
+	if err := c.EditBook(ctx, lib.ID, "A/Book", BookEdit{Match: &MatchAnchor{}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := items(); got[2].Detail != "cover_failed" {
+		t.Errorf("other book's item = %+v, want it as it was", got[2])
+	}
+}
+
+// TestUnlinkWithAnEditRebuildsOnce (server#331 item 6): an Unlink sent with
+// field edits rebuilds the book once, at the end of the edit, and the book
+// reads unlinked with the edit's values; one with a label edit (which reads
+// the books row) rebuilds first, so it adds to the unlinked book's labels.
+func TestUnlinkWithAnEditRebuildsOnce(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	for _, p := range []string{"A/Book", "A/Labels"} {
+		if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+			t.Fatal(err)
+		}
+		anchorBook(t, c, ctx, lib.ID, p, "the-work")
+		if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldGenres: `["Community Genre"]`}, Source: SourceCommunity}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.db.ExecContext(ctx, `CREATE TABLE rebuilds(n INTEGER);
+		INSERT INTO rebuilds VALUES (0);
+		CREATE TRIGGER count_rebuilds AFTER UPDATE OF title ON books BEGIN UPDATE rebuilds SET n = n + 1; END`); err != nil {
+		t.Fatal(err)
+	}
+	rebuilds := func() int {
+		t.Helper()
+		var n int
+		if err := c.db.QueryRowContext(ctx, `SELECT n FROM rebuilds`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = c.db.ExecContext(ctx, `UPDATE rebuilds SET n = 0`)
+		return n
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/Book", BookEdit{Match: &MatchAnchor{}, Set: map[string]string{FieldNarrator: "Mine"}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := rebuilds(); n != 1 {
+		t.Errorf("unlink with a field edit rebuilt the book %d times, want once", n)
+	}
+	b := mustBook(t, c, ctx, lib.ID, "A/Book")
+	if b.Title != "Original Name" || b.Narrator != "Mine" || len(b.Genres) != 0 {
+		t.Errorf("book = title %q narrator %q genres %v, want unlinked with the edit", b.Title, b.Narrator, b.Genres)
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/Labels", BookEdit{Match: &MatchAnchor{}, Add: map[string][]string{FieldTags: {"Mine"}}}); err != nil {
+		t.Fatal(err)
+	}
+	b = mustBook(t, c, ctx, lib.ID, "A/Labels")
+	if b.Title != "Original Name" || len(b.Genres) != 0 || !slices.Equal(b.Tags, []string{"Mine"}) {
+		t.Errorf("labels book = title %q genres %v tags %v, want unlinked with the tag", b.Title, b.Genres, b.Tags)
+	}
+}
+
+// TestFieldShowsTheEnrichmentUnderAnOverride (server#350 item 1): a field's
+// Enrichment is the Bridge's enrichment an override hides (what an Unlink
+// leaves the book with), omitted while none does or there is none.
+func TestFieldShowsTheEnrichmentUnderAnOverride(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	for _, p := range []string{"A/Enriched", "A/Plain"} {
+		if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.BackfillASIN(ctx, lib.ID, "A/Enriched", "B0ENRICHED"); err != nil {
+		t.Fatal(err)
+	}
+	asin := func(p string) FieldValue {
+		t.Helper()
+		st, err := c.BookMatchState(ctx, lib.ID, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Fields[FieldASIN]
+	}
+	if f := asin("A/Enriched"); f.Value != "B0ENRICHED" || f.Enrichment != "" {
+		t.Fatalf("enriched = %+v, want the enrichment as the value, none under it", f)
+	}
+	for _, p := range []string{"A/Enriched", "A/Plain"} {
+		if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldASIN: "B0MATCHED1"}, Source: SourceCommunity}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f := asin("A/Enriched"); f.Value != "B0MATCHED1" || f.Enrichment != "B0ENRICHED" {
+		t.Errorf("overridden enrichment = %+v, want it under the community value", f)
+	}
+	if f := asin("A/Plain"); f.Enrichment != "" {
+		t.Errorf("no enrichment = %+v, want none", f)
 	}
 }

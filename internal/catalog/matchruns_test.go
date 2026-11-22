@@ -149,6 +149,70 @@ func TestListMatchRunItemsBestFirst(t *testing.T) {
 	}
 }
 
+// TestMarkStillToApplyKeepsTheHolds (server#352): a mark that leaves an item
+// still to apply (a stop cut its cover short) keeps every reason the run held it
+// for behind its own detail, a lone one too and through a second such mark, so
+// the review goes on saying them and the item is still taken; an item held for
+// nothing gains none, and a final mark's detail replaces them.
+func TestMarkStillToApplyKeepsTheHolds(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "One", Root: "/tmp/one"})
+	run, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeMatch, Total: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	both := []string{"identifier_disagrees", "length_differs"}
+	for _, it := range []MatchRunItem{
+		{LibraryID: lib.ID, Path: "A/Both", Outcome: OutcomeReview, Detail: both[0], Holds: both},
+		{LibraryID: lib.ID, Path: "A/One", Outcome: OutcomeReview, Detail: "length_differs"},
+		{LibraryID: lib.ID, Path: "A/Sure", Outcome: OutcomeAuto},
+	} {
+		if err := c.RecordMatchItem(ctx, run, &it); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items := func() map[string]MatchRunItem {
+		t.Helper()
+		got, _, err := c.ListMatchRunItems(ctx, run, "", 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]MatchRunItem{}
+		for _, it := range got {
+			out[it.Path] = it
+		}
+		return out
+	}
+	recorded := items()
+	ids := []int64{recorded["A/Both"].ID, recorded["A/One"].ID, recorded["A/Sure"].ID}
+	want := map[string][]string{"A/Both": both, "A/One": {"length_differs"}, "A/Sure": nil}
+	for range 2 { // a second stop finds the first one's mark
+		for _, id := range ids {
+			if err := c.MarkMatchItem(ctx, run, id, "", "cover_pending"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for p, it := range items() {
+			if it.Applied != "" || it.Detail != "cover_pending" || !slices.Equal(it.Holds, want[p]) {
+				t.Errorf("%s = %q %q %v, want cover_pending still to apply, held for %v", p, it.Applied, it.Detail, it.Holds, want[p])
+			}
+		}
+	}
+	if err := c.FinishMatching(ctx, run, MatchReady, ""); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := c.MatchItemsToApply(ctx, run, "fill", ids[:2], nil); err != nil || len(again) != 3 {
+		t.Fatalf("to apply = %d items %v, want all three again", len(again), err)
+	}
+	if err := c.MarkMatchItem(ctx, run, ids[0], ItemApplied, "cover_failed"); err != nil {
+		t.Fatal(err)
+	}
+	if it := items()["A/Both"]; it.Applied != ItemApplied || it.Detail != "cover_failed" || it.Holds != nil {
+		t.Errorf("applied = %q %q %v, want what the apply did alone", it.Applied, it.Detail, it.Holds)
+	}
+}
+
 // TestClearCommunityMatches: clearing one library removes its community overrides
 // and covers and rebuilds its books (the scanned values back, an admin's own edit,
 // upload and an enrichment kept), drops its match runs and its books'

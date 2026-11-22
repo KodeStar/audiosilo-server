@@ -1394,12 +1394,13 @@ describe('bulk matching', () => {
     ).toBeInTheDocument();
   });
 
-  it('gives the lengths of an item held for its identifier when they differ too (server#352)', async () => {
+  it('says every reason an item is held for, its length too (server#352)', async () => {
     const both: MatchRunItem = {
       ...doubtful,
       score: 100,
       runner_up: 0,
       detail: 'identifier_disagrees',
+      holds: ['identifier_disagrees', 'length_differs'],
       proposal: { ...doubtful.proposal, runtime_min: 600 },
       book: { ...doubtful.book, duration: 8 * 3600 },
     };
@@ -1419,9 +1420,76 @@ describe('bulk matching', () => {
     const dialog = await screen.findByRole('dialog');
     await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
     const box = await within(dialog).findByRole('checkbox', { name: 'Apply to Artemis' });
+    const row = within(box.closest('li')!);
+    expect(row.getByText(/^Held for review: the ASIN or ISBN from its tags/)).toBeInTheDocument();
+    expect(row.getByText('The book is 8h long, this recording 10h')).toBeInTheDocument();
+    expect(row.queryByText(/close score/i)).toBeNull();
+  });
+
+  it('words an item found by its title past an identifier naming another book (server#352)', async () => {
+    const elsewhere: MatchRunItem = {
+      ...doubtful,
+      detail: 'identifier_elsewhere',
+      holds: ['identifier_elsewhere', 'dramatization_only'],
+    };
+    mockFetch(
+      routes([run()], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'review' ? [elsewhere] : [confident],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
+    const box = await within(dialog).findByRole('checkbox', { name: 'Apply to Artemis' });
+    const row = within(box.closest('li')!);
     expect(
-      within(box.closest('li')!).getByText('The book is 8h long, this recording 10h'),
+      row.getByText(
+        'Held for review: the ASIN or ISBN from its tags or an Audiobookshelf import names another book, so this match was found by its title instead',
+      ),
     ).toBeInTheDocument();
+    // The second reason reads as one, not another "Held for review".
+    expect(
+      row.getByText(
+        "The community holds only a dramatization of this book, and this book doesn't say it is one",
+      ),
+    ).toBeInTheDocument();
+    expect(row.queryByText(/may belong to another book/)).toBeNull();
+  });
+
+  it('says an applied book was unlinked since (server#331)', async () => {
+    const unlinked: MatchRunItem = {
+      ...confident,
+      applied: 'applied',
+      detail: 'unlinked',
+      changes: {},
+    };
+    const applied = run({ status: 'applied', applied_at: '2026-10-07T10:06:00Z' });
+    applied.counts = { ...applied.counts, pending: 0, review: 0, applied: 1 };
+    mockFetch(
+      routes([applied], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: { items: req.query.get('outcome') === 'auto' ? [unlinked] : [], next_after: 0 },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: /See the books|Review/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /Confident/ }));
+    expect(
+      await within(dialog).findByText(
+        'Unlinked since: its match and community details were taken back',
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/^Applied$/)).toBeNull();
   });
 
   it("starts over on the run's own library", async () => {

@@ -76,6 +76,7 @@ import {
   changeParts,
   firstReviewTab,
   heldLengths,
+  holdReasons,
   isChosen,
   hasCloseScore,
   picksForScope,
@@ -89,6 +90,7 @@ import {
   togglePickRange,
   withId,
   withoutId,
+  type HoldReason,
   type Picks,
 } from './bulk-match-model';
 
@@ -810,6 +812,23 @@ function ItemList({
   );
 }
 
+/** What a review item says for each reason it is held for: first, then among others. */
+const HOLD_TEXT: Record<HoldReason, readonly [string, string]> = {
+  identifier_disagrees: [
+    'health.bulkMatch.item.identifierDisagrees',
+    'health.bulkMatch.item.identifierDisagrees',
+  ],
+  identifier_elsewhere: [
+    'health.bulkMatch.item.identifierElsewhere',
+    'health.bulkMatch.item.identifierElsewhere',
+  ],
+  dramatization_only: [
+    'health.bulkMatch.item.dramatizationOnly',
+    'health.bulkMatch.item.dramatizationToo',
+  ],
+  length_differs: ['health.bulkMatch.item.lengthDiffers', 'health.bulkMatch.item.lengthToo'],
+};
+
 /** A book, the match the run found for it, and what applying writes. */
 function ItemRow({
   item,
@@ -841,9 +860,11 @@ function ItemRow({
   const status =
     item.detail === 'asin_known'
       ? 'asinKnown'
-      : item.matched_since || item.detail === 'matched_since'
-        ? 'matchedSince'
-        : item.applied;
+      : item.detail === 'unlinked'
+        ? 'unlinked'
+        : item.matched_since || item.detail === 'matched_since'
+          ? 'matchedSince'
+          : item.applied;
   const changed = changeParts(change).map((part) =>
     part.kind === 'cover'
       ? t('book.match.cover')
@@ -853,10 +874,10 @@ function ItemRow({
   );
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
-  // An item held for its length says both, the book's as it is now: none once
-  // they read the same (the book's length changed since the run, server#355).
-  // One held for its identifier says them too when they are that far apart (the
-  // run records one reason, server#352).
+  // Every reason the run held it for (server#352). One held for its length says
+  // both, the book's as it is now: none once they read the same (the book's
+  // length changed since the run, server#355).
+  const holds = candidate ? holdReasons(item) : [];
   const held = heldLengths(item);
   const lengths = held
     ? {
@@ -964,26 +985,16 @@ function ItemRow({
             )}
           </span>
         )}
-        {candidate && item.detail === 'identifier_disagrees' ? (
-          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t('health.bulkMatch.item.identifierDisagrees')}
-          </span>
-        ) : null}
-        {candidate && heldForLength ? (
-          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t(
-              item.detail === 'identifier_disagrees'
-                ? 'health.bulkMatch.item.lengthToo'
-                : 'health.bulkMatch.item.lengthDiffers',
-              heldForLength,
-            )}
-          </span>
-        ) : null}
-        {candidate && item.detail === 'dramatization_only' ? (
-          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t('health.bulkMatch.item.dramatizationOnly')}
-          </span>
-        ) : null}
+        {holds.map((reason, i) => {
+          // The first reason says it is held for review; the rest say only why.
+          const [first, too] = HOLD_TEXT[reason];
+          if (reason === 'length_differs' && !heldForLength) return null;
+          return (
+            <span key={reason} className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+              {t(i === 0 ? first : too, reason === 'length_differs' ? heldForLength : undefined)}
+            </span>
+          );
+        })}
         {hasCloseScore(item) ? (
           <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
             {t('health.bulkMatch.item.closeScore')}

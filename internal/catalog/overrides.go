@@ -367,6 +367,12 @@ type FieldValue struct {
 	Locked   bool   `json:"locked"`
 	EditedBy string `json:"edited_by,omitempty"`
 	EditedAt string `json:"edited_at,omitempty"`
+	// Enrichment is the Bridge's enrichment of the field (an ASIN or ISBN its
+	// Audible backfill stored) while an override hides it, omitted otherwise:
+	// what the field falls back to, over Scanned, once that override goes (an
+	// Unlink taking back a community one leaves the book matched by it,
+	// server#350).
+	Enrichment string `json:"enrichment,omitempty"`
 }
 
 // chapterOverrideMatch pairs a chapter_overrides row `co` with the chapters row
@@ -561,6 +567,7 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 			fv.Value, fv.Source = v, SourceCommunity
 		}
 		if o, ok := l.overrides[field]; ok {
+			fv.Enrichment = l.enrichment[field]
 			fv.Value, fv.Source, fv.Locked, fv.EditedBy, fv.EditedAt = o.Value, o.Source, true, o.UpdatedBy, o.UpdatedAt
 		}
 		out[field] = fv
@@ -826,7 +833,10 @@ type BookEdit struct {
 	// the Audible backfill) stays too. A run's bookkeeping of a match it read (a
 	// refresh's heal or new identifier, a repick's ASIN, a match item's new
 	// match), so a match made by hand meanwhile stays, and so do its values: an
-	// ASIN taken from the old match would outrank it (server#354).
+	// ASIN taken from the old match would outrank it (server#354). A MatchIf
+	// naming a match rewrites only its work, recording and offered identifiers:
+	// how, the run, the editor and the time stay the match's own (MatchAnchor),
+	// a hand re-accept of the same match made meanwhile included (server#355).
 	MatchIf *MatchAnchor
 	// MatchIfASIN, beside a zero MatchIf, is the ASIN the book was read with
 	// when it is matched by it alone (an unknown_asin run's book: its own ASIN
@@ -1003,8 +1013,28 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		// the record of it: left behind, its values would match the book to
 		// the same work again on the next run. First, so the rest of the edit
 		// (a series swap, labels) reads the unlinked book and still applies.
-		if _, _, err := clearCommunity(ctx, tx, oneBook(at)); err != nil {
+		// Its rebuild is the edit's own when the rest only writes fields
+		// (rebuilt once, at the end: server#331); one that reads the books row
+		// first (a series swap, labels, chapters) reads it rebuilt.
+		pick := oneBook(at)
+		pick.noRebuild = (len(edit.Set) > 0 || len(edit.Revert) > 0) && !touches(edit, FieldSeries) &&
+			len(edit.Add) == 0 && len(edit.Remove) == 0 && !edit.editsChapters()
+		cleared, _, err := clearCommunity(ctx, tx, pick)
+		if err != nil {
 			return err
+		}
+		if cleared > 0 {
+			// The runs that applied its match no longer show it standing. By
+			// run, outcome and applied first, which idx_match_run_items_counts
+			// covers (the applied items of the runs covering its library),
+			// then the book.
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE match_run_items SET detail = ?
+				  WHERE run_id IN (SELECT id FROM match_runs WHERE library_id IS NULL OR library_id = ?)
+				    AND outcome IN (?, ?) AND applied = ? AND library_id = ? AND path = ?`,
+				ItemDetailUnlinked, ref.LibraryID, OutcomeAuto, OutcomeReview, ItemApplied, ref.LibraryID, path); err != nil {
+				return err
+			}
 		}
 	default:
 		if edit.MatchIf != nil && edit.MatchIf.WorkID == "" {
@@ -1034,7 +1064,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 				return ErrMatchedSince
 			}
 		}
-		if err := writeAnchor(ctx, tx, at, edit.Match, edit.MatchIf, editor, now); err != nil {
+		if err := writeAnchor(ctx, tx, at, bookID, edit.Match, edit.MatchIf, edit, editor, now); err != nil {
 			return err
 		}
 	}
@@ -1058,7 +1088,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	if len(swapRevert) > 0 || len(labelRevert) > 0 {
 		revert = slices.Concat(edit.Revert, swapRevert, labelRevert)
 	}
-	if len(set) == 0 && len(revert) == 0 && edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0 {
+	if len(set) == 0 && len(revert) == 0 && !edit.editsChapters() {
 		if edit.Match != nil && edit.Match.WorkID != "" {
 			// An anchor alone: the match is part of the book's community
 			// chapter basis, so a check it leaves stale goes out of the
@@ -1282,6 +1312,32 @@ func (l *bookLayers) unedited(fields ...string) map[string]FieldValue {
 		delete(c.overrides, f)
 	}
 	return c.resolve()
+}
+
+// edited is l once edit's own field writes are in, as editTx makes them: each
+// value it sets an override of its source, each field it reverts without its
+// override, a community edit taking back only a community value. Not what the
+// edit derives besides (a series swap, a label change: other fields). l itself
+// is not changed.
+func (l *bookLayers) edited(edit BookEdit) *bookLayers {
+	c := *l
+	c.overrides = make(map[string]storedOverride, len(l.overrides)+len(edit.Set))
+	maps.Copy(c.overrides, l.overrides)
+	for field, v := range edit.Set {
+		c.overrides[field] = storedOverride{Value: v, Source: edit.Source}
+	}
+	for _, field := range edit.Revert {
+		if edit.Source != SourceCommunity || c.overrides[field].Source == SourceCommunity {
+			delete(c.overrides, field)
+		}
+	}
+	return &c
+}
+
+// editsChapters reports whether the edit changes the book's chapters (their
+// source, or an admin's chapter edit set or reverted).
+func (e BookEdit) editsChapters() bool {
+	return e.ChapterSource != "" || len(e.ChapterSet) > 0 || len(e.ChapterRevert) > 0
 }
 
 // touches reports whether an edit sets or reverts field.

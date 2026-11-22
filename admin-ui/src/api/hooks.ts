@@ -133,6 +133,9 @@ export const keys = {
   /** Every book page of one library (a prefix: a scan changes them). */
   bookPages: (libraryId: number) => ['admin', 'book', libraryId] as const,
   book: (libraryId: number, path: string) => ['admin', 'book', libraryId, path] as const,
+  /** Every match search of one book (a prefix: an edit changes what they find). */
+  matches: (libraryId: number, path: string) =>
+    ['admin', 'book', libraryId, path, 'match'] as const,
   match: (libraryId: number, path: string, by: MatchBy) =>
     ['admin', 'book', libraryId, path, 'match', by] as const,
   communityCover: (url: string, size: ThumbSize) => ['admin', 'communityCover', size, url] as const,
@@ -634,11 +637,20 @@ export function invalidateBooks(qc: QueryClient, edited: BookRef[] = []) {
  * Writes an edit's answer (the updated book page) into the cache: the book page,
  * and the edited row in place in every loaded list (so a long scrolled list
  * doesn't refetch page by page), then refetches what counts books (facets, the
- * people and series aggregates, the overview).
+ * people and series aggregates, the overview). The book's match searches are
+ * marked stale.
  */
 export function settleBookEdit(qc: QueryClient, detail: AdminBookDetail) {
   const book = detail.book;
   qc.setQueryData(keys.book(book.library_id, book.path), detail);
+  // The book's match searches answered for the book as it was: its facts, and
+  // the recorded match the default search lists as the current one (an Unlink
+  // or another match accepted takes that back). Stale, so the dialog asks again
+  // when it next opens, never while it closes on the edit.
+  void qc.invalidateQueries({
+    queryKey: keys.matches(book.library_id, book.path),
+    refetchType: 'none',
+  });
   const key = refKey(book);
   const patch = (page: AdminBookPage): AdminBookPage =>
     page.books?.some((b) => refKey(b) === key)
