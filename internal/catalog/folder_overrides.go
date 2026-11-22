@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 )
 
@@ -53,11 +54,19 @@ func (c *Catalog) SetFolderOverride(ctx context.Context, libraryID int64, path, 
 	if mode != OverrideBook && mode != OverrideCollection {
 		return ErrInvalidOverrideMode
 	}
-	_, err := c.db.ExecContext(ctx,
-		`INSERT INTO folder_overrides(library_id, path, mode, updated_at) VALUES(?,?,?,?)
-		 ON CONFLICT(library_id, path) DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at`,
-		libraryID, CleanRelPath(path), mode, c.ts())
-	return err
+	path = CleanRelPath(path)
+	return c.db.WithTx(ctx, "SetFolderOverride", func(tx *sql.Tx) error {
+		if mode == OverrideBook && path != "" {
+			if err := checkAudibleOverride(ctx, tx, libraryID, path); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO folder_overrides(library_id, path, mode, updated_at) VALUES(?,?,?,?)
+			 ON CONFLICT(library_id, path) DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at`,
+			libraryID, path, mode, c.ts())
+		return err
+	})
 }
 
 // DeleteFolderOverride removes a folder's override, reverting it to auto-detection.

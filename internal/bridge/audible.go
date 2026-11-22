@@ -79,16 +79,16 @@ func AudiblePoll(account, template string, priority int) NewJob {
 	return NewJob{Kind: KindAudiblePoll, Params: raw, Priority: priority}
 }
 
-// pruneAudibleEnded keeps only the newest ended poll (or sync, kind) of the
-// account a new one is queued for (its dedupe key), inside Enqueue's
+// pruneAudibleEnded keeps only the newest ended job of j's kind (a poll or a
+// sync) for the account a new one is queued for (its dedupe key), inside Enqueue's
 // transaction: a poll every few hours, or a sync every 15 minutes, would
 // otherwise pile up in the job list.
-func pruneAudibleEnded(ctx context.Context, tx *sql.Tx, kind, key string) error {
+func pruneAudibleEnded(ctx context.Context, tx *sql.Tx, j NewJob, key string) error {
 	// The kind lets idx_bridge_jobs_kind_finished serve both scans (the
 	// dedupe_key index holds only open jobs).
 	_, err := tx.ExecContext(ctx, `DELETE FROM bridge_jobs WHERE kind = ?2 AND dedupe_key = ?1 AND state IN `+EndedStatesSQL+`
 		AND id <> (SELECT MAX(id) FROM bridge_jobs WHERE kind = ?2 AND dedupe_key = ?1 AND state IN `+EndedStatesSQL+`)`,
-		key, kind)
+		key, j.Kind)
 	return err
 }
 
@@ -115,8 +115,13 @@ func CancelAudiblePolls(ctx context.Context, tx *sql.Tx, account, reason string,
 // account was removed: CancelAudibleRemoved), as CancelAudiblePolls does its
 // poll: at once when queued or parked, else at the Bridge's next report.
 func CancelAudibleImports(ctx context.Context, tx *sql.Tx, account, reason string, now time.Time) error {
-	keys, err := queryColumn[string](ctx, tx, `SELECT dedupe_key FROM bridge_jobs WHERE kind = ? AND state IN `+OpenStatesSQL+`
-		AND `+ParamSQL("params", "$.account")+` = ?`, KindAudibleImport, account)
+	// A backup keeps the library it was queued in even if the account is
+	// remapped. Seek its open key prefix in each library: the kind, the
+	// library, the empty path, then the account. '}' immediately follows the
+	// '|' between the account id and the ASIN in the key.
+	part := "|" + audibleImportAccountKey(account)
+	keys, err := queryColumn[string](ctx, tx, openAudibleImportsSQL,
+		KindAudibleImport+"|", part, strings.TrimSuffix(part, "|")+"}", account)
 	if err != nil {
 		return err
 	}
@@ -127,6 +132,10 @@ func CancelAudibleImports(ctx context.Context, tx *sql.Tx, account, reason strin
 	}
 	return nil
 }
+
+var openAudibleImportsSQL = `SELECT j.dedupe_key FROM libraries l CROSS JOIN bridge_jobs j INDEXED BY idx_bridge_jobs_open
+	WHERE j.state IN ` + OpenStatesSQL + ` AND j.dedupe_key >= (?1 || l.id || ?2) AND j.dedupe_key < (?1 || l.id || ?3)
+	  AND ` + ParamSQL("j.params", "$.account") + ` = ?4`
 
 // CleanText is v as printable bounded text on one line (cleanText): what the
 // Bridge reports from the outside world (an Audible title, its authors) is
@@ -370,7 +379,17 @@ func audibleImportParams(raw json.RawMessage) (json.RawMessage, error) {
 func audibleImportSuffix(j NewJob) string {
 	var p AudibleImportParams
 	_ = json.Unmarshal(j.Params, &p)
-	return "|" + p.Account + "|" + p.ASIN
+	return audibleImportAccountKey(p.Account) + p.ASIN
+}
+
+// audibleImportAccountKey is the account's part of an audible.import key.
+func audibleImportAccountKey(account string) string { return "|" + account + "|" }
+
+// AudibleImportKeyRange bounds the dedupe keys of library's audible.import
+// jobs, for a seek on idx_bridge_jobs_open: lo <= key < hi.
+func AudibleImportKeyRange(library int64) (lo, hi string) {
+	lo = DedupeKey(KindAudibleImport, &library, nil)
+	return lo, strings.TrimSuffix(lo, "|") + "}"
 }
 
 // AudibleImport is the NewJob that backs up p's title into p's library.

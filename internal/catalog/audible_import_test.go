@@ -573,6 +573,26 @@ func TestFoldAudibleImportOwnBook(t *testing.T) {
 		}
 		return tt
 	}
+	// A reclassified disc set may have just received the title's ASIN from the
+	// Bridge. Its other tape proves that the placed disc isn't the whole book.
+	const tapes = "Other Tapes"
+	const placed = tapes + "/CD2/One.m4b"
+	joined := &Book{LibraryID: lib, RelPath: tapes, Title: tapes, IsFolder: true, ASIN: "B000000004",
+		Files: []BookFile{{RelPath: tapes + "/CD1/Tape.m4b"}, {RelPath: placed, Seq: 1}}}
+	if _, err := f.c.UpsertBook(f.ctx, joined); err != nil {
+		t.Fatal(err)
+	}
+	discJob := done(4, "B000000004", tapes, placed)
+	if err := f.c.FoldAudibleImport(f.ctx, discJob); !errors.Is(err, ErrImportNotOwn) || match("B000000004").Match != nil {
+		t.Fatalf("disc joined another tape carrying the backup's ASIN: %v", err)
+	}
+	joined.Files = []BookFile{{RelPath: placed}}
+	if _, err := f.c.UpsertBook(f.ctx, joined); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.FoldAudibleImport(f.ctx, discJob); err != nil {
+		t.Fatalf("disc set holds only the backup's own file: %v", err)
+	}
 	// One's file joined Other's folder book: not One's.
 	if err := f.c.FoldAudibleImport(f.ctx, done(1, "B000000001", "Author/Other", "Author/Other/One.m4b")); !errors.Is(err, ErrImportNotOwn) {
 		t.Fatalf("joined another title's book: %v, want ErrImportNotOwn", err)
@@ -967,14 +987,96 @@ func TestAudibleIgnoredAndNoSyncBackups(t *testing.T) {
 func TestCancelOrphanAudibleJobsPassesDamagedParams(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
-	for i, params := range []string{`{`, `{"account":"acct0009"}`} {
+	for key, params := range map[string]string{"audible.sync|||damaged1": `{`, "audible.sync|||acct0009": `{"account":"acct0009"}`} {
 		if _, err := c.db.ExecContext(ctx, `INSERT INTO bridge_jobs(kind, params, dedupe_key, created_at, updated_at)
-			VALUES(?, ?, ?, 't', 't')`, bridge.KindAudibleSync, params, fmt.Sprintf("orphan%d", i)); err != nil {
+			VALUES(?, ?, ?, 't', 't')`, bridge.KindAudibleSync, params, key); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if n, err := c.CancelOrphanAudibleJobs(ctx); err != nil || n != 1 {
 		t.Fatalf("sweep = %d, %v; want the one orphaned account, no error", n, err)
+	}
+	before, _ := c.ContentGeneration()
+	if n, err := c.CancelOrphanAudibleJobs(ctx); err != nil || n != 0 {
+		t.Fatalf("idle sweep = %d, %v", n, err)
+	}
+	if after, _ := c.ContentGeneration(); after != before {
+		t.Fatalf("idle sweep took the writer: generation %d became %d", before, after)
+	}
+}
+
+// The folder a disc destination would join: a template's segments as the
+// Bridge renders its literal ones (empty dropped, spaces and dots trimmed, a
+// colon made " -"), and no guess where a variable or escape makes the parent.
+func TestAudibleDiscParent(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ dest, template, want string }{
+		{"Author/Book/CD 1", "", "Author/Book"},
+		{"Author/Book/CD 1/One.m4b", "", "Author/Book"},
+		{"Author/Book/One.m4b", "", ""},
+		{"CD 1", "", ""},
+		{"", "Audible/CD 1", "Audible"},
+		{"", "Audible/CD 1/", "Audible"},
+		{"", "Audible//CD 1/{Title}.m4b", "Audible"},
+		{"", " Audible / CD 1 /{OriginalFilename}", "Audible"},
+		{"", "Audible/CD 1/{Title}{Ext}", "Audible"},
+		{"", "Audible/CD 1/{OriginalFilename:lower}", "Audible"},
+		{"", "Audible/CD 1/{Title}{Ext:upper}", "Audible"},
+		{"", "Audible/CD 1/{Ext}", ""},
+		{"", "{Author}/CD 1", ""},
+		{"", "Books: Audible/CD 1", "Books - Audible"},
+		{"", "My  Audible/CD 1", "My  Audible"},
+		{"", "Audible?/CD 1", "Audible?"},
+		{"", "Audible/{Title}", ""},
+	} {
+		if got := audibleDiscParent(c.dest, c.template); got != c.want {
+			t.Errorf("audibleDiscParent(%q, %q) = %q, want %q", c.dest, c.template, got, c.want)
+		}
+	}
+}
+
+// A remap checks the destinations of the titles that may still be backed up:
+// one already on this server isn't backed up again, so its saved disc folder
+// (where its backup sits, in the old library) refuses nothing in the new one;
+// marked "Not this book", it may be, and refuses.
+func TestAudibleRemapSkipsMatchedTitles(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	f.poll(t, "p1", avail("B000000001", ""))
+	dest := "Tapes/CD2"
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000001", AudibleTitlePatch{DestPath: &dest}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := f.c.CreateLibrary(f.ctx, Library{Name: "Other", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.SetFolderOverride(f.ctx, other.ID, "Tapes", OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	mapTo := func(lib int64) error {
+		_, err := f.c.PutAudibleAccount(f.ctx, "acct0001", AudibleAccountInput{Label: "x", Marketplace: "us",
+			UserID: f.user, LibraryID: lib, Policy: "manual", Sync: true})
+		return err
+	}
+	if err := mapTo(other.ID); !errors.Is(err, ErrAudibleBookOverride) {
+		t.Fatalf("unmatched title's disc destination: %v, want ErrAudibleBookOverride", err)
+	}
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET match_library_id = ?, match_path = ? WHERE asin = 'B000000001'`,
+		f.lib.ID, dest); err != nil {
+		t.Fatal(err)
+	}
+	if err := mapTo(other.ID); err != nil {
+		t.Fatalf("matched title's destination refused the remap: %v", err)
+	}
+	if err := mapTo(f.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET rejected = 1 WHERE asin = 'B000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mapTo(other.ID); !errors.Is(err, ErrAudibleBookOverride) {
+		t.Fatalf("title marked Not this book: %v, want ErrAudibleBookOverride", err)
 	}
 }
 

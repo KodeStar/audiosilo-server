@@ -45,6 +45,12 @@ func init() {
 			}
 			return int64(0), nil
 		})
+	// audible_disc_parent(dest_path, template): the folder an Audible backup's
+	// disc folder would join (audibleDiscParent), "" for none: the disc-folder
+	// checks over saved destinations, templates and open backups.
+	store.RegisterFunction("audible_disc_parent", 2, func(args []driver.Value) (driver.Value, error) {
+		return audibleDiscParent(sqlText(args[0]), sqlText(args[1])), nil
+	})
 	// audible_dest_ok(dest_path): whether an Audible title's stored destination
 	// still validates (bridge.CheckAudibleDestPath, "" the automatic one), which
 	// "Back up everything" skips a title for (backupAllQueuedSQL).

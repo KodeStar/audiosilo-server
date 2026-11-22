@@ -837,13 +837,23 @@ func leaveOwners(ctx context.Context, tx *sql.Tx, id, newOwner int64) error {
 	return err
 }
 
+// DeletedMember identifies the member removed and the Audible accounts that
+// went with them.
+type DeletedMember struct {
+	Member
+	AudibleAccounts []string
+}
+
 // DeleteMember deletes owner's member id and all of its state (the schema's
 // cascade, as DeleteUser), returning the member as it was.
-func (s *Service) DeleteMember(ctx context.Context, owner, id int64) (Member, error) {
-	var m Member
+func (s *Service) DeleteMember(ctx context.Context, owner, id int64) (DeletedMember, error) {
+	var m DeletedMember
 	err := s.db.WithDurableTx(ctx, "DeleteMember", func(tx *sql.Tx) error {
 		var err error
-		if m, err = s.memberOf(ctx, tx, owner, id); err != nil {
+		if m.Member, err = s.memberOf(ctx, tx, owner, id); err != nil {
+			return err
+		}
+		if m.AudibleAccounts, err = deletedAudibleAccounts(ctx, tx, id); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)

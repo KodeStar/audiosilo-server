@@ -71,6 +71,15 @@ func positiveLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return n, true
 }
 
+// The deletion already committed. A later scheduler pass retries a failed
+// cancellation, including one interrupted by a server restart (while the
+// Audible module is on; off, its jobs are held, and its first pass sweeps).
+func (a *API) cancelRemovedAudibleJobs(r *http.Request, accounts []string) {
+	if _, err := a.cat.CancelRemovedAudibleJobs(context.WithoutCancel(r.Context()), accounts); err != nil {
+		a.log.Warn("cancel a deleted person's audible jobs failed", "accounts", accounts, "err", err)
+	}
+}
+
 // writeAudibleError answers an Audible catalog error.
 func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 	switch {
@@ -90,8 +99,6 @@ func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 		writeErrorCode(w, http.StatusNotFound, "unknown_account", "no such Audible account")
 	case errors.Is(err, catalog.ErrUnknownTitle):
 		writeErrorCode(w, http.StatusNotFound, "unknown_title", "no such Audible title")
-	case errors.Is(err, bridge.ErrAudibleDestPath):
-		writeErrorCode(w, http.StatusBadRequest, "invalid_dest_path", err.Error())
 	case errors.Is(err, bridge.ErrAudibleTemplate):
 		writeErrorCode(w, http.StatusBadRequest, "invalid_template", err.Error())
 	case errors.Is(err, catalog.ErrASINSet):
@@ -103,7 +110,9 @@ func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 
 // handleBridgeAudibleAccount serves PUT /bridge/audible/accounts/{account}:
 // the Bridge's mapping of an account it signed in to (a user, a books library,
-// a policy). 200 {"account": {...}}.
+// a policy). 200 {"account": {...}}; 400 invalid_dest_path (reason
+// indexed_book or book_override) when a new library would put a saved title
+// destination or the template's disc folder into another book there.
 func (a *API) handleBridgeAudibleAccount(w http.ResponseWriter, r *http.Request) {
 	id, ok := audibleAccountID(w, r)
 	if !ok {
@@ -704,7 +713,9 @@ func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 // {"policy"?, "template"?, "sync"?}: what the account backs up by itself and
 // where, and whether its places sync with Audible (Phase 4c; off cancels its
 // open sync). 200
-// the account; 400 invalid_policy, invalid_template; 404 unknown_account.
+// the account; 400 invalid_policy, invalid_template, invalid_dest_path (a
+// template placing in a disc folder of an indexed book, reason indexed_book,
+// or of a one-book folder, book_override); 404 unknown_account.
 func (a *API) handleAdminAudibleAccount(w http.ResponseWriter, r *http.Request) {
 	id, ok := audibleAccountID(w, r)
 	if !ok {

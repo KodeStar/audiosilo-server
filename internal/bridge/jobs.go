@@ -189,6 +189,8 @@ type kindSpec struct {
 	// demand, NewJob.fetch), and gives a job still queued its params (an
 	// audible.poll's template, changed since the scheduler queued it).
 	promotes bool
+	// prune trims this kind's ended jobs just before a new job is inserted.
+	prune func(context.Context, *sql.Tx, NewJob, string) error
 }
 
 // paramsCap is the most bytes of params a job of the kind may send.
@@ -211,13 +213,13 @@ func (s kindSpec) paramsCap() int { return cmp.Or(s.maxParams, defaultParamsByte
 // ErrDetectOpen), a detect job for an open read-along job (ErrReadalongOpen),
 // and a generate job for a queued or working one, cancelling a parked one.
 var kinds = map[string]kindSpec{
-	KindPodcastFetch:     {needsLibrary: true, book: bookEpisode, writes: true, params: fetchParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
-	KindPodcastRetain:    {needsLibrary: true, book: bookShow, writes: true, params: retainParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
+	KindPodcastFetch:     {needsLibrary: true, book: bookEpisode, writes: true, params: fetchParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true, prune: prunePolls},
+	KindPodcastRetain:    {needsLibrary: true, book: bookShow, writes: true, params: retainParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true, prune: prunePolls},
 	KindPodcastSubscribe: {needsLibrary: true, book: bookNone, writes: true, params: subscribeParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true, suffix: subscribeSuffix},
-	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
+	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true, prune: prunePolls},
 	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
-	KindAudiblePoll:      {book: bookNone, params: audiblePollParams, module: ModuleAudible, internal: true, quiet: true, suffix: audibleAccountSuffix, promotes: true},
-	KindAudibleSync:      {book: bookNone, params: audibleSyncParams, module: ModuleAudible, internal: true, quiet: true, suffix: audibleAccountSuffix, promotes: true},
+	KindAudiblePoll:      {book: bookNone, params: audiblePollParams, module: ModuleAudible, internal: true, quiet: true, suffix: audibleAccountSuffix, promotes: true, prune: pruneAudibleEnded},
+	KindAudibleSync:      {book: bookNone, params: audibleSyncParams, module: ModuleAudible, internal: true, quiet: true, suffix: audibleAccountSuffix, promotes: true, prune: pruneAudibleEnded},
 	KindAudibleImport: {needsLibrary: true, book: bookNone, writes: true, libraryKind: libraryBooks, params: audibleImportParams,
 		module: ModuleAudible, internal: true, suffix: audibleImportSuffix},
 	KindLibrivoxFetch: {needsLibrary: true, book: bookNone, writes: true, libraryKind: libraryBooks, params: librivoxFetchParams,
@@ -958,17 +960,12 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 				return err
 			}
 		}
-		if podcastWork(j.Kind) {
-			if err := s.prunePolls(ctx, tx, j); err != nil {
-				return err
-			}
-		}
-		if j.Kind == KindAudiblePoll || j.Kind == KindAudibleSync {
-			if err := pruneAudibleEnded(ctx, tx, j.Kind, key); err != nil {
-				return err
-			}
-		}
 		spec := kinds[j.Kind]
+		if spec.prune != nil {
+			if err := spec.prune(ctx, tx, j, key); err != nil {
+				return err
+			}
+		}
 		b, err := s.blocker(ctx, tx, j.Kind, j.LibraryID, j.Path)
 		if err != nil {
 			return err

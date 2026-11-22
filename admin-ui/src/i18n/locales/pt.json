@@ -4255,6 +4255,8 @@
   "errors.invalidDestPath": "Isso não é um local dentro da biblioteca. Use pastas e um nome de ficheiro como Autor/Série/Título.m4b, sem pastas ocultas, barras invertidas nem \"..\".",
   "errors.invalidTemplate": "Esse modelo não funciona. Use as variáveis entre chavetas, como {Author}/{Series}/{Title}, e não ultrapasse os 500 caracteres.",
   "errors.invalid_template.account": "O modelo de localização desta conta já não funciona. Corrija-o em Definições da conta e volte a fazer a cópia.",
+  "errors.invalid_dest_path.indexed_book": "Esta pasta de disco está dentro de um livro já indexado. Escolha uma pasta separada para a cópia de segurança da Audible.",
+  "errors.invalid_dest_path.book_override": "A cópia de segurança da Audible usa uma pasta de disco que esta definição juntaria a outros discos num só livro. Escolha uma pasta separada para a cópia de segurança.",
   "errors.invalid_dest_path.title": "O destino deste título já não é válido. Defina-o de novo em Destino e volte a fazer a cópia.",
   "librivox.title": "LibriVox",
   "librivox.description": "Encontre um audiolivro gratuito em domínio público no LibriVox e adicione-o a uma biblioteca. A Bridge o baixa, o coloca no lugar e o associa à gravação.",

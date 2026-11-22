@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -287,6 +288,12 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		// Its own code (bridge#50), so a client reads again from the start for
 		// this alone: the Bridge's progress feed, books and titles cursors.
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidCursor, "invalid cursor")
+	case errors.Is(err, catalog.ErrAudibleIndexedBook):
+		writeErrorReason(w, http.StatusBadRequest, "invalid_dest_path", "indexed_book", err.Error())
+	case errors.Is(err, catalog.ErrAudibleBookOverride):
+		writeErrorReason(w, http.StatusBadRequest, "invalid_dest_path", "book_override", err.Error())
+	case errors.Is(err, bridge.ErrAudibleDestPath):
+		writeErrorCode(w, http.StatusBadRequest, "invalid_dest_path", err.Error())
 	case errors.Is(err, catalog.ErrInvalidOverrideMode):
 		writeError(w, http.StatusBadRequest, `mode must be "book" or "collection"`)
 	case errors.Is(err, catalog.ErrInvalidSetupStep):

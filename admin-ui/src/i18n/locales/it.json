@@ -4255,6 +4255,8 @@
   "errors.invalidDestPath": "Non è un percorso dentro la libreria. Usa cartelle e un nome di file come Autore/Serie/Titolo.m4b, senza cartelle nascoste, barre rovesciate o \"..\".",
   "errors.invalidTemplate": "Questo modello non funziona. Usa le variabili tra parentesi graffe, come {Author}/{Series}/{Title}, e non superare i 500 caratteri.",
   "errors.invalid_template.account": "Il modello di posizione di questo account non funziona più. Correggilo in Impostazioni account e riprova il backup.",
+  "errors.invalid_dest_path.indexed_book": "Questa cartella del disco si trova all’interno di un libro già indicizzato. Scegli una cartella separata per il backup Audible.",
+  "errors.invalid_dest_path.book_override": "Il backup Audible usa una cartella del disco che questa impostazione unirebbe ad altri dischi in un unico libro. Scegli una cartella separata per il backup.",
   "errors.invalid_dest_path.title": "La destinazione di questo titolo non è più valida. Impostala di nuovo con Destinazione e riprova il backup.",
   "librivox.title": "LibriVox",
   "librivox.description": "Trova un audiolibro gratuito di pubblico dominio su LibriVox e aggiungilo a una libreria. La tua Bridge lo scarica, lo sistema e lo abbina alla sua registrazione.",

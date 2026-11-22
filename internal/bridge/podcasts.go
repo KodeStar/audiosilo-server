@@ -55,7 +55,7 @@ func Internal(kind string) bool { return kinds[kind].internal }
 
 // podcastWork reports whether kind is one of a followed show's bound jobs
 // (poll, fetch, retain): params naming the show's identity, which an open job
-// for a replaced identity must not absorb, and terminal rows pruned per target.
+// for a replaced identity must not absorb.
 func podcastWork(kind string) bool {
 	return kind == KindPodcastPoll || kind == KindPodcastFetch || kind == KindPodcastRetain
 }
@@ -802,9 +802,9 @@ func (s *Service) checkLibraryKind(ctx context.Context, j NewJob) error {
 	}
 }
 
-// prunePolls keeps only the newest ended poll of a show (the dedupe key's
-// kind, library and path, which idx_bridge_jobs_book serves).
-func (s *Service) prunePolls(ctx context.Context, tx *sql.Tx, j NewJob) error {
+// prunePolls keeps the newest ended job at this kind, library and path. For
+// fetch and retain it also keeps older results until the server folds them.
+func prunePolls(ctx context.Context, tx *sql.Tx, j NewJob, _ string) error {
 	_, err := tx.ExecContext(ctx, `DELETE FROM bridge_jobs WHERE library_id=?1 AND rel_path=?2 AND kind=?3 AND state IN `+EndedStatesSQL+`
 		AND (kind='podcast.poll' OR EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=bridge_jobs.id)) AND id<>(SELECT MAX(id) FROM bridge_jobs WHERE library_id=?1 AND rel_path=?2 AND kind=?3 AND state IN `+EndedStatesSQL+`)`, j.LibraryID, j.Path, j.Kind)
 	return err

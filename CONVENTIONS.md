@@ -4411,8 +4411,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `bridge/audible.go`, `api/handlers_audible.go`)**: the Bridge signs in to Audible and holds every credential; the
   server only keeps what it reports. `0063`: `audible_accounts` (`account` = the Bridge's id
   `^[a-z0-9]{8,32}$`, label, marketplace = one of `config.Regions`, `user_id` -> users CASCADE (deleting a
-  person, or an owner their member, then cancels the gone accounts' open poll, backups and sync,
-  `catalog.CancelOrphanAudibleJobs`, bridge#46), `library_id` ->
+  person captures their account ids and those of deleted members before the cascade. After commit,
+  `catalog.CancelRemovedAudibleJobs` cancels those accounts' open poll, backups and sync by indexed job key.
+  Each Audible scheduler pass also checks the open-job index for orphan jobs, even while the Bridge is offline.
+  An empty pass takes no writer (`catalog.CancelOrphanAudibleJobs`, bridge#46)), `library_id` ->
   libraries SET NULL, policy `all`|`series`|`manual`, sync, `poll_hours` default 6, `last_poll_at`,
   `last_queued_at`) and `audible_titles` (account CASCADE + asin; title, authors/series JSON, release_date,
   runtime_s, state `available`|`preorder`|`unavailable`|`gone`, reason, the match `match_library_id` /
@@ -4509,7 +4511,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the title's own (`importOwnBook`, else `ErrImportNotOwn`, logged): a book carrying the title's ASIN, or one
   holding only the files the backup placed (a single-file book is its file), so a file placed into a folder
   book already there (the scan makes it one book) never makes that book, nor another title's, the title's
-  match; and never the book the admin marked Not this book for the title. On refusal, the same transaction
+  match; and never the book the admin marked Not this book for the title. If the placement joined a disc into
+  the parent book, its indexed files must all belong to the backup even when the Bridge added its ASIN.
+  On refusal, the same transaction
   records `fold_refusal_reason` and `fold_refused_at` on the title (`0093`). The admin title includes both until
   the title's next backup is queued (`SetAudibleImportTx`: the status is that backup's now, so a refusal is
   always the title's import job's), or a newly accepted match clears them (a poll naming another book, Not this book undone:
@@ -4551,9 +4555,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`{queued, skipped}`, `skipped` the titles left out because their params no longer validate (a stored `dest_path` from before a rule tightened: `CheckAudibleDestPath`; an account template that no longer validates refuses the batch: 400 `invalid_template`, reason `account`), the rest queued; `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
   latest import not a `done` one whose book is still indexed (a refused fold, `ErrImportNotOwn`, isn't
   queued again; a done one whose book left the library is), a failed or cancelled one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
-  `invalid_dest_path`, also for a disc folder ("CD 3") directly inside an indexed book or a folder with a
-  `book` override, which the scan would join into it: `checkDestOwnFolder`, `metadata.IsDiscFolder`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
-  `invalid_policy` / `invalid_template`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
+  `invalid_dest_path`, also for a disc folder ("CD 3") directly inside an indexed book (reason `indexed_book`)
+  or a folder set to one book (`book_override`). Setting the `book` override checks saved destinations and open
+  imports in the same library. Changing an account's library or a placement template checks disc folders
+  the server can identify before placement (`checkDestOwnFolder`, `audibleDiscParent`; a remap skips the
+  destinations of titles already on this server, which are never backed up again: `checkAudibleRemap`). An actual joined
+  placement is checked at fold time too) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
+  `invalid_policy` / `invalid_template` / `invalid_dest_path`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
   when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`
   / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too), each with the account's id
   in its details and its name as the row's target, as `bridge.audible.remove` has it (`audibleAccountName`:

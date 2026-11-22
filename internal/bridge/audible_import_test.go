@@ -137,6 +137,35 @@ func TestAudibleImportJobs(t *testing.T) {
 	}
 }
 
+// Each library, including an account's previous mapping, gets a range seek
+// for that account's open backups. A scan of the open index would visit other
+// people's jobs on every delete.
+func TestCancelAudibleImportsPlan(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	rows, err := q.db.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+openAudibleImportsSQL,
+		KindAudibleImport+"|", "||acct0001|", "||acct0001}", "acct0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(plan, "\n"), "idx_bridge_jobs_open (dedupe_key>? AND dedupe_key<?)") {
+		t.Fatalf("no account range seek: %v", plan)
+	}
+}
+
 func itoa(n int64) string { b, _ := json.Marshal(n); return string(b) }
 
 // A failed backup's code: the result's, else a coded error; a park's code.

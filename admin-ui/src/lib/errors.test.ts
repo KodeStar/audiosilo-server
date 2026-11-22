@@ -136,6 +136,12 @@ describe('errorMessage', () => {
     expect(errorMessage(stored('invalid_dest_path', 'title'), t)).toBe(
       "This title's destination is no longer valid. Set it again with Destination and back up again.",
     );
+    expect(errorMessage(stored('invalid_dest_path', 'indexed_book'), t)).toMatch(
+      /inside an indexed book/,
+    );
+    expect(errorMessage(stored('invalid_dest_path', 'book_override'), t)).toMatch(
+      /folder setting would join/,
+    );
     // The value just typed (the account and title PATCHes): no reason.
     expect(errorMessage(stored('invalid_template'), t)).toMatch(/^That template doesn't work/);
   });

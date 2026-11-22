@@ -657,7 +657,7 @@ export const api = {
       `/admin/audible/titles/${encodeURIComponent(account)}/${encodeURIComponent(asin)}`,
       patch,
     ),
-  /** An account's policy and template; 400 invalid_policy, invalid_template. */
+  /** An account's policy and template; 400 invalid_policy, invalid_template, invalid_dest_path. */
   patchAudibleAccount: (account: string, patch: AudibleAccountPatch) =>
     request<{ account: AudibleAccount }>(
       'PATCH',

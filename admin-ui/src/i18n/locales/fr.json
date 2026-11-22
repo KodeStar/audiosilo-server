@@ -4255,6 +4255,8 @@
   "errors.invalidDestPath": "Ce n'est pas un emplacement dans la bibliothèque. Utilisez des dossiers et un nom de fichier comme Auteur/Série/Titre.m4b, sans dossiers cachés, barres obliques inverses ni « .. ».",
   "errors.invalidTemplate": "Ce modèle ne fonctionne pas. Utilisez les variables entre accolades, comme {Author}/{Series}/{Title}, en moins de 500 caractères.",
   "errors.invalid_template.account": "Le modèle d'emplacement de ce compte ne fonctionne plus. Corrigez-le dans Réglages du compte et relancez la sauvegarde.",
+  "errors.invalid_dest_path.indexed_book": "Ce dossier de disque se trouve dans un livre déjà indexé. Choisissez un dossier distinct pour la sauvegarde Audible.",
+  "errors.invalid_dest_path.book_override": "La sauvegarde Audible utilise un dossier de disque que ce réglage regrouperait avec d’autres disques en un seul livre. Choisissez un dossier distinct pour la sauvegarde.",
   "errors.invalid_dest_path.title": "La destination de ce titre n'est plus valide. Redéfinissez-la avec Destination et relancez la sauvegarde.",
   "librivox.title": "LibriVox",
   "librivox.description": "Trouvez un livre audio gratuit du domaine public sur LibriVox et ajoutez-le à une bibliothèque. Votre Bridge le télécharge, le range et l'associe à son enregistrement.",
