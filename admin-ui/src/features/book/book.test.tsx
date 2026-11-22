@@ -1234,7 +1234,7 @@ describe('match with community metadata', () => {
     });
   });
 
-  it('lists the recorded match the search missed as the current match (server#331)', async () => {
+  it('scrolls to the recorded match the search missed once on open', async ({ onTestFinished }) => {
     const recorded: MatchCandidate = {
       ...candidate,
       work_id: 'the-way-of-kings-part-1',
@@ -1255,16 +1255,31 @@ describe('match with community metadata', () => {
     );
     renderApp(URL);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const open = await screen.findByRole('button', { name: 'Compare with community' });
+    const scrolled = vi.spyOn(Element.prototype, 'scrollIntoView');
+    onTestFinished(() => scrolled.mockRestore());
+    await user.click(open);
     const dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
     const radio = await within(dialog).findByRole('radio', { name: /Part 1/ });
     expect(radio).toBeChecked();
     expect(within(radio).getByText('Current match')).toBeInTheDocument();
     expect(within(radio).queryByText('100% match')).toBeNull();
+    expect(scrolled.mock.contexts[0]).toBe(radio);
+    await user.click(within(dialog).getByRole('button', { name: 'Compare fields' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Other matches' }));
     // The search's own candidate keeps its score.
-    expect(
-      within(dialog).getByRole('radio', { name: /^(?!.*Part 1).*The Way of Kings/ }),
-    ).toHaveTextContent(/\d+% match/);
+    const other = within(dialog).getByRole('radio', { name: /^(?!.*Part 1).*The Way of Kings/ });
+    expect(other).toHaveTextContent(/\d+% match/);
+    await user.click(other);
+    expect(other).toBeChecked();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await user.click(open);
+    const reopened = await screen.findByRole('radio', { name: /Part 1/ });
+    expect(reopened).toBeChecked();
+    expect(scrolled.mock.contexts[1]).toBe(reopened);
+    expect(scrolled).toHaveBeenCalledTimes(2);
   });
 
   it('starts from the recorded match listed under the work its retired id merged into', async () => {
