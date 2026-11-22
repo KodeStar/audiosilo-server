@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kodestar/audiosilo-server/internal/web"
-
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/quota"
+	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
 // requestTimeout bounds how long a non-streaming request may run. Its purpose is
@@ -395,7 +395,7 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 // request has authenticated and before its credential spends, so a header it
 // sets is on a 429 too. ok false means the answer (401 or 429, or 503 for a
 // token it could not check: refuseToken) is written.
-func (a *API) authLimited(w http.ResponseWriter, r *http.Request, l *rateLimiter, queryToken bool, kinds []string, authed func(context.Context)) (ctx context.Context, ok bool) {
+func (a *API) authLimited(w http.ResponseWriter, r *http.Request, l *quota.Limiter, queryToken bool, kinds []string, authed func(context.Context)) (ctx context.Context, ok bool) {
 	ip := clientIP(r)
 	if l != nil && !a.ipLimiter.Ready(ip) {
 		rateLimited(w, a.ipLimiter.Wait(ip))
@@ -430,7 +430,7 @@ func (a *API) authLimited(w http.ResponseWriter, r *http.Request, l *rateLimiter
 // bucket anyway, as spendCredential's refusals do: its lookup was already done,
 // so requests that passed Ready together can't buy lookups for free. When
 // refused, wait is the request's Retry-After.
-func (a *API) allowCredential(ctx context.Context, l *rateLimiter, ip string) (wait time.Duration, ok bool) {
+func (a *API) allowCredential(ctx context.Context, l *quota.Limiter, ip string) (wait time.Duration, ok bool) {
 	if u := userFrom(ctx); u != nil && u.IsDemo {
 		if !a.ipLimiter.Allow(ip) {
 			a.ipLimiter.Charge(ip)
@@ -446,7 +446,7 @@ func (a *API) allowCredential(ctx context.Context, l *rateLimiter, ip string) (w
 // address (the lookup was already done) and waits the longer of the two
 // buckets' waits: the next request meets the address's bucket first, which the
 // charge may have put into debt.
-func (a *API) spendCredential(l *rateLimiter, id int64, ip string) (wait time.Duration, ok bool) {
+func (a *API) spendCredential(l *quota.Limiter, id int64, ip string) (wait time.Duration, ok bool) {
 	key := strconv.FormatInt(id, 10)
 	if l.Allow(key) {
 		return 0, true

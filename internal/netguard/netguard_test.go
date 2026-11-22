@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,6 +93,52 @@ func TestDialerChecksTheDialledAddress(t *testing.T) {
 	d := Dialer(PublicAddrPort, time.Second)
 	if _, err := d.DialContext(context.Background(), "tcp", "10.255.255.1:443"); !errors.Is(err, ErrBlockedAddress) {
 		t.Fatalf("private dial = %v", err)
+	}
+}
+
+// Transport dials through the guard and never a proxy, even with one set in the
+// environment.
+func TestTransportGuardsEveryDial(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://10.255.255.1:3128")
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits++ }))
+	defer srv.Close()
+	target := netip.MustParseAddrPort(srv.Listener.Addr().String())
+	tr := Transport(PublicAddrPort, Timeouts{Connect: time.Second, TLS: time.Second, Header: time.Second}, 2)
+	if tr.Proxy != nil {
+		t.Fatal("guarded transport has a proxy")
+	}
+	if _, err := (&http.Client{Transport: tr}).Get(srv.URL); !errors.Is(err, ErrBlockedAddress) || hits != 0 {
+		t.Fatalf("public rule on loopback = %v, %d hits", err, hits)
+	}
+	tr = Transport(func(ap netip.AddrPort) bool { return ap == target }, Timeouts{Connect: time.Second}, 2)
+	resp, err := (&http.Client{Transport: tr}).Get(srv.URL)
+	if err != nil || hits != 1 {
+		t.Fatalf("allowed address = %v, %d hits", err, hits)
+	}
+	_ = resp.Body.Close()
+}
+
+// Transport reads at most MaxHeaderBytes of an answer's headers: the callers
+// cap the body, and the headers before it are capped too.
+func TestTransportCapsHeaders(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/big" {
+			w.Header().Set("X-Filler", strings.Repeat("a", 2*MaxHeaderBytes))
+		}
+	}))
+	defer srv.Close()
+	target := netip.MustParseAddrPort(srv.Listener.Addr().String())
+	client := &http.Client{Transport: Transport(func(ap netip.AddrPort) bool { return ap == target }, Timeouts{Connect: time.Second}, 2)}
+	resp, err := client.Get(srv.URL + "/small")
+	if err != nil {
+		t.Fatalf("small headers = %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp, err := client.Get(srv.URL + "/big"); err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("headers past MaxHeaderBytes were read")
 	}
 }
 

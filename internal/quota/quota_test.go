@@ -2,6 +2,7 @@ package quota
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -15,7 +16,7 @@ func (c *clock) now() time.Time { return c.t }
 // whole seconds until the next token.
 func TestTakeRefillAndRetryAfter(t *testing.T) {
 	c := &clock{t: time.Unix(1000, 0)}
-	l := New(10, 3, 0, 10*time.Minute, c.now)
+	l := PerMinute(10, 3, 0, 10*time.Minute, c.now)
 	for i := range 3 {
 		if d := l.Take("u"); !d.OK {
 			t.Fatalf("burst %d refused", i)
@@ -41,7 +42,7 @@ func TestTakeRefillAndRetryAfter(t *testing.T) {
 // holds no bucket for alone.
 func TestRefund(t *testing.T) {
 	c := &clock{t: time.Unix(1000, 0)}
-	l := New(10, 2, 0, 10*time.Minute, c.now)
+	l := PerMinute(10, 2, 0, 10*time.Minute, c.now)
 	l.Take("u")
 	l.Take("u")
 	l.Refund("u")
@@ -69,7 +70,7 @@ func TestRefund(t *testing.T) {
 // it once an idle one can go; an active bucket is never evicted.
 func TestMapBound(t *testing.T) {
 	c := &clock{t: time.Unix(1000, 0)}
-	l := New(10, 3, 3, 10*time.Minute, c.now)
+	l := PerMinute(10, 3, 3, 10*time.Minute, c.now)
 	for i := range 3 {
 		l.Take(strconv.Itoa(i))
 	}
@@ -122,5 +123,45 @@ func TestSlotsAcquire(t *testing.T) {
 	s.Release()
 	if !<-got {
 		t.Fatal("the released slot")
+	}
+}
+
+// A flood of distinct IPs must not grow the bucket map without bound.
+func TestRateLimiterEviction(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	r := PerSecond(20, 40, func() time.Time { return now })
+	for i := 0; i < 100; i++ {
+		r.Allow(fmt.Sprintf("10.0.0.%d", i))
+	}
+	if len(r.buckets) != 100 {
+		t.Fatalf("expected 100 buckets, got %d", len(r.buckets))
+	}
+	// Advance past the idle TTL; the next call sweeps the now-stale buckets.
+	now = now.Add(r.idle + time.Second)
+	r.Allow("10.0.0.200")
+	if len(r.buckets) > 1 {
+		t.Fatalf("stale buckets not evicted: %d remain", len(r.buckets))
+	}
+}
+
+// The idle TTL is two refills, floored at a minute and capped at maxIdleTTL, on
+// every architecture: a configured rate and burst whose refill time is more
+// nanoseconds than a Duration holds still sweep a day later.
+func TestRateLimiterIdleTTL(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		rate, burst float64
+		want        time.Duration
+	}{
+		{50, 200, time.Minute},
+		{1, 3600, 2 * time.Hour},
+		{0.001, 1000, maxIdleTTL},
+		{1, 1e12, maxIdleTTL},
+		{1e-9, 1e12, maxIdleTTL},
+	} {
+		if got := PerSecond(c.rate, c.burst, nil).idle; got != c.want {
+			t.Errorf("rate %g, burst %g: idleTTL %v, want %v", c.rate, c.burst, got, c.want)
+		}
 	}
 }

@@ -182,6 +182,10 @@ func TestReadalongServed(t *testing.T) {
 	if got := resp.Header.Get("ETag"); got != gzETag {
 		t.Fatalf("gzip ETag = %q, want %q", got, gzETag)
 	}
+	ranged, body := e.raw(t, "GET", e.at("readalong", ebookBook), e.annTok, true, map[string]string{"Range": "bytes=0-99"})
+	if ranged.StatusCode != http.StatusOK || ranged.Header.Get("Content-Encoding") != "" || ranged.Header.Get("ETag") != etag || !bytes.Equal(body, e.maps[ebookBook]) {
+		t.Fatalf("readalong with Range = %d %v", ranged.StatusCode, ranged.Header)
+	}
 	// Plain: the identity ETag, and each revalidates only its own answer.
 	plain := func(inm string) *http.Response {
 		t.Helper()

@@ -31,8 +31,8 @@ const (
 
 // handleReadalong serves the read-along map of the book at ?path= (exactly the
 // book's own path): the file's bytes as JSON, gzipped for a client that accepts
-// it, with an ETag of its size and mtime, its own for the gzip answer (304 on a
-// match). It is header-auth
+// it (gzipAccepted: never for a Range request), with an ETag of its size and
+// mtime, its own for the gzip answer (304 on a match). It is header-auth
 // only (requireAuth: a session or an API key, never ?token=), scoped like
 // /ebook. Before sending it re-reads the file and checks it against the index
 // now (never trusting the indexed head for the bytes it sends): a map whose
@@ -119,7 +119,7 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	// other's bytes. It is chosen by the request, before any gzipping, so a 304
 	// costs none; a map gzip can't shrink goes out plain under it, which is
 	// still the one answer that ETag ever names.
-	wantGzip := spa.AcceptsGzip(r.Header.Get("Accept-Encoding"))
+	wantGzip := gzipAccepted(r)
 	etag := fileETag(info)
 	if wantGzip {
 		etag = etag[:len(etag)-1] + `-gz"`

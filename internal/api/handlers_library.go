@@ -97,11 +97,9 @@ func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, 
 // a cross-library read or a request that reads more than one library; on a
 // failure it answers 500 with msg and returns false.
 func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) ([]catalog.Scope, bool) {
-	u := userFrom(r.Context())
 	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
-		a.log.Warn("load user scopes failed", "user", u.ID, "err", err)
-		writeError(w, http.StatusInternalServerError, msg)
+		a.writeScopeError(w, r, err, msg)
 		return nil, false
 	}
 	return scopes, true
@@ -114,11 +112,19 @@ func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) (
 func (a *API) gatedScopes(w http.ResponseWriter, r *http.Request, msg string) (scopes, keep []catalog.Scope, ok bool) {
 	scopes, keep, err := a.cat.GatedScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
-		a.log.Warn("load user scopes failed", "user", userFrom(r.Context()).ID, "err", err)
-		writeError(w, http.StatusInternalServerError, msg)
+		a.writeScopeError(w, r, err, msg)
 		return nil, nil, false
 	}
 	return scopes, keep, true
+}
+
+// writeScopeError answers a failed scope read with a 500, logged unless the
+// request gave up.
+func (a *API) writeScopeError(w http.ResponseWriter, r *http.Request, err error, msg string) {
+	if !requestGaveUp(r) {
+		a.log.Warn("load user scopes failed", "user", userFrom(r.Context()).ID, "err", err)
+	}
+	writeError(w, http.StatusInternalServerError, msg)
 }
 
 // scopeIn is the caller's scope in one library out of their callerScopes, as the
@@ -757,7 +763,7 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// The player aborts a type-ahead search on the next keystroke: a
 		// request that gave up is no failure, so no log line.
-		if errors.Is(r.Context().Err(), context.Canceled) {
+		if requestGaveUp(r) {
 			writeError(w, http.StatusInternalServerError, "search failed")
 			return
 		}

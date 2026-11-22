@@ -31,6 +31,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/modules"
 	"github.com/kodestar/audiosilo-server/internal/podcast"
 	"github.com/kodestar/audiosilo-server/internal/podcast/discovery"
+	"github.com/kodestar/audiosilo-server/internal/quota"
 	"github.com/kodestar/audiosilo-server/internal/upcoming"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
@@ -167,15 +168,15 @@ type API struct {
 	// auth.oidc.enabled was off at start.
 	oidc *oidcFlow
 
-	loginLimiter   *limiter     // per-IP lockout for password login
-	oidcLimiter    *limiter     // per-IP lockout for failed OIDC callbacks
-	redeemLimiter  *limiter     // per-IP lockout for auth-code redemption
-	demoLimiter    *limiter     // per-IP cap on demo account creation
-	accountLimiter *limiter     // per-IP cap on self-service password/recovery mutations
-	ipLimiter      *rateLimiter // general request rate, per IP (see rateLimit)
-	bridgeLimiter  *rateLimiter // authenticated Bridge requests, per credential (see requireBridge)
-	tokenLimiter   *rateLimiter // authenticated API rate, per credential (see requireAuth)
-	mediaLimiter   *rateLimiter // authenticated media rate, per credential (see requireMediaAuth)
+	loginLimiter   *limiter       // per-IP lockout for password login
+	oidcLimiter    *limiter       // per-IP lockout for failed OIDC callbacks
+	redeemLimiter  *limiter       // per-IP lockout for auth-code redemption
+	demoLimiter    *limiter       // per-IP cap on demo account creation
+	accountLimiter *limiter       // per-IP cap on self-service password/recovery mutations
+	ipLimiter      *quota.Limiter // general request rate, per IP (see rateLimit)
+	bridgeLimiter  *quota.Limiter // authenticated Bridge requests, per credential (see requireBridge)
+	tokenLimiter   *quota.Limiter // authenticated API rate, per credential (see requireAuth)
+	mediaLimiter   *quota.Limiter // authenticated media rate, per credential (see requireMediaAuth)
 	// health is /healthz's database probe, shared by the requests within
 	// healthReuse of it (handleHealth): the route is outside the rate limit.
 	health healthProbe
@@ -308,7 +309,6 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		// off Health's list now, not at the report's monthly recheck.
 		metaSvc.SetASINFound(clearFoundASIN(cat, log))
 	}
-	limits := cfg.RateLimit.Effective()
 	a := &API{
 		boot:              cfg,
 		auth:              authSvc,
@@ -332,11 +332,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		redeemLimiter:     newLimiter(10, 15*time.Minute),
 		demoLimiter:       newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
 		accountLimiter:    newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
-		// Per IP, then per credential (config rate_limit.*).
-		ipLimiter:      newBucketLimiter(limits.Address),
-		bridgeLimiter:  newRateLimiter(bridgeRate, bridgeBurst),
-		tokenLimiter:   newBucketLimiter(limits.Token),
-		mediaLimiter:   newBucketLimiter(limits.Media),
+
 		castKeepEvery:  auth.CastTouchInterval,
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		transcodeHolds: make(map[transcodeAsk]*transcodeHold),
@@ -355,6 +351,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		opml:           newOPMLTransfers(),
 		lists:          newListCache(),
 	}
+	a.initRateLimits(time.Now)
 	if cfg.DataDir != "" {
 		if rm, err := media.NewRemuxer(filepath.Join(cfg.DataDir, "cache", "remux"), log); err != nil {
 			log.Warn("remux cache unavailable: Matroska is served as stored", "err", err)
@@ -592,17 +589,17 @@ func (a *API) StartCoverColors(ctx context.Context) {
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.Handle("GET /api/v1/libraries/{id}/podcasts", a.requireAuth(http.HandlerFunc(a.handlePodcastShows)))
-	mux.Handle("GET /api/v1/libraries/{id}/podcasts/episodes", a.requireAuth(http.HandlerFunc(a.handlePodcastEpisodes)))
-	mux.Handle("GET /api/v1/libraries/{id}/podcasts/fetch", a.requireAuth(http.HandlerFunc(a.handlePodcastFetch)))
+	mux.Handle("GET /api/v1/libraries/{id}/podcasts", a.requireAuth(compressJSON(a.handlePodcastShows)))
+	mux.Handle("GET /api/v1/libraries/{id}/podcasts/episodes", a.requireAuth(compressJSON(a.handlePodcastEpisodes)))
+	mux.Handle("GET /api/v1/libraries/{id}/podcasts/fetch", a.requireAuth(compressJSON(a.handlePodcastFetch)))
 	mux.Handle("POST /api/v1/libraries/{id}/podcasts/fetch", a.requireAuth(notDemo(http.HandlerFunc(a.handlePodcastFetch))))
-	mux.Handle("GET /api/v1/me/podcasts", a.requireAuth(http.HandlerFunc(a.handleMyPodcasts)))
+	mux.Handle("GET /api/v1/me/podcasts", a.requireAuth(compressJSON(a.handleMyPodcasts)))
 	pr := moduleRoutes{a: a, mux: mux, id: bridge.ModulePodcasts}
 	pr.User("POST /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastFollow))
 	pr.User("DELETE /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastUnfollow))
 	pr.User("POST /api/v1/podcasts/check", http.HandlerFunc(a.handlePodcastCheck))
 	a.mountPodcastTransfer(mux)
-	mux.Handle("GET /api/v1/admin/libraries/{id}/podcasts/retention", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastRetention))))
+	mux.Handle("GET /api/v1/admin/libraries/{id}/podcasts/retention", a.requireAdmin(notDemo(compressJSON(a.handleAdminPodcastRetention))))
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/podcasts/retention", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastRetention))))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}/podcasts/retention", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastRetention))))
 	mux.Handle("POST /api/v1/admin/libraries/{id}/podcasts/fetch", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastFetch))))
@@ -610,7 +607,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/bridge/libraries/{id}/podcasts/retention/check", a.requireBridge(a.handleBridgePodcastRetentionCheck))
 	mux.Handle("GET /api/v1/bridge/libraries/{id}/marker", a.requireBridge(a.handleBridgeMarker))
 	// Public.
-	mux.HandleFunc("GET /api/v1/server", a.handleServerInfo)
+	mux.Handle("GET /api/v1/server", compressJSON(a.handleServerInfo))
 	// Liveness/readiness probe (public): reports DB read-reachability for a
 	// container healthcheck. Both /healthz and the API-prefixed form are served
 	// (healthPatterns), outside the rate limit.
@@ -651,27 +648,27 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/auth/tokens", a.requireAuth(notKid(http.HandlerFunc(a.handleCreateAPIToken))))
 	mux.Handle("GET /api/v1/auth/tokens", a.requireAuth(http.HandlerFunc(a.handleListAPITokens)))
 	mux.Handle("DELETE /api/v1/auth/tokens/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeAPIToken)))
-	mux.Handle("GET /api/v1/me", a.requireAuth(http.HandlerFunc(a.handleMe)))
+	mux.Handle("GET /api/v1/me", a.requireAuth(compressJSON(a.handleMe)))
 	// The server's home and away addresses, for a device paired before one was set.
-	mux.Handle("GET /api/v1/addresses", a.requireAuth(http.HandlerFunc(a.handleAddresses)))
+	mux.Handle("GET /api/v1/addresses", a.requireAuth(compressJSON(a.handleAddresses)))
 
 	// Content is addressed by (library, path) via ?path= - the path is the
 	// identity. The filesystem view is filtered to the caller's share scope.
-	mux.Handle("GET /api/v1/libraries", a.requireAuth(http.HandlerFunc(a.handleListLibraries)))
-	mux.Handle("GET /api/v1/libraries/{id}/fs", a.requireAuth(http.HandlerFunc(a.handleBrowseFS)))
-	mux.Handle("GET /api/v1/libraries/{id}/books", a.requireAuth(http.HandlerFunc(a.handleListBooks)))
-	mux.Handle("GET /api/v1/libraries/{id}/authors", a.requireAuth(a.handleBrowsePeople(catalog.PeopleAuthors, "authors")))
-	mux.Handle("GET /api/v1/libraries/{id}/narrators", a.requireAuth(a.handleBrowsePeople(catalog.PeopleNarrators, "narrators")))
-	mux.Handle("GET /api/v1/libraries/{id}/series", a.requireAuth(http.HandlerFunc(a.handleBrowseSeries)))
-	mux.Handle("GET /api/v1/libraries/{id}/series/books", a.requireAuth(http.HandlerFunc(a.handleSeriesBooks)))
-	mux.Handle("GET /api/v1/libraries/{id}/item", a.requireAuth(http.HandlerFunc(a.handleItem)))
-	mux.Handle("GET /api/v1/libraries/{id}/next", a.requireAuth(http.HandlerFunc(a.handleNext)))
-	mux.Handle("GET /api/v1/libraries/{id}/chapters", a.requireAuth(http.HandlerFunc(a.handleChapters)))
-	mux.Handle("GET /api/v1/libraries/{id}/meta", a.requireAuth(http.HandlerFunc(a.handleMeta)))
+	mux.Handle("GET /api/v1/libraries", a.requireAuth(compressJSON(a.handleListLibraries)))
+	mux.Handle("GET /api/v1/libraries/{id}/fs", a.requireAuth(compressJSON(a.handleBrowseFS)))
+	mux.Handle("GET /api/v1/libraries/{id}/books", a.requireAuth(compressJSON(a.handleListBooks)))
+	mux.Handle("GET /api/v1/libraries/{id}/authors", a.requireAuth(compressJSON(a.handleBrowsePeople(catalog.PeopleAuthors, "authors"))))
+	mux.Handle("GET /api/v1/libraries/{id}/narrators", a.requireAuth(compressJSON(a.handleBrowsePeople(catalog.PeopleNarrators, "narrators"))))
+	mux.Handle("GET /api/v1/libraries/{id}/series", a.requireAuth(compressJSON(a.handleBrowseSeries)))
+	mux.Handle("GET /api/v1/libraries/{id}/series/books", a.requireAuth(compressJSON(a.handleSeriesBooks)))
+	mux.Handle("GET /api/v1/libraries/{id}/item", a.requireAuth(compressJSON(a.handleItem)))
+	mux.Handle("GET /api/v1/libraries/{id}/next", a.requireAuth(compressJSON(a.handleNext)))
+	mux.Handle("GET /api/v1/libraries/{id}/chapters", a.requireAuth(compressJSON(a.handleChapters)))
+	mux.Handle("GET /api/v1/libraries/{id}/meta", a.requireAuth(compressJSON(a.handleMeta)))
 	// Community work lookup by metadata-site work id - global, read-only data
 	// (no library, nothing to scope), so plain auth. The id is a query param
 	// because work-id slugs are not path-segment safe.
-	mux.Handle("GET /api/v1/meta/work", a.requireAuth(http.HandlerFunc(a.handleMetaWork)))
+	mux.Handle("GET /api/v1/meta/work", a.requireAuth(compressJSON(a.handleMetaWork)))
 	// Media GETs accept the session token as a ?token= query param (browser
 	// <img>/<audio> can't set headers); other routes do not (see requireMediaAuth).
 	// A book's own cover and stream also take a cast token (requireBookMediaAuth).
@@ -680,80 +677,80 @@ func (a *API) Handler() http.Handler {
 	// Watch renditions of a book's files (Track W2): prepare them all, or read
 	// where each stands; the files themselves come from /stream?rendition=.
 	mux.Handle("POST /api/v1/libraries/{id}/renditions", a.requireAuth(http.HandlerFunc(a.handlePrepareRenditions)))
-	mux.Handle("GET /api/v1/libraries/{id}/renditions", a.requireAuth(http.HandlerFunc(a.handleRenditionStatus)))
+	mux.Handle("GET /api/v1/libraries/{id}/renditions", a.requireAuth(compressJSON(a.handleRenditionStatus)))
 	// A community cover the book's /meta envelope hands out, as a thumbnail from
 	// this server (the web player's CSP takes images only from it).
 	mux.Handle("GET /api/v1/libraries/{id}/meta/cover", a.requireMediaAuth(http.HandlerFunc(a.handleMetaCover)))
 	// The reader (Bridge Phase 3b, capability ebooks): a book's ebook, header auth
 	// only (requireAuth: never ?token=, no URL token), and the reader's place in it.
 	mux.Handle("GET /api/v1/libraries/{id}/ebook", a.requireAuth(http.HandlerFunc(a.handleEbook)))
-	mux.Handle("GET /api/v1/libraries/{id}/readalong", a.requireAuth(http.HandlerFunc(a.handleReadalong)))
-	mux.Handle("GET /api/v1/libraries/{id}/reading-progress", a.requireAuth(http.HandlerFunc(a.handleGetReadingProgress)))
+	mux.Handle("GET /api/v1/libraries/{id}/readalong", a.requireAuth(compressJSON(a.handleReadalong)))
+	mux.Handle("GET /api/v1/libraries/{id}/reading-progress", a.requireAuth(compressJSON(a.handleGetReadingProgress)))
 	mux.Handle("PUT /api/v1/libraries/{id}/reading-progress", a.requireAuth(http.HandlerFunc(a.handlePutReadingProgress)))
-	mux.Handle("GET /api/v1/search", a.requireAuth(http.HandlerFunc(a.handleSearch)))
-	mux.Handle("GET /api/v1/books/recent", a.requireAuth(http.HandlerFunc(a.handleRecentBooks)))
+	mux.Handle("GET /api/v1/search", a.requireAuth(compressJSON(a.handleSearch)))
+	mux.Handle("GET /api/v1/books/recent", a.requireAuth(compressJSON(a.handleRecentBooks)))
 
 	// Per-user listening state, addressed by (library, path).
-	mux.Handle("GET /api/v1/me/progress", a.requireAuth(http.HandlerFunc(a.handleListProgress)))
-	mux.Handle("GET /api/v1/libraries/{id}/progress", a.requireAuth(http.HandlerFunc(a.handleGetProgress)))
+	mux.Handle("GET /api/v1/me/progress", a.requireAuth(compressJSON(a.handleListProgress)))
+	mux.Handle("GET /api/v1/libraries/{id}/progress", a.requireAuth(compressJSON(a.handleGetProgress)))
 	mux.Handle("PUT /api/v1/libraries/{id}/progress", a.requireAuth(http.HandlerFunc(a.handlePutProgress)))
 	mux.Handle("POST /api/v1/me/listening/sync", a.requireAuth(http.HandlerFunc(a.handleListeningSync)))
-	mux.Handle("GET /api/v1/libraries/{id}/bookmarks", a.requireAuth(http.HandlerFunc(a.handleListBookmarks)))
+	mux.Handle("GET /api/v1/libraries/{id}/bookmarks", a.requireAuth(compressJSON(a.handleListBookmarks)))
 	mux.Handle("POST /api/v1/libraries/{id}/bookmarks", a.requireAuth(http.HandlerFunc(a.handleAddBookmark)))
 	mux.Handle("DELETE /api/v1/bookmarks/{id}", a.requireAuth(http.HandlerFunc(a.handleDeleteBookmark)))
-	mux.Handle("GET /api/v1/libraries/{id}/notes", a.requireAuth(http.HandlerFunc(a.handleListNotes)))
+	mux.Handle("GET /api/v1/libraries/{id}/notes", a.requireAuth(compressJSON(a.handleListNotes)))
 	mux.Handle("POST /api/v1/libraries/{id}/notes", a.requireAuth(http.HandlerFunc(a.handleAddNote)))
 	mux.Handle("DELETE /api/v1/notes/{id}", a.requireAuth(http.HandlerFunc(a.handleDeleteNote)))
-	mux.Handle("GET /api/v1/me/history", a.requireAuth(http.HandlerFunc(a.handleListAllHistory)))
-	mux.Handle("GET /api/v1/libraries/{id}/history", a.requireAuth(http.HandlerFunc(a.handleListHistory)))
+	mux.Handle("GET /api/v1/me/history", a.requireAuth(compressJSON(a.handleListAllHistory)))
+	mux.Handle("GET /api/v1/libraries/{id}/history", a.requireAuth(compressJSON(a.handleListHistory)))
 	mux.Handle("POST /api/v1/libraries/{id}/history", a.requireAuth(http.HandlerFunc(a.handleAddHistory)))
-	mux.Handle("GET /api/v1/me/favourites", a.requireAuth(http.HandlerFunc(a.handleListFavourites)))
+	mux.Handle("GET /api/v1/me/favourites", a.requireAuth(compressJSON(a.handleListFavourites)))
 	mux.Handle("POST /api/v1/libraries/{id}/favourites", a.requireAuth(http.HandlerFunc(a.handleAddFavourite)))
 	mux.Handle("DELETE /api/v1/libraries/{id}/favourites", a.requireAuth(http.HandlerFunc(a.handleRemoveFavourite)))
 
 	// Phase 1b: up next + collections
-	mux.Handle("GET /api/v1/me/queue", a.requireAuth(http.HandlerFunc(a.handleGetQueue)))
+	mux.Handle("GET /api/v1/me/queue", a.requireAuth(compressJSON(a.handleGetQueue)))
 	mux.Handle("PUT /api/v1/me/queue", a.requireAuth(http.HandlerFunc(a.handleSetQueue)))
 	mux.Handle("POST /api/v1/me/queue", a.requireAuth(http.HandlerFunc(a.handleAddToQueue)))
 	mux.Handle("DELETE /api/v1/me/queue", a.requireAuth(http.HandlerFunc(a.handleRemoveFromQueue)))
-	mux.Handle("GET /api/v1/me/collections", a.requireAuth(http.HandlerFunc(a.handleListCollections)))
+	mux.Handle("GET /api/v1/me/collections", a.requireAuth(compressJSON(a.handleListCollections)))
 	mux.Handle("POST /api/v1/me/collections", a.requireAuth(http.HandlerFunc(a.handleCreateCollection)))
-	mux.Handle("GET /api/v1/me/collections/{id}", a.requireAuth(http.HandlerFunc(a.handleGetCollection)))
+	mux.Handle("GET /api/v1/me/collections/{id}", a.requireAuth(compressJSON(a.handleGetCollection)))
 	mux.Handle("PATCH /api/v1/me/collections/{id}", a.requireAuth(http.HandlerFunc(a.handleUpdateCollection)))
 	mux.Handle("DELETE /api/v1/me/collections/{id}", a.requireAuth(http.HandlerFunc(a.handleDeleteCollection)))
 	mux.Handle("PUT /api/v1/me/collections/{id}/items", a.requireAuth(http.HandlerFunc(a.handleSetCollectionItems)))
 	mux.Handle("POST /api/v1/me/collections/{id}/items", a.requireAuth(http.HandlerFunc(a.handleAddCollectionItem)))
 	mux.Handle("DELETE /api/v1/me/collections/{id}/items", a.requireAuth(http.HandlerFunc(a.handleRemoveCollectionItem)))
 	mux.Handle("PUT /api/v1/me/collections/{id}/shares", a.requireAuth(notKid(http.HandlerFunc(a.handleSetCollectionShares))))
-	mux.Handle("GET /api/v1/me/share-targets", a.requireAuth(http.HandlerFunc(a.handleShareTargets)))
+	mux.Handle("GET /api/v1/me/share-targets", a.requireAuth(compressJSON(a.handleShareTargets)))
 
 	// Phase 1b: your listening (capability user_stats): the caller's own stats,
 	// listening per day and yearly goal.
-	mux.Handle("GET /api/v1/me/stats", a.requireAuth(http.HandlerFunc(a.handleMyStats)))
-	mux.Handle("GET /api/v1/me/listening", a.requireAuth(http.HandlerFunc(a.handleMyListening)))
-	mux.Handle("GET /api/v1/me/goal", a.requireAuth(http.HandlerFunc(a.handleGetGoal)))
+	mux.Handle("GET /api/v1/me/stats", a.requireAuth(compressJSON(a.handleMyStats)))
+	mux.Handle("GET /api/v1/me/listening", a.requireAuth(compressJSON(a.handleMyListening)))
+	mux.Handle("GET /api/v1/me/goal", a.requireAuth(compressJSON(a.handleGetGoal)))
 	mux.Handle("PUT /api/v1/me/goal", a.requireAuth(http.HandlerFunc(a.handlePutGoal)))
 	mux.Handle("DELETE /api/v1/me/goal", a.requireAuth(http.HandlerFunc(a.handleDeleteGoal)))
 
 	// Phase 1b: ratings, progress edits, my devices
-	mux.Handle("GET /api/v1/libraries/{id}/rating", a.requireAuth(http.HandlerFunc(a.handleGetRating)))
+	mux.Handle("GET /api/v1/libraries/{id}/rating", a.requireAuth(compressJSON(a.handleGetRating)))
 	mux.Handle("PUT /api/v1/libraries/{id}/rating", a.requireAuth(http.HandlerFunc(a.handlePutRating)))
 	mux.Handle("DELETE /api/v1/libraries/{id}/rating", a.requireAuth(http.HandlerFunc(a.handleDeleteRating)))
-	mux.Handle("GET /api/v1/me/ratings", a.requireAuth(http.HandlerFunc(a.handleListRatings)))
+	mux.Handle("GET /api/v1/me/ratings", a.requireAuth(compressJSON(a.handleListRatings)))
 	mux.Handle("PATCH /api/v1/libraries/{id}/progress", a.requireAuth(http.HandlerFunc(a.handleEditMyProgress)))
-	mux.Handle("GET /api/v1/me/devices", a.requireAuth(http.HandlerFunc(a.handleListMyDevices)))
+	mux.Handle("GET /api/v1/me/devices", a.requireAuth(compressJSON(a.handleListMyDevices)))
 	mux.Handle("DELETE /api/v1/me/devices/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeMyDevice)))
 
 	// Phase 4: annotations (bookmark labels, owner edits, the all-books lists;
 	// GET /me/history above gained paging and books).
 	mux.Handle("PATCH /api/v1/bookmarks/{id}", a.requireAuth(http.HandlerFunc(a.handleEditBookmark)))
 	mux.Handle("PATCH /api/v1/notes/{id}", a.requireAuth(http.HandlerFunc(a.handleEditNote)))
-	mux.Handle("GET /api/v1/me/bookmarks", a.requireAuth(http.HandlerFunc(a.handleListMyBookmarks)))
-	mux.Handle("GET /api/v1/me/notes", a.requireAuth(http.HandlerFunc(a.handleListMyNotes)))
+	mux.Handle("GET /api/v1/me/bookmarks", a.requireAuth(compressJSON(a.handleListMyBookmarks)))
+	mux.Handle("GET /api/v1/me/notes", a.requireAuth(compressJSON(a.handleListMyNotes)))
 
 	// Phase 8: listening in the house (household) and casting (cast).
 	// Upcoming releases (Track U1): never a kid's.
-	mux.Handle("GET /api/v1/me/upcoming", a.requireAuth(notKid(http.HandlerFunc(a.handleMyUpcoming))))
+	mux.Handle("GET /api/v1/me/upcoming", a.requireAuth(notKid(compressJSON(a.handleMyUpcoming))))
 	// Track U3: the calendar feed (upcoming_calendar) and the covers
 	// (upcoming_covers). The feed takes ONLY a feed token (requireFeedAuth), and
 	// no other route takes one.
@@ -762,44 +759,44 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/me/upcoming/calendar", a.requireAuth(notKid(http.HandlerFunc(a.handleDeleteUpcomingCalendar))))
 	mux.Handle("GET /api/v1/me/upcoming/releases.ics", a.requireFeedAuth(notKid(http.HandlerFunc(a.handleUpcomingCalendarFeed))))
 	mux.Handle("GET /api/v1/me/upcoming/cover", a.requireMediaAuth(notKid(http.HandlerFunc(a.handleUpcomingCover))))
-	mux.Handle("GET /api/v1/me/household", a.requireAuth(http.HandlerFunc(a.handleGetHousehold)))
+	mux.Handle("GET /api/v1/me/household", a.requireAuth(compressJSON(a.handleGetHousehold)))
 	mux.Handle("PUT /api/v1/me/household", a.requireAuth(notKid(http.HandlerFunc(a.handlePutHousehold))))
-	mux.Handle("GET /api/v1/household/listening", a.requireAuth(http.HandlerFunc(a.handleHouseListening)))
+	mux.Handle("GET /api/v1/household/listening", a.requireAuth(compressJSON(a.handleHouseListening)))
 	mux.Handle("POST /api/v1/cast/token", a.requireAuth(http.HandlerFunc(a.handleMintCastToken)))
 
 	// Phase 8b-1: household members (household_members).
-	mux.Handle("GET /api/v1/me/household/members", a.requireAuth(http.HandlerFunc(a.handleListMembers)))
+	mux.Handle("GET /api/v1/me/household/members", a.requireAuth(compressJSON(a.handleListMembers)))
 	mux.Handle("POST /api/v1/me/household/members", a.requireAuth(http.HandlerFunc(a.handleCreateMember)))
 	mux.Handle("PATCH /api/v1/me/household/members/{id}", a.requireAuth(http.HandlerFunc(a.handleUpdateMember)))
 	mux.Handle("DELETE /api/v1/me/household/members/{id}", a.requireAuth(http.HandlerFunc(a.handleDeleteMember)))
 	mux.Handle("POST /api/v1/me/household/members/{id}/session", a.requireAuth(http.HandlerFunc(a.handleMemberSession)))
 	mux.Handle("POST /api/v1/me/household/members/{id}/pair", a.requireAuth(http.HandlerFunc(a.handleMemberPair)))
-	mux.Handle("GET /api/v1/me/household/members/{id}/devices", a.requireAuth(http.HandlerFunc(a.handleMemberDevices)))
+	mux.Handle("GET /api/v1/me/household/members/{id}/devices", a.requireAuth(compressJSON(a.handleMemberDevices)))
 	mux.Handle("DELETE /api/v1/me/household/members/{id}/devices/{device_id}", a.requireAuth(http.HandlerFunc(a.handleRevokeMemberDevice)))
 
 	// Admin.
-	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))
-	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleGetSettings)))
+	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(compressJSON(a.handleStats)))
+	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(compressJSON(a.handleGetSettings)))
 	mux.Handle("PATCH /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleUpdateSettings)))
-	mux.Handle("GET /api/v1/admin/system", a.requireAdmin(http.HandlerFunc(a.handleSystem)))
-	mux.Handle("GET /api/v1/admin/update", a.requireAdmin(http.HandlerFunc(a.handleUpdateStatus)))
+	mux.Handle("GET /api/v1/admin/system", a.requireAdmin(compressJSON(a.handleSystem)))
+	mux.Handle("GET /api/v1/admin/update", a.requireAdmin(compressJSON(a.handleUpdateStatus)))
 	mux.Handle("POST /api/v1/admin/update/check", a.requireAdmin(http.HandlerFunc(a.handleUpdateCheck)))
-	mux.Handle("GET /api/v1/admin/meta/mirror", a.requireAdmin(http.HandlerFunc(a.handleMetaMirror)))
+	mux.Handle("GET /api/v1/admin/meta/mirror", a.requireAdmin(compressJSON(a.handleMetaMirror)))
 	mux.Handle("POST /api/v1/admin/meta/mirror/check", a.requireAdmin(http.HandlerFunc(a.handleMetaMirrorCheck)))
-	mux.Handle("GET /api/v1/admin/logs", a.requireAdmin(http.HandlerFunc(a.handleLogs)))
-	mux.Handle("GET /api/v1/admin/audit", a.requireAdmin(http.HandlerFunc(a.handleAudit)))
-	mux.Handle("GET /api/v1/admin/events", a.requireAdmin(http.HandlerFunc(a.handleServerEvents)))
+	mux.Handle("GET /api/v1/admin/logs", a.requireAdmin(compressJSON(a.handleLogs)))
+	mux.Handle("GET /api/v1/admin/audit", a.requireAdmin(compressJSON(a.handleAudit)))
+	mux.Handle("GET /api/v1/admin/events", a.requireAdmin(compressJSON(a.handleServerEvents)))
 	// The Overview's support card: whether it shows, and an admin's answer (server-wide).
-	mux.Handle("GET /api/v1/admin/support", a.requireAdmin(http.HandlerFunc(a.handleSupport)))
+	mux.Handle("GET /api/v1/admin/support", a.requireAdmin(compressJSON(a.handleSupport)))
 	mux.Handle("POST /api/v1/admin/support", a.requireAdmin(http.HandlerFunc(a.handleSupportChoice)))
 	// The console's "Set up your server" flow (handlers_admin_setup.go).
-	mux.Handle("GET /api/v1/admin/setup", a.requireAdmin(http.HandlerFunc(a.handleGetSetup)))
+	mux.Handle("GET /api/v1/admin/setup", a.requireAdmin(compressJSON(a.handleGetSetup)))
 	mux.Handle("PUT /api/v1/admin/setup", a.requireAdmin(http.HandlerFunc(a.handleUpdateSetup)))
 	mux.Handle("POST /api/v1/admin/setup/preview", a.requireAdmin(http.HandlerFunc(a.handleSetupPreview)))
 
 	// Backups: the database copied into the backups folder; a restore applies at the
 	// next start. Downloads stream (see isStreamingPath).
-	mux.Handle("GET /api/v1/admin/backups", a.requireAdmin(http.HandlerFunc(a.handleListBackups)))
+	mux.Handle("GET /api/v1/admin/backups", a.requireAdmin(compressJSON(a.handleListBackups)))
 	mux.Handle("POST /api/v1/admin/backups", a.requireAdmin(http.HandlerFunc(a.handleCreateBackup)))
 	mux.Handle("GET /api/v1/admin/backups/{name}", a.requireAdmin(http.HandlerFunc(a.handleDownloadBackup)))
 	mux.Handle("DELETE /api/v1/admin/backups/{name}", a.requireAdmin(http.HandlerFunc(a.handleDeleteBackup)))
@@ -807,14 +804,14 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/admin/restore", a.requireAdmin(http.HandlerFunc(a.handleCancelRestore)))
 
 	// Notification destinations.
-	mux.Handle("GET /api/v1/admin/notifications", a.requireAdmin(http.HandlerFunc(a.handleListNotifyTargets)))
+	mux.Handle("GET /api/v1/admin/notifications", a.requireAdmin(compressJSON(a.handleListNotifyTargets)))
 	mux.Handle("POST /api/v1/admin/notifications", a.requireAdmin(http.HandlerFunc(a.handleCreateNotifyTarget)))
 	mux.Handle("PATCH /api/v1/admin/notifications/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateNotifyTarget)))
 	mux.Handle("DELETE /api/v1/admin/notifications/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteNotifyTarget)))
 	mux.Handle("POST /api/v1/admin/notifications/{id}/test", a.requireAdmin(http.HandlerFunc(a.handleTestNotifyTarget)))
-	mux.Handle("GET /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleListUsers)))
+	mux.Handle("GET /api/v1/admin/users", a.requireAdmin(compressJSON(a.handleListUsers)))
 	mux.Handle("POST /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleCreateUser)))
-	mux.Handle("GET /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetUserDetail)))
+	mux.Handle("GET /api/v1/admin/users/{id}", a.requireAdmin(compressJSON(a.handleGetUserDetail)))
 	mux.Handle("PATCH /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateUser)))
 	mux.Handle("DELETE /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteUser)))
 	mux.Handle("POST /api/v1/admin/users/{id}/authcode", a.requireAdmin(http.HandlerFunc(a.handleCreateAuthCode)))
@@ -823,71 +820,71 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/users/{id}/end-keys", a.requireAdmin(http.HandlerFunc(a.handleEndKeys)))
 	mux.Handle("DELETE /api/v1/admin/users/{id}/identities/{identity_id}", a.requireAdmin(http.HandlerFunc(a.handleUnlinkIdentity)))
 	// Single sign-on: the provider's status and the sign-ins waiting for an admin.
-	mux.Handle("GET /api/v1/admin/oidc/status", a.requireAdmin(http.HandlerFunc(a.handleOIDCStatus)))
-	mux.Handle("GET /api/v1/admin/oidc/pending", a.requireAdmin(http.HandlerFunc(a.handleOIDCPending)))
+	mux.Handle("GET /api/v1/admin/oidc/status", a.requireAdmin(compressJSON(a.handleOIDCStatus)))
+	mux.Handle("GET /api/v1/admin/oidc/pending", a.requireAdmin(compressJSON(a.handleOIDCPending)))
 	mux.Handle("POST /api/v1/admin/oidc/pending/{id}/link", a.requireAdmin(http.HandlerFunc(a.handleOIDCPendingLink)))
 	mux.Handle("POST /api/v1/admin/oidc/pending/{id}/create", a.requireAdmin(http.HandlerFunc(a.handleOIDCPendingCreate)))
 	mux.Handle("DELETE /api/v1/admin/oidc/pending/{id}", a.requireAdmin(http.HandlerFunc(a.handleOIDCPendingDismiss)))
-	mux.Handle("GET /api/v1/admin/invites", a.requireAdmin(http.HandlerFunc(a.handleListInvites)))
+	mux.Handle("GET /api/v1/admin/invites", a.requireAdmin(compressJSON(a.handleListInvites)))
 	mux.Handle("POST /api/v1/admin/authcodes/{id}/rotate", a.requireAdmin(http.HandlerFunc(a.handleRotateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/authcodes/{id}", a.requireAdmin(http.HandlerFunc(a.handleRevokeAuthCode)))
-	mux.Handle("GET /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleAdminListLibraries)))
-	mux.Handle("GET /api/v1/admin/fs/dirs", a.requireAdmin(http.HandlerFunc(a.handleListDirs)))
+	mux.Handle("GET /api/v1/admin/libraries", a.requireAdmin(compressJSON(a.handleAdminListLibraries)))
+	mux.Handle("GET /api/v1/admin/fs/dirs", a.requireAdmin(compressJSON(a.handleListDirs)))
 	mux.Handle("POST /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleCreateLibrary)))
 	mux.Handle("PUT /api/v1/admin/libraries/order", a.requireAdmin(http.HandlerFunc(a.handleReorderLibraries)))
 	mux.Handle("PATCH /api/v1/admin/libraries/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateLibrary)))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteLibrary)))
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/folder-override", a.requireAdmin(http.HandlerFunc(a.handleSetFolderOverride)))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}/folder-override", a.requireAdmin(http.HandlerFunc(a.handleDeleteFolderOverride)))
-	mux.Handle("GET /api/v1/admin/libraries/{id}/export", a.requireAdmin(http.HandlerFunc(a.handleExportLibrary)))
+	mux.Handle("GET /api/v1/admin/libraries/{id}/export", a.requireAdmin(compressJSON(a.handleExportLibrary)))
 	mux.Handle("POST /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanLibrary)))
-	mux.Handle("GET /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanStatus)))
+	mux.Handle("GET /api/v1/admin/libraries/{id}/scan", a.requireAdmin(compressJSON(a.handleScanStatus)))
 	mux.Handle("POST /api/v1/admin/scan", a.requireAdmin(http.HandlerFunc(a.handleScanAll)))
 	mux.Handle("POST /api/v1/admin/libraries/{id}/book/rescan", a.requireAdmin(http.HandlerFunc(a.handleRescanBook)))
-	mux.Handle("GET /api/v1/admin/issues", a.requireAdmin(http.HandlerFunc(a.handleIssues)))
-	mux.Handle("GET /api/v1/admin/issues/duplicates", a.requireAdmin(http.HandlerFunc(a.handleDuplicates)))
-	mux.Handle("GET /api/v1/admin/issues/series-spellings", a.requireAdmin(http.HandlerFunc(a.handleSeriesSpellings)))
+	mux.Handle("GET /api/v1/admin/issues", a.requireAdmin(compressJSON(a.handleIssues)))
+	mux.Handle("GET /api/v1/admin/issues/duplicates", a.requireAdmin(compressJSON(a.handleDuplicates)))
+	mux.Handle("GET /api/v1/admin/issues/series-spellings", a.requireAdmin(compressJSON(a.handleSeriesSpellings)))
 	mux.Handle("POST /api/v1/admin/issues/ignore", a.requireAdmin(http.HandlerFunc(a.handleIgnoreIssue)))
 	mux.Handle("DELETE /api/v1/admin/issues/ignore", a.requireAdmin(http.HandlerFunc(a.handleUnignoreIssue)))
-	mux.Handle("GET /api/v1/admin/jobs", a.requireAdmin(http.HandlerFunc(a.handleJobs)))
+	mux.Handle("GET /api/v1/admin/jobs", a.requireAdmin(compressJSON(a.handleJobs)))
 	mux.Handle("DELETE /api/v1/admin/jobs/{id}", a.requireAdmin(http.HandlerFunc(a.handleCancelJob)))
-	mux.Handle("GET /api/v1/admin/scan-runs", a.requireAdmin(http.HandlerFunc(a.handleScanRuns)))
-	mux.Handle("GET /api/v1/admin/scan-runs/{id}", a.requireAdmin(http.HandlerFunc(a.handleScanRun)))
+	mux.Handle("GET /api/v1/admin/scan-runs", a.requireAdmin(compressJSON(a.handleScanRuns)))
+	mux.Handle("GET /api/v1/admin/scan-runs/{id}", a.requireAdmin(compressJSON(a.handleScanRun)))
 
 	// Activity: listening sessions (derived from progress saves), devices (signed-in
 	// tokens) and an admin's edits of someone's progress. Stats are GET
 	// /admin/stats?range=.
-	mux.Handle("GET /api/v1/admin/listening", a.requireAdmin(http.HandlerFunc(a.handleListeningDays)))
-	mux.Handle("GET /api/v1/admin/sessions/live", a.requireAdmin(http.HandlerFunc(a.handleLiveSessions)))
-	mux.Handle("GET /api/v1/admin/sessions", a.requireAdmin(http.HandlerFunc(a.handleListSessions)))
-	mux.Handle("GET /api/v1/admin/devices", a.requireAdmin(http.HandlerFunc(a.handleListDevices)))
+	mux.Handle("GET /api/v1/admin/listening", a.requireAdmin(compressJSON(a.handleListeningDays)))
+	mux.Handle("GET /api/v1/admin/sessions/live", a.requireAdmin(compressJSON(a.handleLiveSessions)))
+	mux.Handle("GET /api/v1/admin/sessions", a.requireAdmin(compressJSON(a.handleListSessions)))
+	mux.Handle("GET /api/v1/admin/devices", a.requireAdmin(compressJSON(a.handleListDevices)))
 	mux.Handle("DELETE /api/v1/admin/devices/{id}", a.requireAdmin(http.HandlerFunc(a.handleRevokeDevice)))
-	mux.Handle("GET /api/v1/admin/users/{id}/progress", a.requireAdmin(http.HandlerFunc(a.handleUserProgress)))
+	mux.Handle("GET /api/v1/admin/users/{id}/progress", a.requireAdmin(compressJSON(a.handleUserProgress)))
 	mux.Handle("PATCH /api/v1/admin/libraries/{id}/progress", a.requireAdmin(http.HandlerFunc(a.handleEditProgress)))
 
 	// Admin catalog: the console's Library and Book screens. Metadata edits are
 	// path-keyed overrides in the database; no file on disk is ever modified.
-	mux.Handle("GET /api/v1/admin/books", a.requireAdmin(http.HandlerFunc(a.handleAdminListBooks)))
-	mux.Handle("GET /api/v1/admin/books/facets", a.requireAdmin(http.HandlerFunc(a.handleAdminBookFacets)))
+	mux.Handle("GET /api/v1/admin/books", a.requireAdmin(compressJSON(a.handleAdminListBooks)))
+	mux.Handle("GET /api/v1/admin/books/facets", a.requireAdmin(compressJSON(a.handleAdminBookFacets)))
 	mux.Handle("POST /api/v1/admin/books/bulk", a.requireAdmin(http.HandlerFunc(a.handleAdminBulkEdit)))
 	mux.Handle("POST /api/v1/admin/covers", a.requireAdmin(http.HandlerFunc(a.handleAdminCovers)))
 	mux.Handle("POST /api/v1/admin/meta/covers", a.requireAdmin(http.HandlerFunc(a.handleCommunityCovers)))
 	mux.Handle("POST /api/v1/admin/books/works", a.requireAdmin(http.HandlerFunc(a.handleAdminBookWorks)))
-	mux.Handle("GET /api/v1/admin/authors", a.requireAdmin(a.handleAdminPeople(catalog.PeopleAuthors, "authors")))
-	mux.Handle("GET /api/v1/admin/narrators", a.requireAdmin(a.handleAdminPeople(catalog.PeopleNarrators, "narrators")))
-	mux.Handle("GET /api/v1/admin/series", a.requireAdmin(http.HandlerFunc(a.handleAdminSeries)))
-	mux.Handle("GET /api/v1/admin/libraries/{id}/book", a.requireAdmin(http.HandlerFunc(a.handleAdminBook)))
+	mux.Handle("GET /api/v1/admin/authors", a.requireAdmin(compressJSON(a.handleAdminPeople(catalog.PeopleAuthors, "authors"))))
+	mux.Handle("GET /api/v1/admin/narrators", a.requireAdmin(compressJSON(a.handleAdminPeople(catalog.PeopleNarrators, "narrators"))))
+	mux.Handle("GET /api/v1/admin/series", a.requireAdmin(compressJSON(a.handleAdminSeries)))
+	mux.Handle("GET /api/v1/admin/libraries/{id}/book", a.requireAdmin(compressJSON(a.handleAdminBook)))
 	mux.Handle("PATCH /api/v1/admin/libraries/{id}/book", a.requireAdmin(http.HandlerFunc(a.handleAdminEditBook)))
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/book/chapters", a.requireAdmin(http.HandlerFunc(a.handleAdminEditChapters)))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}/book/chapters", a.requireAdmin(http.HandlerFunc(a.handleAdminRevertChapters)))
-	mux.Handle("GET /api/v1/admin/libraries/{id}/book/match", a.requireAdmin(http.HandlerFunc(a.handleAdminMatch)))
+	mux.Handle("GET /api/v1/admin/libraries/{id}/book/match", a.requireAdmin(compressJSON(a.handleAdminMatch)))
 	mux.Handle("POST /api/v1/admin/libraries/{id}/book/community-chapters", a.requireAdmin(http.HandlerFunc(a.handleCheckCommunityChapters)))
 	// Bulk community matching: a background run over the unmatched books, reviewed
 	// before it is applied (handlers_match_runs.go).
-	mux.Handle("GET /api/v1/admin/match-runs", a.requireAdmin(http.HandlerFunc(a.handleListMatchRuns)))
+	mux.Handle("GET /api/v1/admin/match-runs", a.requireAdmin(compressJSON(a.handleListMatchRuns)))
 	mux.Handle("POST /api/v1/admin/match-runs", a.requireAdmin(http.HandlerFunc(a.handleStartMatchRun)))
-	mux.Handle("GET /api/v1/admin/match-runs/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetMatchRun)))
-	mux.Handle("GET /api/v1/admin/match-runs/{id}/items", a.requireAdmin(http.HandlerFunc(a.handleMatchRunItems)))
+	mux.Handle("GET /api/v1/admin/match-runs/{id}", a.requireAdmin(compressJSON(a.handleGetMatchRun)))
+	mux.Handle("GET /api/v1/admin/match-runs/{id}/items", a.requireAdmin(compressJSON(a.handleMatchRunItems)))
 	mux.Handle("POST /api/v1/admin/match-runs/{id}/apply", a.requireAdmin(http.HandlerFunc(a.handleApplyMatchRun)))
 	mux.Handle("POST /api/v1/admin/match-runs/{id}/cancel", a.requireAdmin(http.HandlerFunc(a.handleCancelMatchRun)))
 	mux.Handle("DELETE /api/v1/admin/community-matches", a.requireAdmin(http.HandlerFunc(a.handleClearCommunityMatches)))
@@ -895,8 +892,8 @@ func (a *API) Handler() http.Handler {
 	// then applied (and undoable) as one transaction (handlers_import.go).
 	mux.Handle("POST /api/v1/admin/imports/abs/users", a.requireAdmin(http.HandlerFunc(a.handleImportUsers)))
 	mux.Handle("POST /api/v1/admin/imports/abs", a.requireAdmin(http.HandlerFunc(a.handleStartImport)))
-	mux.Handle("GET /api/v1/admin/imports", a.requireAdmin(http.HandlerFunc(a.handleListImports)))
-	mux.Handle("GET /api/v1/admin/imports/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetImport)))
+	mux.Handle("GET /api/v1/admin/imports", a.requireAdmin(compressJSON(a.handleListImports)))
+	mux.Handle("GET /api/v1/admin/imports/{id}", a.requireAdmin(compressJSON(a.handleGetImport)))
 	mux.Handle("PATCH /api/v1/admin/imports/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateImport)))
 	mux.Handle("POST /api/v1/admin/imports/{id}/apply", a.requireAdmin(http.HandlerFunc(a.handleApplyImport)))
 	mux.Handle("POST /api/v1/admin/imports/{id}/undo", a.requireAdmin(http.HandlerFunc(a.handleUndoImport)))
@@ -906,20 +903,20 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}/cover", a.requireAdmin(http.HandlerFunc(a.handleAdminDeleteCover)))
 
 	// The Bridge (handlers_bridge.go): the console's status, pairing and jobs.
-	mux.Handle("GET /api/v1/admin/bridge", a.requireAdmin(http.HandlerFunc(a.handleAdminBridge)))
+	mux.Handle("GET /api/v1/admin/bridge", a.requireAdmin(compressJSON(a.handleAdminBridge)))
 	mux.Handle("DELETE /api/v1/admin/bridge", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeUnpair)))
 	mux.Handle("POST /api/v1/admin/bridge/pair", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgePair)))
-	mux.Handle("GET /api/v1/admin/bridge/jobs", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeJobs)))
+	mux.Handle("GET /api/v1/admin/bridge/jobs", a.requireAdmin(compressJSON(a.handleAdminBridgeJobs)))
 	mux.Handle("POST /api/v1/admin/bridge/jobs", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeQueue)))
-	mux.Handle("GET /api/v1/admin/bridge/jobs/{id}", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeJob)))
+	mux.Handle("GET /api/v1/admin/bridge/jobs/{id}", a.requireAdmin(compressJSON(a.handleAdminBridgeJob)))
 	mux.Handle("POST /api/v1/admin/bridge/jobs/{id}/cancel", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeCancel)))
-	mux.Handle("GET /api/v1/admin/bridge/estimate", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeEstimate)))
+	mux.Handle("GET /api/v1/admin/bridge/estimate", a.requireAdmin(compressJSON(a.handleAdminBridgeEstimate)))
 
 	// Add from LibriVox (LibriVox L6, handlers_librivox.go): a LibriVox work
 	// search and a work's recordings from the community metadata, and the
 	// Bridge's librivox.fetch. Admin only, 404 metadata_off while it is off.
-	mux.Handle("GET /api/v1/admin/librivox/search", a.requireAdmin(http.HandlerFunc(a.handleLibrivoxSearch)))
-	mux.Handle("GET /api/v1/admin/librivox/work", a.requireAdmin(http.HandlerFunc(a.handleLibrivoxWork)))
+	mux.Handle("GET /api/v1/admin/librivox/search", a.requireAdmin(compressJSON(a.handleLibrivoxSearch)))
+	mux.Handle("GET /api/v1/admin/librivox/work", a.requireAdmin(compressJSON(a.handleLibrivoxWork)))
 	mux.Handle("POST /api/v1/admin/librivox/fetch", a.requireAdmin(http.HandlerFunc(a.handleLibrivoxFetch)))
 
 	// The Bridge's own routes: a bridge token only, and a bridge token nowhere
@@ -951,7 +948,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/bridge/progress", a.requireBridge(a.handleBridgeProgress))
 	// The console's Audible routes: admin, 404 module_off while the module is off.
 	ar := moduleRoutes{a: a, mux: mux, id: bridge.ModuleAudible}
-	ar.Admin("GET /api/v1/admin/audible/titles", http.HandlerFunc(a.handleAdminAudibleTitles))
+	ar.Admin("GET /api/v1/admin/audible/titles", compressJSON(a.handleAdminAudibleTitles))
 	ar.Admin("POST /api/v1/admin/audible/accounts/{account}/poll", http.HandlerFunc(a.handleAdminAudiblePoll))
 	// Backups (Phase 4b): "Back up", "Back up everything", "Not this book" and a
 	// destination, the account's policy and template.
@@ -962,18 +959,18 @@ func (a *API) Handler() http.Handler {
 	// Listing and removing accounts are not behind the toggle: an account the
 	// Bridge can no longer remove (unpaired, re-paired, a failed DELETE) must be
 	// cleanable after the module is turned off (Settings > Modules lists them).
-	mux.Handle("GET /api/v1/admin/audible/accounts", a.requireAdmin(http.HandlerFunc(a.handleAdminAudibleAccounts)))
+	mux.Handle("GET /api/v1/admin/audible/accounts", a.requireAdmin(compressJSON(a.handleAdminAudibleAccounts)))
 	mux.Handle("DELETE /api/v1/admin/audible/accounts/{account}", a.requireAdmin(http.HandlerFunc(a.handleAdminAudibleAccountDelete)))
 
 	// Managed modules (modules.go): Settings > Modules' list, and each module's
 	// own routes, always mounted and answering 404 module_off while it is off.
-	mux.Handle("GET /api/v1/admin/modules", a.requireAdmin(http.HandlerFunc(a.handleAdminModules)))
+	mux.Handle("GET /api/v1/admin/modules", a.requireAdmin(compressJSON(a.handleAdminModules)))
 	a.mountModules(mux)
 
 	// Filesystem-based shares: named sets of path rules, granted to users.
-	mux.Handle("GET /api/v1/admin/shares", a.requireAdmin(http.HandlerFunc(a.handleListShares)))
+	mux.Handle("GET /api/v1/admin/shares", a.requireAdmin(compressJSON(a.handleListShares)))
 	mux.Handle("POST /api/v1/admin/shares", a.requireAdmin(http.HandlerFunc(a.handleCreateShare)))
-	mux.Handle("GET /api/v1/admin/shares/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetShare)))
+	mux.Handle("GET /api/v1/admin/shares/{id}", a.requireAdmin(compressJSON(a.handleGetShare)))
 	mux.Handle("PATCH /api/v1/admin/shares/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateShare)))
 	mux.Handle("DELETE /api/v1/admin/shares/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteShare)))
 	mux.Handle("POST /api/v1/admin/shares/{id}/paths", a.requireAdmin(http.HandlerFunc(a.handleAddSharePath)))
@@ -1006,15 +1003,16 @@ func (a *API) Handler() http.Handler {
 		})
 	}
 
+	return a.middleware(mux)
+}
+
+func (a *API) middleware(mux *http.ServeMux) http.Handler {
 	// Global middleware (outermost first): security headers, CORS, real-IP,
 	// rate limiting by route class, the ?path= length cap (capPathQuery), then
 	// a per-request timeout. timeout is innermost so it
 	// bounds only the handler/DB work (not the rate-limit/CORS layers) and so a
 	// stuck DB connection fails fast with 503 instead of hanging forever.
-	// compress wraps the mux itself (the list cache reads its verdict from the
-	// context) and sits inside the timeout, whose buffer takes its writes.
-	h := compress(mux)
-	h = a.timeout(h)
+	h := a.timeout(mux)
 	h = a.capPathQuery(h)
 	h = a.rateLimit(mux, h)
 	h = a.realIP(h)

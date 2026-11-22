@@ -30,7 +30,7 @@ const (
 	credentialKey
 	ipKey
 	addressChargedKey // rateLimit spent this request from its address's bucket
-	gzipKey           // compress: the answer may be gzipped and the client takes it
+	gzipKey           // compressJSON: the route opted in and the client takes gzip
 )
 
 // userFrom returns the authenticated user from the request context.
@@ -199,6 +199,12 @@ func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
 func writeErrorReason(w http.ResponseWriter, status int, code, reason, msg string) {
 	markUnauthorized(w, status, code)
 	writeJSON(w, status, map[string]string{"error": msg, "code": code, "reason": reason})
+}
+
+// requestGaveUp reports whether the client cancelled r (it left the page, a
+// type-ahead moved on): a read that failed for that is no failure to log.
+func requestGaveUp(r *http.Request) bool {
+	return errors.Is(r.Context().Err(), context.Canceled)
 }
 
 // writeCatalogError maps a catalog/library error to an HTTP response. The

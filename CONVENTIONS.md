@@ -800,7 +800,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   one; calendar apps read it as empty). Headers: `text/calendar; charset=utf-8`, `Content-Disposition:
   inline; filename="releases.ics"`, `Cache-Control: private, max-age=3600`, `ETag` `"ics-<the first 16
   hex of the body's SHA-256>"` (a poll that has it gets a 304; `conditional`); never compressed
-  (`compressExcluded` holds `/api/v1/me/upcoming/`). The upcoming reads take the caller's scopes without
+  (registered without `compressJSON`, as are the Upcoming cover and calendar link routes). The upcoming reads take the caller's scopes without
   podcast libraries (`upcomingScopes`: the tables join books libraries only), and a read the client gave
   up on is answered without a log line (`writeUpcomingError`). **The Upcoming cover** (`GET
   /me/upcoming/cover?work=&size=`, requireMediaAuth: session or API key, header or `?token=`, never a cast
@@ -953,18 +953,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and the comparison (a parameter has no affinity or collation either way); it only hides the
   value from the planner, which a statement whose plan must not follow its values wants anyway.
   A single-table statement and a correlated subquery are not affected.
-- **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
-  timeout. A request is compressible only when it is a GET (or its HEAD, which so carries the GET's
-  `Vary` and `Content-Encoding`, server#270) under `/api/v1/` without Range, outside
-  the media (`isStreamingPath`, `/meta/cover`), `/api/v1/auth/`, `/api/v1/bridge/` and `/api/v1/me/upcoming/` (the calendar feed, its token in the URL, and the Upcoming covers)
-  (`compressExcluded`); every credential is minted by a POST, so no compressed body holds one
-  (BREACH). A new GET that returns a credential joins `compressExcluded`. A new stream (media, a
-  download, a long poll, anything that flushes) goes in `isStreamingPath` when it must also leave
-  the request timeout, else in `compressExcluded`: `gzipWriter` has no Flush and holds the first
-  1 KiB back, so a streamed JSON answer must never reach it. Either way it adds a
-  `TestCompressExclusions` row (GET and HEAD) proving it is answered identity. The answer is gzipped (BestSpeed) when it is `application/json`, at least
-  1 KiB, has no Content-Encoding or ETag of its own and the client takes gzip; every JSON answer
-  to a compressible request carries `Vary: Accept-Encoding`. The list cache stores each answer's
+- **JSON compression** (`api/compress.go`, PERF-SPIKE S5, fail closed since server#270): a route
+  is compressed only when its registration in `api.go` wraps the handler in `compressJSON`
+  (inside `requireAuth`/`requireAdmin`, so authentication runs first; the public `GET /server` is
+  the one wrapped bare); every other route, a new one included, answers identity.
+  `compressJSON` acts only on a GET (or its HEAD, which so carries the GET's `Vary` and
+  `Content-Encoding`) without a Range or Upgrade header. Opt in only a reviewed JSON read: never
+  a route that returns a credential (BREACH: every credential is minted by a POST, and
+  `GET /auth/tokens`, the Bridge's routes and the Upcoming calendar link stay out), and never a
+  stream (media, a file download, a long poll, anything that flushes; the library
+  export is JSON and opts in): `gzipWriter` has no Flush and holds the first 1 KiB back. A route
+  that stays out has a `TestCompressExclusions` row
+  (GET and HEAD) proving it is answered identity. The answer is gzipped (BestSpeed) when it is
+  `application/json`, at least 1 KiB, not a 204, 206 or 304, has no Content-Range, Content-Encoding
+  or ETag of its own and the client takes gzip; every JSON answer to a GET or HEAD without Range
+  or Upgrade on an opted-in route carries `Vary: Accept-Encoding`. `gzipAccepted(r)` is the opt-in
+  and the client's gzip together: the list cache and read-along choose their stored gzip (and
+  read-along its `-gz` ETag) from it, so both read false on a route registered without
+  `compressJSON` and for a Range request. The list cache stores each answer's
   gzip beside it and sends that on a hit (`writeCachedJSON`), so a hit compresses nothing. A whole
   answer gzipped in memory (the list cache's, a read-along map, a console file) is `spa.Gzip` at a
   level (BestSpeed per request, the default for a file), nil when gzip saves nothing.
@@ -3010,8 +3016,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   an image on its own host (Audible's CDN, Open Library), which the console's CSP can't load, so
   the server fetches it (`meta.Service.FetchCover`: http(s) only, every connection's resolved
   address checked public at dial time, redirects included (`netguard.PublicAddr` through
-  `netguard.Dialer`, shared with podcast discovery; no proxy), <= 3
-  redirects, 15 s, `maxConcurrentCoverFetches`, never holding `coverReads`).
+  `netguard.Transport`, shared with podcast discovery; no proxy, at most 64 KiB of headers), no
+  user info in the URL or a redirect's, <= 3 redirects without an https to http downgrade, a 200
+  only, the caller's byte cap (`media.ArtFetcher`, the one remote art fetcher, shared with
+  discovery's artwork), 15 s, `maxConcurrentCoverFetches`, never holding `coverReads`).
   `POST /admin/meta/covers` (`{urls, size}`, <= 12) returns thumbnails as `data:` URLs in
   order (`""` = couldn't be fetched or decoded; cached in the thumbnail cache by URL, a failed
   fetch not; each holds `communityReads` from its fetch to the end of its decode; asks for the
@@ -3087,8 +3095,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ASIN or ISBN, or a recorded community match, `book_matches`, see Bulk matching), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection; a share created with `paths`
   is held to the same 1000 (`boundedList`, 400 `too_large`).
-- **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
-  `api/ratelimit.go`, configurable values from `config.rate_limit.*` read at start through
+- **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, the token buckets
+  `quota.PerSecond` (`internal/quota`, the one bucket type, shared with podcast discovery and OPML)
+  wired in `api/ratelimit.go` beside the failed-attempt lockouts, configurable values from `config.rate_limit.*` read at start through
   `RateLimitConfig.Effective`: a rate or burst left at 0 is the current default and is
   never saved, so a changed default reaches existing installs), read off the
   handler `mux.Handler` picks: static files (`web.IsStatic`) are not counted; media
@@ -4278,8 +4287,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `_SECRET`, read at start, `yaml:"-" json:"-"`, never in settings, logs, audit, cache keys or errors);
   a half or malformed pair turns that provider off with one warning naming the variable. Upstream
   fetches dial through `internal/netguard` (the dialled address checked: providers public :443, artwork
-  public any port; no proxy, no cookies, providers no redirects, artwork <= 3 without a downgrade), within
-  bounded bodies, per-user and per-provider token buckets (`internal/podcast/quota`), two provider and
+  public any port; no proxy, no cookies, providers no redirects, artwork through `media.ArtFetcher`: <= 3
+  redirects without a downgrade or user info), within
+  bounded bodies, per-user and per-provider token buckets (`quota.PerMinute`, `internal/quota`), two provider and
   four image slots, a 15 s failure cooldown, coalesced misses and bounded TTL caches. The artwork's
   admission is its own, sized by a results page (BRIDGE-03): a miss past the image slots queues for one
   (up to 40 waiting, each at most the fetch budget, then 503 `discovery_busy`), and its per-user and

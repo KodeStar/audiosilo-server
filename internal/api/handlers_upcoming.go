@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"time"
 
@@ -82,7 +81,7 @@ func (a *API) upcomingScopes(w http.ResponseWriter, r *http.Request) ([]catalog.
 // except a request that gave up (the player left the page, a calendar app
 // stopped waiting): no failure, so no log line.
 func (a *API) writeUpcomingError(w http.ResponseWriter, r *http.Request, err error, op, msg string) {
-	if errors.Is(r.Context().Err(), context.Canceled) {
+	if requestGaveUp(r) {
 		writeError(w, http.StatusInternalServerError, msg)
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/netguard"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -330,7 +331,7 @@ type Service struct {
 	health healthCache
 	// covers fetches community cover images (FetchCover), at most
 	// maxConcurrentCoverFetches at once (coverSem).
-	covers   *http.Client
+	covers   *media.ArtFetcher
 	coverSem chan struct{}
 	now      func() time.Time
 	// matchUnsupportedUntil (unix nanoseconds) is when works/match is next
@@ -367,7 +368,7 @@ func NewService(baseURL string, now func() time.Time) *Service {
 		lookupSem:     make(chan struct{}, maxConcurrentLookups),
 		flights:       map[string]*lookupFlight{},
 		seriesFlights: map[string]chan struct{}{},
-		covers:        newCoverClient(netguard.PublicAddrPort),
+		covers:        media.NewArtFetcher(coverTransport(netguard.PublicAddrPort), coverTimeout, ""),
 		coverSem:      make(chan struct{}, maxConcurrentCoverFetches),
 		now:           now,
 	}

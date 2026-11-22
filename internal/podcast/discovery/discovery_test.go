@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/quota"
 )
 
 const shared = "../testdata/phase2c3/"
@@ -1195,5 +1197,37 @@ func TestTestOriginSeam(t *testing.T) {
 	s = newTestService(t, f, &clock{t: time.Unix(1, 0)}, nil)
 	if _, e := s.Search(context.Background(), "1", query(t, "q=fixture")); e == nil || e.Code != "discovery_unavailable" || f.count("/index/api/1.0/search/byterm") != 0 {
 		t.Fatalf("redirect = %v", e)
+	}
+}
+
+func TestDiscoveryRateBudgets(t *testing.T) {
+	c := &clock{t: time.Unix(100, 0)}
+	s := New(Options{Now: c.Now})
+	for _, tc := range []struct {
+		name     string
+		limiter  *quota.Limiter
+		burst    int
+		interval time.Duration
+	}{
+		{"user search", s.userSearch, 3, 6 * time.Second},
+		{"user art", s.userArt, 40, 500 * time.Millisecond},
+		{"iTunes", s.providers[ITunes], 1, 3 * time.Second},
+		{"Podcast Index", s.providers[PodcastIndex], 2, 2 * time.Second},
+		{"image miss", s.imageMiss, 40, 500 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for i := range tc.burst {
+				if !tc.limiter.Take("k").OK {
+					t.Fatalf("refused token %d of %d", i+1, tc.burst)
+				}
+			}
+			if tc.limiter.Take("k").OK {
+				t.Fatal("admitted past the burst")
+			}
+			c.Add(tc.interval)
+			if !tc.limiter.Take("k").OK || tc.limiter.Take("k").OK {
+				t.Fatal("expected exactly one refilled token")
+			}
+		})
 	}
 }

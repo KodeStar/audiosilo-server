@@ -25,40 +25,40 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/netguard"
-	"github.com/kodestar/audiosilo-server/internal/podcast/quota"
+	"github.com/kodestar/audiosilo-server/internal/quota"
 )
 
 // Bounds and budgets.
 const (
-	fetchBudget       = 5 * time.Second // one directory fetch, connect through decode
-	connectTimeout    = 2 * time.Second
-	tlsTimeout        = 2 * time.Second
-	headerTimeout     = 3 * time.Second
-	maxBodyBytes      = 2 << 20
-	resultTTL         = 15 * time.Minute
-	maxResultEntries  = 256
-	maxResultBytes    = 8 << 20
-	failureTTL        = 15 * time.Second
-	maxProviderSlots  = 2
-	maxUserBuckets    = 4096
-	userBucketIdle    = 10 * time.Minute
-	defaultCooldown   = 60
-	maxCooldown       = 300
-	logEvery          = time.Minute
-	userSearchPerMin  = 10
-	userSearchBurst   = 3
-	itunesPerMin      = 20
-	itunesBurst       = 1
-	indexPerMin       = 30
-	indexBurst        = 2
-	artRegistryMax    = 4096
-	artRegistryTTL    = 15 * time.Minute
-	maxImageCache     = 32 << 20
-	maxImageBytes     = 2 << 20
-	maxImageSlots     = 4
-	maxImageRedirects = 3
-	artFailureTTL     = time.Minute
+	fetchBudget      = 5 * time.Second // one directory fetch, connect through decode
+	connectTimeout   = 2 * time.Second
+	tlsTimeout       = 2 * time.Second
+	headerTimeout    = 3 * time.Second
+	maxBodyBytes     = 2 << 20
+	resultTTL        = 15 * time.Minute
+	maxResultEntries = 256
+	maxResultBytes   = 8 << 20
+	failureTTL       = 15 * time.Second
+	maxProviderSlots = 2
+	maxUserBuckets   = 4096
+	userBucketIdle   = 10 * time.Minute
+	defaultCooldown  = 60
+	maxCooldown      = 300
+	logEvery         = time.Minute
+	userSearchPerMin = 10
+	userSearchBurst  = 3
+	itunesPerMin     = 20
+	itunesBurst      = 1
+	indexPerMin      = 30
+	indexBurst       = 2
+	artRegistryMax   = 4096
+	artRegistryTTL   = 15 * time.Minute
+	maxImageCache    = 32 << 20
+	maxImageBytes    = 2 << 20
+	maxImageSlots    = 4
+	artFailureTTL    = time.Minute
 	// The artwork's admission is its own, sized by a results page
 	// (DefaultLimit), so a page's images, all asked for at once, are each
 	// served (BRIDGE-03): the misses past the four slots queue for one, up to
@@ -98,12 +98,12 @@ type ProviderInfo struct {
 
 // Service is the discovery state: caches, quotas and the fetches in flight.
 type Service struct {
-	opts      Options
-	budget    time.Duration // fetchBudget; tests shorten it
-	ends      endpoints
-	rules     rules
-	client    *http.Client
-	artClient *http.Client
+	opts       Options
+	budget     time.Duration // fetchBudget; tests shorten it
+	ends       endpoints
+	rules      rules
+	client     *http.Client
+	artFetcher *media.ArtFetcher
 
 	userSearch *quota.Limiter
 	userArt    *quota.Limiter
@@ -160,13 +160,13 @@ func newService(opts Options, origin netip.AddrPort) *Service {
 		budget:     fetchBudget,
 		ends:       endpointsFor(origin),
 		rules:      rules{origin: origin},
-		userSearch: quota.New(userSearchPerMin, userSearchBurst, maxUserBuckets, userBucketIdle, opts.Now),
-		userArt:    quota.New(userArtPerMin, userArtBurst, maxUserBuckets, userBucketIdle, opts.Now),
+		userSearch: quota.PerMinute(userSearchPerMin, userSearchBurst, maxUserBuckets, userBucketIdle, opts.Now),
+		userArt:    quota.PerMinute(userArtPerMin, userArtBurst, maxUserBuckets, userBucketIdle, opts.Now),
 		providers: map[Provider]*quota.Limiter{
-			ITunes:       quota.New(itunesPerMin, itunesBurst, 0, time.Hour, opts.Now),
-			PodcastIndex: quota.New(indexPerMin, indexBurst, 0, time.Hour, opts.Now),
+			ITunes:       quota.PerMinute(itunesPerMin, itunesBurst, 0, time.Hour, opts.Now),
+			PodcastIndex: quota.PerMinute(indexPerMin, indexBurst, 0, time.Hour, opts.Now),
 		},
-		imageMiss:  quota.New(imageMissPerMin, imageMissBurst, 0, time.Hour, opts.Now),
+		imageMiss:  quota.PerMinute(imageMissPerMin, imageMissBurst, 0, time.Hour, opts.Now),
 		fetchSlots: quota.NewSlots(maxProviderSlots),
 		imageSlots: quota.NewSlots(maxImageSlots),
 		cooldown:   map[Provider]time.Time{},
@@ -191,7 +191,8 @@ func newService(opts Options, origin netip.AddrPort) *Service {
 		// A directory answers at its fixed URL: no redirect is followed.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect },
 	}
-	s.artClient = &http.Client{Transport: artTransport, CheckRedirect: checkArtRedirect}
+	// No client timeout: queuedImage bounds each fetch by s.budget.
+	s.artFetcher = media.NewArtFetcher(artTransport, 0, "AudioSilo/"+opts.Version)
 	s.parent = context.Background()
 	s.resetLocked()
 	return s
@@ -215,31 +216,9 @@ var errRedirect = errors.New("discovery: redirect refused")
 // guardedTransport dials only addresses allowed accepts (netguard), through no
 // proxy, with the connect/TLS/header timeouts inside the fetch budget.
 func guardedTransport(allowed func(netip.AddrPort) bool, conns int) *http.Transport {
-	return &http.Transport{
-		Proxy:                 nil,
-		DialContext:           netguard.Dialer(allowed, connectTimeout).DialContext,
-		TLSHandshakeTimeout:   tlsTimeout,
-		ResponseHeaderTimeout: headerTimeout,
-		MaxIdleConns:          conns,
-		MaxIdleConnsPerHost:   conns,
-		IdleConnTimeout:       30 * time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-}
-
-// checkArtRedirect follows at most three redirects, only to http(s), and never
-// from https down to http.
-func checkArtRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) > maxImageRedirects {
-		return errRedirect
-	}
-	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-		return errRedirect
-	}
-	if netguard.Downgrade(req, via) {
-		return errRedirect
-	}
-	return nil
+	t := netguard.Transport(allowed, netguard.Timeouts{Connect: connectTimeout, TLS: tlsTimeout, Header: headerTimeout}, conns)
+	t.ForceAttemptHTTP2 = true
+	return t
 }
 
 // Providers lists the providers in their fixed order: Podcast Index is

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/quota"
 )
 
 // limiter implements a simple per-key failure lockout: after maxFailures within
@@ -162,124 +163,12 @@ func (l *limiter) sweep(now time.Time) {
 	}
 }
 
-// rateLimiter is a token-bucket limiter on request rate, one bucket per key: the
-// client IP for the general API, the credential for the authenticated API and for
-// authenticated media (see rateLimit, requireAuth and requireMediaAuth).
-type rateLimiter struct {
-	mu        sync.Mutex
-	rate      float64 // tokens per second
-	burst     float64 // bucket capacity
-	buckets   map[string]*bucket
-	idleTTL   time.Duration // drop buckets idle longer than this (they've refilled to full)
-	lastSweep time.Time
-	now       func() time.Time
-}
-
-type bucket struct {
-	tokens float64
-	last   time.Time
-}
-
-// maxIdleTTL caps a rateLimiter's idleTTL, so a bucket that refills slower than
-// that is still swept: its map stays bounded by the keys of one day.
-const maxIdleTTL = 24 * time.Hour
-
-// newBucketLimiter is a rateLimiter with b's rate and burst (config rate_limit.*).
-func newBucketLimiter(b config.RateBucket) *rateLimiter {
-	return newRateLimiter(b.Rate, float64(b.Burst))
-}
-
-func newRateLimiter(ratePerSec, burst float64) *rateLimiter {
-	// A bucket idle long enough to refill to full is equivalent to a fresh one,
-	// so it can be evicted. Use the refill time (with margin), floored at 1 min
-	// and capped at a day, worked out in seconds: rate_limit.* can make it more
-	// nanoseconds than a Duration holds.
-	idle := time.Minute
-	if ratePerSec > 0 {
-		secs := min(burst/ratePerSec*2, maxIdleTTL.Seconds())
-		idle = max(idle, time.Duration(secs*float64(time.Second)))
-	}
-	return &rateLimiter{
-		rate:    ratePerSec,
-		burst:   burst,
-		buckets: map[string]*bucket{},
-		idleTTL: idle,
-		now:     time.Now,
-	}
-}
-
-// sweep drops buckets idle long enough to have refilled to full, bounding memory
-// under a flood of distinct keys. Runs at most once per idleTTL (caller holds lock).
-func (r *rateLimiter) sweep(now time.Time) {
-	if now.Sub(r.lastSweep) < r.idleTTL {
-		return
-	}
-	r.lastSweep = now
-	for k, b := range r.buckets {
-		if now.Sub(b.last) > r.idleTTL {
-			delete(r.buckets, k)
-		}
-	}
-}
-
-// refill returns key's bucket (a full one when it has none) topped up for the
-// time since its last use. Caller holds the lock.
-func (r *rateLimiter) refill(key string, now time.Time) *bucket {
-	r.sweep(now)
-	b := r.buckets[key]
-	if b == nil {
-		b = &bucket{tokens: r.burst, last: now}
-		r.buckets[key] = b
-	}
-	b.tokens = min(b.tokens+now.Sub(b.last).Seconds()*r.rate, r.burst)
-	b.last = now
-	return b
-}
-
-// Allow consumes one token for key, refilling based on elapsed time.
-func (r *rateLimiter) Allow(key string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	b := r.refill(key, r.now())
-	if b.tokens < 1 {
-		return false
-	}
-	b.tokens--
-	return true
-}
-
-// Ready reports whether key has a token to spend, without spending it.
-func (r *rateLimiter) Ready(key string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.refill(key, r.now()).tokens >= 1
-}
-
-// Wait is how long key waits for its next token (0 when it has one now), for a
-// 429's Retry-After. It is worked out in seconds and capped at maxIdleTTL, as
-// newRateLimiter's idle TTL is: a slow rate_limit.* rate can make it more
-// nanoseconds than a Duration holds, and a key idle that long is swept anyway.
-func (r *rateLimiter) Wait(key string) time.Duration {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	b := r.refill(key, r.now())
-	if b.tokens >= 1 || r.rate <= 0 {
-		return 0
-	}
-	secs := min((1-b.tokens)/r.rate, maxIdleTTL.Seconds())
-	return time.Duration(secs * float64(time.Second))
-}
-
-// Charge spends one token for key whether or not one is left, for work already
-// done (a token lookup that passed Ready). Concurrent requests that all passed
-// Ready before any of them was charged each pay, so the bucket can go into debt
-// and Ready stays false until the debt is repaid. The debt stops at -burst: that
-// bounds how long one address can be shut out, and a bucket idle for idleTTL
-// (two full refills, unless maxIdleTTL is shorter) has repaid it before sweep
-// drops it.
-func (r *rateLimiter) Charge(key string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	b := r.refill(key, r.now())
-	b.tokens = max(b.tokens-1, -r.burst)
+// initRateLimits builds the independent address and credential budgets before serving.
+func (a *API) initRateLimits(now func() time.Time) {
+	limits := a.boot.RateLimit.Effective()
+	bucket := func(b config.RateBucket) *quota.Limiter { return quota.PerSecond(b.Rate, float64(b.Burst), now) }
+	a.ipLimiter = bucket(limits.Address)
+	a.tokenLimiter = bucket(limits.Token)
+	a.mediaLimiter = bucket(limits.Media)
+	a.bridgeLimiter = quota.PerSecond(bridgeRate, bridgeBurst, now)
 }
