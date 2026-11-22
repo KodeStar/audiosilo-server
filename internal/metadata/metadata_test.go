@@ -379,6 +379,15 @@ func TestPartsTitle(t *testing.T) {
 		{"numbered folder keeps the album", "Sourcery", "Rincewind Runs", "Discworld 05", "The Sourcerer", "Sourcery"},
 		{"volume folder keeps the album", "The Fellowship of the Ring", "A Long-expected Party", "Book One", "The Breaking of the Fellowship", "The Fellowship of the Ring"},
 		{"box set range folder keeps the album", "The Expanse Box Set", "The Expanse Box Set: Leviathan Wakes", "Books 1-3", "The Expanse Box Set: Caliban's War", "The Expanse Box Set"},
+		{"series and volume word folder keeps the album", "The Final Empire", "Prologue", "Mistborn Book One", "Epilogue", "The Final Empire"},
+		// A title tag the folder names too beside an unrelated album is the
+		// book's, read alike by every file or not.
+		{"tags name the folder over a series album", "The Wheel of Time", "The Eye of the World", "The Eye of the World", "The Eye of the World", "The Eye of the World"},
+		{"tag names the folder over a series album", "The Wheel of Time", "The Eye of the World", "the eye of the world", unread, "The Eye of the World"},
+		// Without an album, a folder that names no title keeps the first tag.
+		{"no album, number folder keeps the tag", "", "Oathbringer - 01", "03", "Oathbringer - 45", "Oathbringer - 01"},
+		{"no album, volume folder keeps the tag", "", "Prologue", "Book 3", "Epilogue", "Prologue"},
+		{"no album, numbered title folder", "", "The Hearth and the Salamander", "Fahrenheit 451", "Burning Bright", "Fahrenheit 451"},
 		{"no album, bracketed parts", "", "Dune (Part 1)", "Frank Herbert - Dune [2007]", "Dune (Part 2)", "Dune"},
 		// A folder named for what it holds, or files numbering one name in turn
 		// (the book under a series album), keep the album as before.
@@ -438,6 +447,8 @@ func TestPartsTitle(t *testing.T) {
 		{"The Expanse", "The Expanse: Leviathan Wakes", "Leviathan Wakes", false},
 		{"", "The Dragon Reborn", "The Dragon Reborn", false},
 		{"", "The Dragon Reborn", "the dragon reborn", false},
+		// The folder confirms the tag beside the album: no second read.
+		{"The Wheel of Time", "The Eye of the World", "The Eye of the World", false},
 	} {
 		var m Metadata
 		m.setTitle(tc.album, tc.title)
@@ -447,6 +458,15 @@ func TestPartsTitle(t *testing.T) {
 	}
 	if (*Metadata)(nil).PartNamed("Any") {
 		t.Error("no tags: PartNamed = true")
+	}
+	// A book straight in its author's folder: the folder names the author,
+	// not another work, so the album stays.
+	m := Metadata{Author: "Andy Weir"}
+	m.setTitle("The Martian", "Sol Six")
+	other := Metadata{}
+	other.setTitle("The Martian", "Homecoming")
+	if got := m.PartsTitle("Andy Weir", &other); got != "The Martian" {
+		t.Errorf("author folder: PartsTitle = %q, want the album", got)
 	}
 }
 

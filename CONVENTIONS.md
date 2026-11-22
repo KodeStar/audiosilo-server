@@ -2366,7 +2366,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   layout over the tags (`bookLayers.scannedFields`: `metadata.FromPathLayout`, where the top
   folder is the AUTHOR and disc/track folders are parts, unlike `DeriveFromPath`'s two nearest folders; a layout value goes
   over a tag's wherever it says anything and replaces the baseline's own reading even with
-  nothing (a leaf named `Author; Series; Book NN[; Title]` says its series, position and title part, `LeafSeries`); the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it; the position goes with the series: the layout's own, else
+  nothing (a leaf named `Author; Series; Book NN[; Title]` says its series, position and title part, `LeafSeries`); the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it (never a `LeafSeries` leaf, whose parts the layout reads); the position goes with the series: the layout's own, else
   the scanned one only while the series it numbers stays). It is a resolve rule, not a scan one: the snapshot is unchanged,
   and `UpdateLibrary` marks the library's books due a re-resolve in the edit's own transaction
   (`markResolve`: the `library_resolve_due` row of `server_state`, the library's id and the change's
@@ -2455,11 +2455,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and the first has an album and no series tag, the scan uses a meaningful folder title when the album and folder
   share no distinctive word (brackets left out). This preserves a fuller album title such as "Frankenstein; or, The
   Modern Prometheus" in "Frankenstein". Tags that name no chapter (`chapterNamed`: filename tags such as
-  "Part 01.mp3", track labels, the album and a number, "The Gunslinger 01") and a folder named as a
-  volume or a numbered slot (`folderSlot`: "Book One", "Books 1-3", "The Dark Tower 1") or for
-  what it holds (`containerFolder`: "Files", "MP3", "Unabridged"), and tags numbering one name in
-  turn (`numberedAlike`: "Harry Potter: Philosopher's Stone 01" to "... 17"), leave the album in
-  place; without an album such a folder leaves the first tag. Shared book names from revision 5 still apply.
+  "Part 01.mp3", track labels, the album and a number, "The Gunslinger 01"), a folder that names no
+  title (`untitledFolder`: a bare number "03", a volume label "Book One", "Books 1-3", or what it
+  holds, `containerFolder`: "Files", "MP3", "Unabridged"), a numbered slot (`folderSlot`: "The Dark
+  Tower 1", "Mistborn Book One") or the author tag ("Andy Weir", a book straight in its author's
+  folder), and tags numbering one name in turn (`numberedAlike`: "Harry Potter: Philosopher's
+  Stone 01" to "... 17"), leave the album in place; without an album a folder that names no title
+  leaves the first tag (a numbered name, "Fahrenheit 451", may be the title there). A title tag the
+  folder names too beside such an album is the book's, with no second read (`folderNamesTag`: "The
+  Eye of the World" under "The Wheel of Time"). Shared book names from revision 5 still apply.
   A structured leaf now supplies its title part, or its series and position when it has no title
   part ("Dark Road 1-5"). A tagged series can use the leaf's position only when both name the
   same series (`leafTagSeries`: `match.SameSeries`, or `match.NormalizeSeries` with a leading article
