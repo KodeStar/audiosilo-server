@@ -96,6 +96,19 @@ func (r *readSlots) extract(ctx context.Context, root, absPath, ffprobePath stri
 	return r.readFile(ctx, root, absPath, ffprobePath, r.timeout)
 }
 
+// uncountedForNow reports whether md is a header-less VBR MP3 whose frames a
+// later read may count (metadata.Metadata.LengthUncounted: a read failed, or
+// it ran out of time beside other reads), so its book's length revision is
+// left unstamped for the next scan to read it again. One whose count ran out
+// of its own time read alone (CountOutOfTime: too large to count in that time
+// on its disk or share) is not: a scan's read would only run out of time
+// again, so the book keeps ffprobe's estimate until its files change or an
+// admin's Re-read (server#452). extract has read one beside others again
+// alone by then.
+func uncountedForNow(md *metadata.Metadata) bool {
+	return md.LengthUncounted() && !md.CountOutOfTime()
+}
+
 // lengthTimedOut reports whether md's length read ran out of time: its ffprobe
 // run (metadata.ErrProbeTimeout) or, with no ffprobe, the in-process read
 // (ProbeTimedOut).

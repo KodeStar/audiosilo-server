@@ -115,6 +115,9 @@ type Metadata struct {
 	// given time may count, or an MP3 whose probe ran out of time before it
 	// could tell (LengthUncounted).
 	uncounted bool
+	// countOutOfTime: uncounted as its frame count ran out of its own time,
+	// the file read without error (CountOutOfTime).
+	countOutOfTime bool
 }
 
 // LengthUncounted reports whether the file is a VBR MP3 with no Xing or VBRI
@@ -125,6 +128,15 @@ type Metadata struct {
 // (catalog.Book.LengthUncounted). A count that gave up (over an eighth of the
 // audio no frame) or found no frames is not: it reads the same every time.
 func (m *Metadata) LengthUncounted() bool { return m != nil && m.uncounted }
+
+// CountOutOfTime reports whether the file is LengthUncounted as its frame
+// count ran out of its own time (the ffprobe run's it replaces), every read
+// answering and the caller's context alive: a file too large to count in that
+// time on its disk or share, which a read given the same time would leave
+// uncounted again. A scan that read it alone keeps ffprobe's estimate as the
+// book's length at today's revision (catalog.Book.LengthUncounted false), so
+// it is read again when its files change or on a Re-read, not on every scan.
+func (m *Metadata) CountOutOfTime() bool { return m != nil && m.countOutOfTime }
 
 // ProbeTimedOut reports whether, with no ffprobe configured, the file's read
 // ran out of its time (the tag read's or the in-process probe's deadline) and
@@ -399,11 +411,13 @@ func readFile(ctx context.Context, m *Metadata, root, path string, ff ffRules, c
 				m.counted = p
 			}
 			m.uncounted = uncounted
+			m.countOutOfTime = uncounted && ctx.Err() == nil && countTimedOut(why)
 		}
 		return nil, "", nil
 	}
 	b.ff = ff
 	p, reason, m.uncounted = fastProbe(ctx, b, m.Format, timeout)
+	m.countOutOfTime = m.uncounted && ctx.Err() == nil && countTimedOut(reason)
 	if reason != "" {
 		// Silent by design (ffprobe answers instead), but worth seeing when a
 		// scan is slower than expected: which files, and why (server#269).
@@ -490,14 +504,26 @@ func TagsUnreadForTests(m *Metadata) *Metadata {
 }
 
 // UncountedForTests marks m as LengthUncounted (a header-less VBR MP3 whose
-// count ran out of time) and returns it: for tests of what a scan does with
-// one, which a real read gives only on a file whose count outlasts its
-// deadline. It panics outside a test binary.
+// count a read failed in, or that ran out of time beside other reads) and
+// returns it: for tests of what a scan does with one, which a real read gives
+// only on a file whose reads fail or whose count outlasts its deadline. It
+// panics outside a test binary.
 func UncountedForTests(m *Metadata) *Metadata {
 	if !testing.Testing() {
 		panic("metadata.UncountedForTests called outside a test binary")
 	}
 	m.uncounted = true
+	return m
+}
+
+// CountOutOfTimeForTests marks m as LengthUncounted and CountOutOfTime (a
+// header-less VBR MP3 too large to count in its time) and returns it: for
+// tests of what a scan does with one. It panics outside a test binary.
+func CountOutOfTimeForTests(m *Metadata) *Metadata {
+	if !testing.Testing() {
+		panic("metadata.CountOutOfTimeForTests called outside a test binary")
+	}
+	m.uncounted, m.countOutOfTime = true, true
 	return m
 }
 

@@ -1761,8 +1761,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   more, its files unchanged, and every index writes the current revision with its `indexed_at` (bump it, and
   `durationStaleExpr`'s filter, when a change to the length reading should re-read stored books, with a
   migration moving the books with no MP3 on, as 0091 does), except one
-  that left a header-less VBR file uncounted for now (a deadline, a read error: `Metadata.LengthUncounted`,
-  `Book.LengthUncounted`; never a count that gave up, which reads the same every time), which writes 0 so
+  that left a header-less VBR file uncounted for now (a deadline beside other reads, a read error: `Metadata.LengthUncounted`,
+  `Book.LengthUncounted`, `uncountedForNow`; never a count that gave up, which reads the same every time, nor one out of
+  its own time read alone, `Metadata.CountOutOfTime`: a file too large to count in ffprobe's time on its share keeps
+  ffprobe's estimate at the current revision until its files change or a Re-read, server#452), which writes 0 so
   the next scan reads it again (a scan reads one counted beside others again alone first). A stale book whose
   last read was kept as stored for a read cut short (`keptAsStored`) waits for `problemCleared` like any other,
   not re-read whole on every scan; one kept for a part that reads the same every time (`Book.LengthOnly`: a FIFO,

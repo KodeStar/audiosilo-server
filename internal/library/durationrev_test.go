@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -73,8 +74,8 @@ func TestScanRereadsLengthsOfAnOlderRevision(t *testing.T) {
 	}
 }
 
-// A header-less VBR MP3 whose frames could not be counted (the count passed
-// its deadline, and ffprobe's estimate was stored) leaves the book's length
+// A header-less VBR MP3 whose frames could not be counted for now (a read
+// failed part way, and ffprobe's estimate was stored) leaves the book's length
 // revision unstamped, so the next scan reads it again, its files unchanged;
 // once that read counts the frames the revision is stamped and the scan after
 // leaves the book be (SRV-16).
@@ -83,7 +84,7 @@ func TestScanRereadsAnUncountedLength(t *testing.T) {
 	ctx := t.Context()
 	db, cat, lib, s := headerlessBook(t)
 	const estimate = 5.0799
-	// The count out of time, as on a slow disk: ffprobe's estimate stands.
+	// The count cut short, as by a share's read error: ffprobe's estimate stands.
 	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
 		md := extractFile(ctx, root, p, ffprobe, timeout)
 		md.Duration = estimate
@@ -266,5 +267,51 @@ func TestTagBackfillCountsNoFrames(t *testing.T) {
 	}
 	if d := bookDuration(t, db); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
 		t.Errorf("stored duration %v after the backfill, want the counted %v kept", d, headerlessSecs)
+	}
+}
+
+// A header-less VBR MP3 too large to count in its time, read alone (a long
+// book on a slow share: metadata.Metadata.CountOutOfTime), keeps ffprobe's
+// estimate at today's length revision: the next scan would only run out of
+// time again, so it leaves the book be rather than reading the whole file on
+// every run (server#452). A change to the file reads it again, counted then.
+func TestScanKeepsACountOutOfTime(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db, cat, lib, s := headerlessBook(t)
+	const estimate = 5.0799
+	c := &readCounter{reads: map[string]int{}, cut: map[string]bool{}}
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		md := c.read(ctx, root, p, ffprobe, timeout)
+		md.Duration = estimate
+		return metadata.CountOutOfTimeForTests(md)
+	}
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Added != 1 {
+		t.Fatalf("first scan = %+v, %v", res, err)
+	}
+	sigs, err := cat.Signatures(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := bookDuration(t, db); d != estimate || sigs["Author"].DurationStale {
+		t.Fatalf("out of time: duration %v stale %t, want the estimate at today's revision", d, sigs["Author"].DurationStale)
+	}
+	reads := c.count("Book.mp3")
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 0 || c.count("Book.mp3") != reads {
+		t.Fatalf("rescan = %+v, %v, %d reads; want the book left be", res, err, c.count("Book.mp3")-reads)
+	}
+
+	// The file changes: read again, and counted in its time.
+	s.readFile = nil
+	path := filepath.Join(lib.Root, "Author", "Book.mp3")
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 1 {
+		t.Fatalf("scan of the changed file = %+v, %v; want it read again", res, err)
+	}
+	if d := bookDuration(t, db); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
+		t.Errorf("after the change: duration %v, want %v counted", d, headerlessSecs)
 	}
 }

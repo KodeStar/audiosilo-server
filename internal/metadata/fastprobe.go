@@ -203,6 +203,13 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 	return p, reason, headerless && reason != "" && (b.err != nil || timedOutReason(reason) || ctx.Err() != nil)
 }
 
+// countTimedOut reports whether reason, fastProbe's, is a frame count's own
+// deadline (mp3Uncounted.count out of time), not the probe's before it could
+// tell, a read error or a bound on bytes.
+func countTimedOut(reason string) bool {
+	return strings.HasPrefix(reason, reasonUncounted+"; frame count: ") && timedOutReason(reason)
+}
+
 // noFrameCount is the context key WithoutFrameCount sets.
 type noFrameCount struct{}
 

@@ -472,7 +472,7 @@ func TestCountIsBounded(t *testing.T) {
 			if p != nil || !strings.HasPrefix(reason, reasonUncounted+"; frame count: limit: ") {
 				t.Fatalf("reason %q, want the count cut short", reason)
 			}
-			if timedOutReason(reason) != tc.timedOut {
+			if timedOutReason(reason) != tc.timedOut || countTimedOut(reason) != tc.timedOut {
 				t.Errorf("reason %q: timed out %t, want %t", reason, !tc.timedOut, tc.timedOut)
 			}
 			if !uncounted {
@@ -501,6 +501,9 @@ func TestProbeOutOfTimeIsUncounted(t *testing.T) {
 	}
 	if !uncounted {
 		t.Error("not marked uncounted: the scan would stamp ffprobe's estimate as counted")
+	}
+	if countTimedOut(reason) {
+		t.Error("the probe out of time read as a count out of time: the scan would keep ffprobe's estimate")
 	}
 }
 
@@ -541,8 +544,8 @@ func TestCountStopsAtAReadError(t *testing.T) {
 	if n := f.fails.Load(); n != 1 {
 		t.Errorf("%d reads failed, want the count ended at the first", n)
 	}
-	if !uncounted {
-		t.Error("not marked uncounted: the scan would stamp the estimate as counted")
+	if !uncounted || countTimedOut(reason) {
+		t.Errorf("uncounted %t, count out of time %t: want uncounted for now, the scan reading it again", uncounted, countTimedOut(reason))
 	}
 }
 
