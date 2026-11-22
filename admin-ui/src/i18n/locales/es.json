@@ -4120,7 +4120,7 @@
   "audible.fold.invalid_result": "El servidor no pudo usar los datos de la copia para asociar este título con un libro de la biblioteca.",
   "audible.fold.not_indexed": "El servidor no encontró el libro copiado en el índice de la biblioteca.",
   "audible.fold.not_own_book": "El servidor no pudo confirmar que el libro en el destino de la copia corresponde a este título.",
-  "audible.fold.rejected_match": "La copia encontró el libro marcado como «No es este libro» para este título.",
+  "audible.fold.rejected_match": "La copia se guardó en el libro marcado como «No es este libro» para este título, así que el servidor no la asoció.",
   "audible.fold.other": "El servidor no pudo asociar la copia con este título.",
   "audible.import.failed": "La copia falló",
   "audible.import.cancelled": "Copia cancelada",

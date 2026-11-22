@@ -3907,7 +3907,7 @@
   "audible.fold.invalid_result": "The server couldn't use the backup details to match this title to a book in its library.",
   "audible.fold.not_indexed": "The server couldn't find the backed-up book in the library index.",
   "audible.fold.not_own_book": "The server couldn't confirm that the book at the backup destination belongs to this title.",
-  "audible.fold.rejected_match": "The backup found the book marked “Not this book” for this title.",
+  "audible.fold.rejected_match": "The backup went into the book marked “Not this book” for this title, so the server didn't match it.",
   "audible.fold.other": "The server couldn't match the backup to this title.",
   "audible.import.failed": "Backup failed",
   "audible.import.cancelled": "Backup cancelled",

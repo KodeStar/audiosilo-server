@@ -364,11 +364,6 @@ function PlannedNote({ title: x, template }: { title: AudibleTitle; template?: s
   );
 }
 
-/**
- * Why a title isn't shown as here, in words: contested names the book it tied
- * for and the account's other titles on it (or says so plainly without them),
- * an unknown code reads as a sentence, and Audible's own words stay.
- */
 /** Why the server could not match the title's completed backup, when it recorded why. */
 function FoldNote({ title: x }: { title: AudibleTitle }) {
   const { t } = useTranslation();
@@ -381,6 +376,11 @@ function FoldNote({ title: x }: { title: AudibleTitle }) {
   );
 }
 
+/**
+ * Why a title isn't shown as here, in words: contested names the book it tied
+ * for and the account's other titles on it (or says so plainly without them),
+ * an unknown code reads as a sentence, and Audible's own words stay.
+ */
 function ReasonNote({ title: x }: { title: AudibleTitle }) {
   const { t, i18n } = useTranslation();
   if (!x.reason) return null;

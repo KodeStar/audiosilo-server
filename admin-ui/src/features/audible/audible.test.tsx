@@ -770,7 +770,7 @@ describe('audible backups', () => {
       "The server couldn't use the backup details to match this title to a book in its library.",
       "The server couldn't find the backed-up book in the library index.",
       "The server couldn't confirm that the book at the backup destination belongs to this title.",
-      'The backup found the book marked “Not this book” for this title.',
+      "The backup went into the book marked “Not this book” for this title, so the server didn't match it.",
       "The server couldn't match the backup to this title.",
     ];
     messages.forEach((message, i) =>
