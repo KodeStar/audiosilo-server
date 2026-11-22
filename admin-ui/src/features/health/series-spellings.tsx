@@ -18,7 +18,7 @@ import { useIssueActions } from './use-issue-actions';
 /**
  * Health > Series spelled several ways: one notice per series a library's books
  * spell more than one way, offering to set one spelling on every book of it (the
- * Authors page's merge: a bulk edit, files untouched), the Series page's name
+ * Authors page's merge: one server transaction, files untouched), the Series page's name
  * first. Ignore stops a series being suggested; with `ignored`, those series, each
  * with Show again.
  */

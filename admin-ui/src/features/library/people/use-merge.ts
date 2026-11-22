@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
 import { invalidateBooks, invalidateIssues } from '@/api/hooks';
 import type { MergedBook, MergeField } from '@/api/types';
-import { toastError } from '@/lib/errors';
+import { refOf } from '@/lib/book-route';
+import { errorMessage, toastError } from '@/lib/errors';
 import { counted } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { undoSteps } from './people-model';
@@ -17,20 +18,38 @@ export function useMerge(field: MergeField, libraryId?: number) {
   const [merging, setMerging] = useState<string | null>(null);
   const lang = i18n.resolvedLanguage ?? 'en';
 
+  /**
+   * Puts the books back, one bulk edit per step. Each step is all or nothing but
+   * the steps are not: a failed one doesn't stop the rest, and its books are
+   * offered to Undo again (putting a book back twice changes nothing).
+   */
   const undo = async (books: MergedBook[]) => {
-    try {
-      for (const step of undoSteps(books, field)) await api.bulkEdit(step.books, step.edit);
+    const missed: MergedBook[] = [];
+    let failure: unknown;
+    for (const step of undoSteps(books, field)) {
+      try {
+        await api.bulkEdit(step.books.map(refOf), step.edit);
+      } catch (err) {
+        failure ??= err;
+        missed.push(...step.books);
+      }
+    }
+    invalidateBooks(qc, books);
+    invalidateIssues(qc); // Health's series spellings
+    if (missed.length === 0) {
       toast.add({
         title: t('people-merge.undone'),
         description: t('people-merge.undoneBody', counted(books.length, lang)),
         type: 'success',
       });
-    } catch (err) {
-      toastError(t('people-merge.undoFailed'), err);
-    } finally {
-      invalidateBooks(qc, books);
-      invalidateIssues(qc); // Health's series spellings
+      return;
     }
+    toast.add({
+      title: t('people-merge.undoFailed'),
+      description: errorMessage(failure, t),
+      type: 'error',
+      actionProps: { children: t('people-merge.undo'), onClick: () => void undo(missed) },
+    });
   };
 
   const merge = async (target: string, sources: string[]) => {

@@ -1,13 +1,11 @@
 import { BULK_LIMIT } from '@/api/client';
 import type {
+  BookEditRequest,
   MergedBook,
   MergeField,
-  BookEditRequest,
-  BookRef,
   MergeSuggestion,
   PersonCount,
 } from '@/api/types';
-import { refOf } from '@/lib/book-route';
 import { chunk, fold } from '@/lib/utils';
 
 /** How many tiles a page of Authors or Narrators holds. */
@@ -36,9 +34,13 @@ export function otherSpellings(s: MergeSuggestion): string[] {
   return s.names.filter((n) => n !== s.suggested);
 }
 
-/** Undo groups books with the same prior override into ordinary bulk edits. */
+/**
+ * Undo groups books with the same prior override into ordinary bulk edits (each
+ * step's books sent as their refs). A step keeps its merged books, so one that
+ * fails can be offered again on its own.
+ */
 export function undoSteps(books: MergedBook[], field: MergeField) {
-  const groups = new Map<string, { books: BookRef[]; edit: BookEditRequest }>();
+  const groups = new Map<string, { books: MergedBook[]; edit: BookEditRequest }>();
   for (const b of books) {
     const key = JSON.stringify([b.source, b.previous]);
     let group = groups.get(key);
@@ -50,9 +52,9 @@ export function undoSteps(books: MergedBook[], field: MergeField) {
       group = { books: [], edit };
       groups.set(key, group);
     }
-    group.books.push(refOf(b));
+    group.books.push(b);
   }
   return [...groups.values()].flatMap((g) =>
-    chunk(g.books, BULK_LIMIT).map((refs) => ({ books: refs, edit: g.edit })),
+    chunk(g.books, BULK_LIMIT).map((part) => ({ books: part, edit: g.edit })),
   );
 }

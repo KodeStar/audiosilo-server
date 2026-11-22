@@ -55,19 +55,10 @@ describe('merge Undo', () => {
 
   it('restores identical values with different sources separately', () => {
     const previous = 'Sanderson, Brandon';
-    const a = { library_id: 1, path: 'a' };
-    const b = { library_id: 2, path: 'a' };
-    const c = { library_id: 1, path: 'c' };
-    expect(
-      undoSteps(
-        [
-          { ...a, previous, source: 'community' },
-          { ...b, previous, source: 'edited' },
-          { ...c, previous, source: 'community' },
-        ],
-        'author',
-      ),
-    ).toEqual([
+    const a = { library_id: 1, path: 'a', previous, source: 'community' } as const;
+    const b = { library_id: 2, path: 'a', previous, source: 'edited' } as const;
+    const c = { library_id: 1, path: 'c', previous, source: 'community' } as const;
+    expect(undoSteps([a, b, c], 'author')).toEqual([
       { books: [a, c], edit: { set: { author: previous }, source: 'community' } },
       { books: [b], edit: { set: { author: previous }, source: 'edited' } },
     ]);
