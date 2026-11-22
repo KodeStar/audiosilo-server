@@ -33,6 +33,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Book is a candidate to match against (a server book, or any catalog entry).
@@ -983,10 +985,18 @@ var titleStopwords = map[string]bool{
 // articles and joining words. The scanner uses this to preserve an album
 // whose title is a fuller spelling of the book folder's. Unlike tokenize it
 // keeps letters in any script, numbers and one-letter words, since a folder
-// name is weighed here, not scored against a candidate.
+// name is weighed here, not scored against a candidate. Accents are left out
+// (NFKD, as SeriesKey), so "Shogun" shares its word with "Shōgun" and a
+// decomposed spelling with a composed one.
 func TitlesShareWord(a, b string) bool {
 	words := func(s string) []string {
-		return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		bare := strings.Map(func(r rune) rune {
+			if unicode.Is(unicode.Mn, r) {
+				return -1
+			}
+			return r
+		}, norm.NFKD.String(strings.ToLower(s)))
+		return strings.FieldsFunc(bare, func(r rune) bool {
 			return !unicode.IsLetter(r) && !unicode.IsNumber(r) && !unicode.IsMark(r)
 		})
 	}

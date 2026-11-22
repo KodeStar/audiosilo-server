@@ -566,6 +566,8 @@ func TestTitlesShareWord(t *testing.T) {
 		{"Catch 22", "Fahrenheit 451", false},
 		{"Book 1", "Volume 1", true},
 		{"", "Anything", false},
+		{"Shogun", "Shōgun", true},
+		{"Les Mise\u0301rables", "Les Misérables, Volume 1", true},
 	} {
 		if got := TitlesShareWord(c.a, c.b); got != c.want {
 			t.Errorf("TitlesShareWord(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
