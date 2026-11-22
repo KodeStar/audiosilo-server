@@ -609,8 +609,8 @@ const durationRev = "2"
 // read before durationRev, or by another index than the row's own (an older
 // server run against this database re-indexed it, storing its estimate and
 // leaving the revision: duration_rev_indexed_at, as fileOrderExpr), and that
-// holds an MP3 (its own format, or a part's), the only files revision 1 reads
-// otherwise. A CASE, so the parts are looked at only for a row of an older
+// holds an MP3 (its own format, or a part's), the only files the revisions
+// read otherwise. A CASE, so the parts are looked at only for a row of an older
 // revision (AND evaluates both sides).
 const durationStaleExpr = `CASE WHEN duration_rev < ` + durationRev + ` OR duration_rev_indexed_at IS NOT indexed_at
 	THEN format = 'mp3' OR EXISTS (

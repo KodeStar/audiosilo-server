@@ -274,8 +274,9 @@ func (b *blockFile) boundedBy(ctx context.Context, budget int64, fn func()) (why
 // ExactDuration is the in-process probe's duration in seconds of the file r
 // holds (size bytes; format its extension's, "mp3", "m4a"), by FFmpeg 8.1's
 // rules (gapless MP3), and false when the probe is unsure of the file: a shape
-// it does not model, a read error or a bound passed (a VBR MP3 with no Xing or
-// VBRI header whose frames can't all be counted in time among them). A
+// it does not model, a read error or a bound passed (a VBR MP3 with no frame
+// count in a Xing or VBRI header whose frames can't all be counted in time
+// among them). A
 // duration it gives is the container's own (a frame count, a track's length),
 // a constant bitrate's (checked across the file) or the frames counted, not a
 // VBR guess, so one file can be held to another's (a watch rendition to its

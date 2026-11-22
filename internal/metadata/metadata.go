@@ -111,18 +111,18 @@ type Metadata struct {
 	// noFFprobeRules, whose length replaces ffprobe's estimate, and which
 	// stands for ffprobe's answer when ffprobe fails. nil for any other file.
 	counted *probeResult
-	// uncounted: a VBR MP3 with no Xing or VBRI header whose frames a read
-	// given time may count, or an MP3 whose probe ran out of time before it
-	// could tell (LengthUncounted).
+	// uncounted: a VBR MP3 with no frame count in a Xing or VBRI header whose
+	// frames a read given time may count, or an MP3 whose probe ran out of
+	// time before it could tell (LengthUncounted).
 	uncounted bool
 	// countOutOfTime: uncounted as its frame count ran out of its own time,
 	// the file read without error (CountOutOfTime).
 	countOutOfTime bool
 }
 
-// LengthUncounted reports whether the file is a VBR MP3 with no Xing or VBRI
-// header whose frames went uncounted for now (its count ran out of time, the
-// caller's context ended or a read failed), or an MP3 whose probe ran out of
+// LengthUncounted reports whether the file is a VBR MP3 with no frame count in
+// a Xing or VBRI header whose frames went uncounted for now (its count ran out
+// of time, the caller's context ended or a read failed), or an MP3 whose probe ran out of
 // time before it could tell, so its Duration may be ffprobe's estimate from a
 // bitrate, or none (SRV-16). A scan reads the book again
 // (catalog.Book.LengthUncounted). A count that gave up (over an eighth of the
