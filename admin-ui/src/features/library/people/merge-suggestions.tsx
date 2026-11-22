@@ -45,7 +45,11 @@ export function MergeSuggestions({
               suggested: s.suggested,
             })}
             actions={
-              <Button size="sm" disabled={merging !== null} onClick={() => void merge(s)}>
+              <Button
+                size="sm"
+                disabled={merging !== null}
+                onClick={() => void merge(s.suggested, others)}
+              >
                 {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
                 {busy
                   ? t('people-merge.merging')

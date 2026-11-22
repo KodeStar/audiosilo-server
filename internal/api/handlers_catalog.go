@@ -741,6 +741,35 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"updated": len(distinct)})
 }
 
+// handleAdminMergeSpellings serves POST /admin/books/merge. The reply holds only
+// the books the transaction changed and the prior overrides needed for Undo.
+func (a *API) handleAdminMergeSpellings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LibraryID int64               `json:"library_id"`
+		Field     string              `json:"field"`
+		Sources   boundedList[string] `json:"sources"`
+		Target    string              `json:"target"`
+	}
+	if err := decodeJSON(r, &req, maxBulkEditBytes); errors.Is(err, errTooManyEntries) {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, fmt.Sprintf("at most %d source spellings per merge", maxBulkBooks))
+		return
+	} else if err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	books, err := a.cat.MergeSpellings(r.Context(), req.LibraryID, req.Field, req.Sources, req.Target, userFrom(r.Context()).ID)
+	if err != nil {
+		a.writeCatalogError(w, err, "merge spellings failed", "could not merge the spellings")
+		return
+	}
+	if len(books) > 0 {
+		details := (editRequest{Set: editFieldValues{req.Field: req.Target}}).details()
+		details["books"] = len(books)
+		a.audit(r, "book.bulk_edit", "", details)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"books": books})
+}
+
 // handleAdminMatch serves GET /admin/libraries/{id}/book/match?path=: community
 // works the book might be. ?q= adds that text to the book's own facts (its tags
 // and its library path) and ?asin= / ?isbn= look an identifier up; with none,

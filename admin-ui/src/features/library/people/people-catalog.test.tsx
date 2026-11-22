@@ -1,10 +1,9 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
-import type { AdminBook } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { libraries } from '@/test/fixtures';
-import { adminBook, authors, books, facets, narrators } from '@/test/library-fixtures';
+import { authors, books, facets, narrators } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes, withPodcastLibrary } from '@/test/routes';
 
@@ -118,33 +117,26 @@ describe('authors', () => {
   });
 
   it('merges spellings, and undo puts each book back', async () => {
-    // Two pages of books tagged with the other spelling: one whose author came
-    // from the tags, one whose author was already edited (which undo restores by
-    // setting the old spelling).
-    const fresh = adminBook({ path: 'Sanderson/Elantris', author: 'Sanderson, Brandon' });
-    const edited = adminBook({
-      path: 'Sanderson/Warbreaker',
-      author: 'Sanderson, Brandon',
-      edited: true,
-      edited_fields: ['author'],
-    });
-    // The filter finds co-credits naming the spelling too; a merge, which rewrites
-    // the whole field, must leave those alone (Janci Patterson stays).
-    const coCredit = adminBook({
-      path: 'Sanderson/Starsight',
-      author: 'Sanderson, Brandon & Janci Patterson',
+    const fresh = { library_id: 1, path: 'Sanderson/Elantris' };
+    const edited = { library_id: 1, path: 'Sanderson/Warbreaker' };
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
     });
     const calls = mockFetch(
       routes({
-        'GET /admin/books': (req) => {
-          if (req.query.get('author') !== 'Sanderson, Brandon') return { body: { books } };
-          return req.query.get('cursor')
-            ? { body: { books: [edited, coCredit] } }
-            : { body: { books: [fresh], next_cursor: 'p2' } };
+        'POST /admin/books/merge': async () => {
+          await pending;
+          return {
+            body: {
+              books: [
+                { ...fresh, previous: null },
+                { ...edited, previous: 'Sanderson, Brandon', source: 'community' },
+              ],
+            },
+          };
         },
-        'POST /admin/books/bulk': (req) => ({
-          body: { updated: (req.body as { books: AdminBook[] }).books.length },
-        }),
+        'POST /admin/books/bulk': { body: { updated: 1 } },
       }),
     );
     renderApp('/library/authors');
@@ -159,32 +151,40 @@ describe('authors', () => {
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Merge authors' }));
+    expect(screen.getByRole('button', { name: 'Merging...' })).toBeDisabled();
+    finish();
     expect(await screen.findByText('Merged into Brandon Sanderson')).toBeInTheDocument();
     expect(
       screen.getByText('2 books updated and locked. Revert from each book page.'),
     ).toBeInTheDocument();
-    const lookups = calls.filter((c) => c.path === '/admin/books' && c.query.get('author'));
-    expect(lookups.map((c) => c.query.get('limit'))).toEqual(['200', '200']);
-    const bulk = () => calls.filter((c) => c.path === '/admin/books/bulk').map((c) => c.body);
-    expect(bulk()).toEqual([
-      {
-        books: [
-          { library_id: 1, path: 'Sanderson/Elantris' },
-          { library_id: 1, path: 'Sanderson/Warbreaker' },
-        ],
-        set: { author: 'Brandon Sanderson' },
-      },
+    expect(calls.filter((c) => c.path === '/admin/books/merge').map((c) => c.body)).toEqual([
+      { field: 'author', sources: ['Sanderson, Brandon'], target: 'Brandon Sanderson' },
     ]);
+    expect(
+      calls.filter((c) => c.path === '/admin/books' || c.path === '/admin/books/bulk'),
+    ).toEqual([]);
 
     await user.click(screen.getByRole('button', { name: 'Undo' }));
     expect(await screen.findByText('Merge undone')).toBeInTheDocument();
-    expect(bulk().slice(1)).toEqual([
-      { books: [{ library_id: 1, path: 'Sanderson/Elantris' }], revert: ['author'] },
-      {
-        books: [{ library_id: 1, path: 'Sanderson/Warbreaker' }],
-        set: { author: 'Sanderson, Brandon' },
-      },
+    expect(calls.filter((c) => c.path === '/admin/books/bulk').map((c) => c.body)).toEqual([
+      { books: [fresh], revert: ['author'] },
+      { books: [edited], set: { author: 'Sanderson, Brandon' }, source: 'community' },
     ]);
+  });
+
+  it.each([
+    [
+      { status: 500, body: { error: 'could not merge the spellings' } },
+      "Couldn't merge into Brandon Sanderson",
+    ],
+    [{ body: { books: [] } }, 'Nothing to merge: no book carries the other spelling any more'],
+  ] as const)('offers no Undo when a merge fails or changes no books', async (response, title) => {
+    mockFetch(routes({ 'POST /admin/books/merge': response }));
+    renderApp('/library/authors');
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Merge authors' }));
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Merge authors' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
   });
 
   it('says how to get authors when there are no books', async () => {
@@ -259,15 +259,9 @@ describe('narrators', () => {
             ],
           },
         },
-        'GET /admin/books': (req) =>
-          req.query.get('narrator')
-            ? {
-                body: {
-                  books: [adminBook({ path: 'x', narrator: 'Kramer, Michael & Reading, Kate' })],
-                },
-              }
-            : { body: { books } },
-        'POST /admin/books/bulk': { body: { updated: 1 } },
+        'POST /admin/books/merge': {
+          body: { books: [{ library_id: 1, path: 'x', previous: null }] },
+        },
       }),
     );
     renderApp('/library/narrators');
@@ -275,9 +269,10 @@ describe('narrators', () => {
     expect(
       await screen.findByText('Merged into Michael Kramer & Kate Reading'),
     ).toBeInTheDocument();
-    expect(calls.find((c) => c.path === '/admin/books/bulk')?.body).toEqual({
-      books: [{ library_id: 1, path: 'x' }],
-      set: { narrator: 'Michael Kramer & Kate Reading' },
+    expect(calls.find((c) => c.path === '/admin/books/merge')?.body).toEqual({
+      field: 'narrator',
+      sources: ['Kramer, Michael & Reading, Kate'],
+      target: 'Michael Kramer & Kate Reading',
     });
   });
 });

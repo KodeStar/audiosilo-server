@@ -867,6 +867,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/books", a.requireAdmin(compressJSON(a.handleAdminListBooks)))
 	mux.Handle("GET /api/v1/admin/books/facets", a.requireAdmin(compressJSON(a.handleAdminBookFacets)))
 	mux.Handle("POST /api/v1/admin/books/bulk", a.requireAdmin(http.HandlerFunc(a.handleAdminBulkEdit)))
+	mux.Handle("POST /api/v1/admin/books/merge", a.requireAdmin(http.HandlerFunc(a.handleAdminMergeSpellings)))
 	mux.Handle("POST /api/v1/admin/covers", a.requireAdmin(http.HandlerFunc(a.handleAdminCovers)))
 	mux.Handle("POST /api/v1/admin/meta/covers", a.requireAdmin(http.HandlerFunc(a.handleCommunityCovers)))
 	mux.Handle("POST /api/v1/admin/books/works", a.requireAdmin(http.HandlerFunc(a.handleAdminBookWorks)))

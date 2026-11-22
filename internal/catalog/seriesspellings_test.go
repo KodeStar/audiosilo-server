@@ -83,9 +83,16 @@ func TestSeriesSpellingGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The fix: one spelling on every book (the console's bulk edit).
-	if err := c.EditBooks(ctx, refs, BookEdit{Set: map[string]string{FieldSeries: "He Who Fights with Monsters"}}); err != nil {
+	// A book listing this series only as a secondary membership keeps its main series.
+	if err := c.EditBook(ctx, lib, "Disc/8", BookEdit{Set: map[string]string{FieldMoreSeries: `[{"name":"He Who Fights With Monsters","position":14}]`}}); err != nil {
 		t.Fatal(err)
+	}
+	merged, err := c.MergeSpellings(ctx, lib, FieldSeries, []string{"He Who Fights WIth Monsters", "He Who Fights With Monsters"}, want[0].Suggested, 0)
+	if err != nil || len(merged) != 8 {
+		t.Fatalf("merged %d books, %v", len(merged), err)
+	}
+	if b := mustBook(t, c, ctx, lib, "Disc/8"); b.Series != "Discworld" {
+		t.Fatalf("secondary membership changed the main series to %q", b.Series)
 	}
 	if got := groups(false); len(got) != 0 {
 		t.Fatalf("groups after the rename = %+v", got)

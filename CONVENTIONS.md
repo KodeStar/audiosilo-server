@@ -2552,6 +2552,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `DirectPlayable` in SQL) + `/admin/books/facets` (each dimension counted without its
   own filter, the unfiltered yes/no ones in one pass);
   `POST /admin/books/bulk` (one edit over <= 1000 books, all or nothing);
+  `POST /admin/books/merge` (`{field, sources, target, library_id?}`) selects exact whole credits
+  or main series spellings and edits all matching books in one writer transaction. Its `books`
+  reply identifies each changed path and its prior override value and source for bulk Undo.
   `GET /admin/authors|narrators` (each person a credit names, `catalog.creditNames`
   over `names.Split`, so a co-credit counts for both; `merge_suggestions` stay over
   WHOLE credits, from `personKey`, keyed by `match.Fold`, which keeps every script's
@@ -3194,8 +3197,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its library spells its main series another way, same `series_key`; listed per series by `GET
   /admin/issues/series-spellings[?library_id=&ignored=true]` -> `{groups: [{library_id, suggested,
   spellings: [{name, books}], books}]}`, from the same predicate, `suggested` being `seriesName`;
-  open = a book not ignored, ignored view = a book ignored; the console's fix is the author merge's bulk
-  `series` edit), `split_discs` (one book split across disc folders, listed by
+  open = a book not ignored, ignored view = a book ignored; the console merges the listed spellings with
+  `POST /admin/books/merge`), `split_discs` (one book split across disc folders, listed by
   its lowest disc number, with ties ordered by path. The ignore belongs to `books.split_parent`. That folder must have no override; the console's fix sets
   `book` on it, which joins them; its discs never also group as duplicates). `split_parent` is
   worked out during discovery (`library.markSplitDiscs`: a folder book whose folder is a disc

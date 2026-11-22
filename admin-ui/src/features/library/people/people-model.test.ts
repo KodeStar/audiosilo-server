@@ -1,7 +1,6 @@
-import { adminBook, authors } from '@/test/library-fixtures';
+import { authors } from '@/test/library-fixtures';
 import {
   filterPeople,
-  mergeSteps,
   otherSpellings,
   sortByBooks,
   sortByDuration,
@@ -44,58 +43,33 @@ describe('merge suggestions', () => {
   });
 });
 
-describe('bulk steps', () => {
-  const fresh = adminBook({ path: 'a', author: 'Sanderson, Brandon' });
-  const editedA = adminBook({
-    path: 'b',
-    author: 'Sanderson, Brandon',
-    edited: true,
-    edited_fields: ['author'],
-  });
-  const editedB = adminBook({
-    path: 'c',
-    author: 'B. Sanderson',
-    edited: true,
-    edited_fields: ['author', 'title'],
-  });
-  // Edited, but not the merged field: its author came from the tags.
-  const otherEdit = adminBook({
-    path: 'd',
-    author: 'Sanderson, Brandon',
-    edited: true,
-    edited_fields: ['title'],
+describe('merge Undo', () => {
+  it('chunks returned paths at the bulk limit', () => {
+    const books = Array.from({ length: 2001 }, (_, i) => ({
+      library_id: 1,
+      path: String(i),
+      previous: null,
+    }));
+    expect(undoSteps(books, 'author').map((s) => s.books.length)).toEqual([1000, 1000, 1]);
   });
 
-  it('chunks at the bulk limit', () => {
-    const refs = Array.from({ length: 2001 }, (_, i) => adminBook({ path: String(i) }));
-    expect(mergeSteps(refs, 'author', 'X').map((st) => st.books.length)).toEqual([1000, 1000, 1]);
-  });
-
-  it('sets the suggested spelling on every book', () => {
-    expect(mergeSteps([fresh, editedA], 'narrator', 'Kate Reading')).toEqual([
-      {
-        books: [
-          { library_id: 1, path: 'a' },
-          { library_id: 1, path: 'b' },
+  it('restores identical values with different sources separately', () => {
+    const previous = 'Sanderson, Brandon';
+    const a = { library_id: 1, path: 'a' };
+    const b = { library_id: 2, path: 'a' };
+    const c = { library_id: 1, path: 'c' };
+    expect(
+      undoSteps(
+        [
+          { ...a, previous, source: 'community' },
+          { ...b, previous, source: 'edited' },
+          { ...c, previous, source: 'community' },
         ],
-        edit: { set: { narrator: 'Kate Reading' } },
-      },
+        'author',
+      ),
+    ).toEqual([
+      { books: [a, c], edit: { set: { author: previous }, source: 'community' } },
+      { books: [b], edit: { set: { author: previous }, source: 'edited' } },
     ]);
-  });
-
-  it('reverts books whose field had no override and restores the old spelling on the rest', () => {
-    expect(undoSteps([fresh, editedA, editedB, otherEdit], 'author')).toEqual([
-      {
-        books: [
-          { library_id: 1, path: 'a' },
-          { library_id: 1, path: 'd' },
-        ],
-        edit: { revert: ['author'] },
-      },
-      { books: [{ library_id: 1, path: 'b' }], edit: { set: { author: 'Sanderson, Brandon' } } },
-      { books: [{ library_id: 1, path: 'c' }], edit: { set: { author: 'B. Sanderson' } } },
-    ]);
-    expect(undoSteps([fresh], 'author')).toHaveLength(1);
-    expect(undoSteps([editedA], 'author')).toHaveLength(1);
   });
 });

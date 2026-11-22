@@ -61,6 +61,7 @@ func TestAdminCatalogEndpointsRequireAdmin(t *testing.T) {
 		{"GET", "/api/v1/admin/books", "", 200},
 		{"GET", "/api/v1/admin/books/facets", "", 200},
 		{"POST", "/api/v1/admin/books/bulk", bulk, 200},
+		{"POST", "/api/v1/admin/books/merge", `{"field":"author","sources":["Weir, Andy"],"target":"Andy Weir"}`, 200},
 		{"POST", "/api/v1/admin/books/works", `{"books":[{"library_id":` + strconv.FormatInt(libID, 10) + `,"path":"Andy Weir/Artemis"}]}`, 200},
 		{"GET", "/api/v1/admin/authors", "", 200},
 		{"GET", "/api/v1/admin/narrators", "", 200},
@@ -403,6 +404,85 @@ func TestAdminBulkEditAPI(t *testing.T) {
 	many.WriteString(`]}`)
 	if resp, _ := e.do(t, "POST", "/api/v1/admin/books/bulk", adminTok, many.String()); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("oversized bulk = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestAdminMergeSpellingsAndUndo(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	admin, _, _ := adminAndMember(t, e)
+	lib, _ := seedCatalog(t, e)
+	ctx := t.Context()
+	const path = "/api/v1/admin/books/merge"
+	const martian = "Andy Weir/The Martian"
+	const artemis = "Andy Weir/Artemis"
+	if err := e.cat.EditBook(ctx, lib, martian, catalog.BookEdit{
+		Set: map[string]string{"author": "A. Weir"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := `{"field":"author","sources":["A. Weir","Weir, Andy","Weir, Andy","Andy Weir"],"target":"Andy Weir"}`
+	resp, body := e.do(t, "POST", path, admin, request)
+	want := fmt.Sprintf(`{"books":[{"library_id":%d,"path":%q,"previous":null},{"library_id":%d,"path":%q,"previous":"A. Weir","source":"community"}]}`, lib, artemis, lib, martian)
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != want {
+		t.Fatalf("merge = %d %s, want %s", resp.StatusCode, body, want)
+	}
+	if resp, body := e.do(t, "POST", path, admin, request); resp.StatusCode != 200 || strings.TrimSpace(body) != `{"books":[]}` {
+		t.Fatalf("repeat merge = %d %s", resp.StatusCode, body)
+	}
+
+	var result struct{ Books []catalog.MergedBook }
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatal(err)
+	}
+	for _, book := range result.Books {
+		b, err := e.cat.GetBookByPath(ctx, book.LibraryID, book.Path)
+		if err != nil || b.Author != "Andy Weir" {
+			t.Fatalf("merged book at %s = %+v, %v", book.Path, b, err)
+		}
+		// Use the merge reply just as the console does, through the bulk endpoint.
+		undo := map[string]any{"books": []catalog.Ref{book.Ref}}
+		if book.Previous == nil {
+			undo["revert"] = []string{"author"}
+		} else {
+			undo["set"] = map[string]string{"author": *book.Previous}
+			undo["source"] = book.Source
+		}
+		if resp, body := e.do(t, "POST", "/api/v1/admin/books/bulk", admin, mustJSON(t, undo)); resp.StatusCode != 200 {
+			t.Fatalf("undo at %s = %d %s", book.Path, resp.StatusCode, body)
+		}
+	}
+	for p, want := range map[string]string{martian: "A. Weir", artemis: "Weir, Andy"} {
+		if b, err := e.cat.GetBookByPath(ctx, lib, p); err != nil || b.Author != want {
+			t.Fatalf("after Undo at %s = %+v, %v", p, b, err)
+		}
+	}
+	// Only the community override remains. Artemis will follow its tags on rescan.
+	var overrides int
+	if err := e.db.QueryRowContext(ctx, `SELECT count(*) FROM book_overrides WHERE field='author'`).Scan(&overrides); err != nil || overrides != 1 {
+		t.Fatalf("author overrides after Undo = %d, %v", overrides, err)
+	}
+	var source string
+	if err := e.db.QueryRowContext(ctx, `SELECT source FROM book_overrides WHERE library_id=? AND path=? AND field='author'`, lib, martian).Scan(&source); err != nil || source != "community" {
+		t.Fatalf("restored source = %q, %v", source, err)
+	}
+
+	for _, bad := range []string{
+		`{"field":"title","sources":["x"],"target":"y"}`,
+		`{"field":"author","sources":[],"target":"y"}`,
+		`{"field":"author","sources":[""],"target":"y"}`,
+		`{"field":"author","sources":["x"],"target":" "}`,
+		`{"field":"author","library_id":-1,"sources":["x"],"target":"y"}`,
+		`{"field":"series","sources":["Other series"],"target":"Different series"}`,
+		`{"field":"author","sources":["x"],"target":"` + strings.Repeat("a", 501) + `"}`,
+	} {
+		if resp, body := e.do(t, "POST", path, admin, bad); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("invalid merge %s = %d %s", bad, resp.StatusCode, body)
+		}
+	}
+	many := `{"field":"author","sources":[` + strings.Repeat(`"x",`, maxBulkBooks) + `"x"],"target":"y"}`
+	if resp, body := e.do(t, "POST", path, admin, many); resp.StatusCode != 400 || !strings.Contains(body, `"code":"too_large"`) {
+		t.Errorf("too many source spellings = %d %s", resp.StatusCode, body)
 	}
 }
 
