@@ -125,6 +125,13 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		if id, ok, err := recordReadProblem(ctx, tx, b); err != nil || ok {
 			if err == nil && b.LengthsRead {
 				err = recordLengths(ctx, tx, id, b)
+			} else if err == nil && b.LengthOnly && !b.LengthUncounted {
+				// Its other files read whole by today's revision, the book kept
+				// for a part that will read the same next time (a FIFO, a part
+				// that runs out of time): a read for the revision would only
+				// keep it again, so the revision is recorded (server#452), not
+				// left stale for every scan to read the book again.
+				err = stampDurationRev(ctx, tx, id)
 			}
 			return id, err
 		}
@@ -321,8 +328,10 @@ func recordLengths(ctx context.Context, tx *sql.Tx, id int64, b *Book) error {
 	if err != nil {
 		return err
 	}
+	// The lengths are today's revision's (LengthsRead: none left uncounted).
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE books SET duration = ?, codec = ?, scanned_chapters = ?, chapters_hash = ?, chapters_source = '', chapters_fit = ''
+		`UPDATE books SET duration = ?, codec = ?, scanned_chapters = ?, chapters_hash = ?, chapters_source = '', chapters_fit = '',
+		        `+setDurationRev+`
 		  WHERE id = ?`, b.Duration, b.Codec, raw, chaptersHash(raw), id); err != nil {
 		return err
 	}
@@ -336,6 +345,16 @@ func recordLengths(ctx context.Context, tx *sql.Tx, id int64, b *Book) error {
 		return err
 	}
 	return refreshEffective(ctx, tx, id)
+}
+
+// setDurationRev is the SET clause recording today's revision of the lengths'
+// reading (durationRev) on a row, with its own indexed_at.
+const setDurationRev = `duration_rev = ` + durationRev + `, duration_rev_indexed_at = indexed_at`
+
+// stampDurationRev records setDurationRev on the row id, its lengths as stored.
+func stampDurationRev(ctx context.Context, tx *sql.Tx, id int64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE books SET `+setDurationRev+` WHERE id = ?`, id)
+	return err
 }
 
 // sameFiles reports whether b's files are those of the stored row at its path:
@@ -521,6 +540,13 @@ type Signature struct {
 	// indexes once more though its files are unchanged, so a VBR MP3 with no
 	// Xing or VBRI header has its frames counted (SRV-16).
 	DurationStale bool
+	// TagReadFailed: a scan's backfill read of the book's primary file for its
+	// names or tag hints found ffprobe rejecting the file, where the index had
+	// not, and the book has not been indexed since (books.tag_read_failed_at,
+	// 0091), so its files are the bytes that read failed on: the next scan does
+	// not read it again for them (server#318). An index of the book (its files
+	// changed, a Re-read) clears it.
+	TagReadFailed bool
 	// RevStamp: a book whose snapshot is its own and of revision 1 to 4 (so
 	// PathOK) that needs no read (not NamesCheck), which the next scan stamps
 	// with today's revision (StampScannedRev), so it is never tested again.
@@ -567,17 +593,24 @@ type Signature struct {
 // SQL: every index writes it (books.duration_rev, 0082), with its indexed_at
 // (duration_rev_indexed_at). 1 counts the frames of a VBR MP3 with no Xing or
 // VBRI header (metadata's probe, SRV-16), where earlier servers stored a
-// bitrate's estimate; an index that left one uncounted (Book.LengthUncounted)
+// bitrate's estimate; 2 (server#452) counts the frames of one whose sampled
+// frames share its MPEG version's lowest bitrate (a VBR encoder's silence)
+// with another bitrate in its first 2 MiB, or that the denser sampling finds
+// varying, of one whose Xing header
+// gives no frame count, and of one whose sample rate changes, each frame at
+// its own rate. An index that left one uncounted (Book.LengthUncounted)
 // writes 0, no revision. A book read before it is DurationStale
-// (durationStaleExpr) and indexed once more.
-const durationRev = "1"
+// (durationStaleExpr) and indexed once more. Bumping it is the one change a
+// new length reading needs (and a migration starting the books it reads the
+// same at it, as 0082 and 0091 do, so the check never looks for their parts).
+const durationRev = "2"
 
 // durationStaleExpr is Signature.DurationStale: a book whose lengths were
 // read before durationRev, or by another index than the row's own (an older
 // server run against this database re-indexed it, storing its estimate and
 // leaving the revision: duration_rev_indexed_at, as fileOrderExpr), and that
-// holds an MP3 (its own format, or a part's), the only files revision 1 reads
-// otherwise. A CASE, so the parts are looked at only for a row of an older
+// holds an MP3 (its own format, or a part's), the only files the revisions
+// read otherwise. A CASE, so the parts are looked at only for a row of an older
 // revision (AND evaluates both sides).
 const durationStaleExpr = `CASE WHEN duration_rev < ` + durationRev + ` OR duration_rev_indexed_at IS NOT indexed_at
 	THEN format = 'mp3' OR EXISTS (
@@ -631,7 +664,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		        CASE WHEN is_folder AND `+fileOrderExpr+` IS NULL THEN
 		             (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
 		                FROM book_files f WHERE f.book_id = books.id) END, ebook_sig, indexed_at,
-		        `+snapshotNamesExpr+`, `+durationStaleExpr+`
+		        `+snapshotNamesExpr+`, `+durationStaleExpr+`, IFNULL(tag_read_failed_at = indexed_at, 0)
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -650,7 +683,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 			&sig.ScanError, &sig.ScanErrorFile, &sig.ScanErrorDetail, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
 			&stored, &format, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &narrator, &revOlder, &severalFiles,
-			&sig.DurationStale); err != nil {
+			&sig.DurationStale, &sig.TagReadFailed); err != nil {
 			return nil, err
 		}
 		if rev.String != scannedRev {

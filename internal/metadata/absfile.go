@@ -98,11 +98,23 @@ type absJSON struct {
 }
 
 // ABSSignature is what tells one metadata.json from its next version: its size
-// and modification time. ABS rewrites the file without touching the audio, so a
-// scan compares this, not the book's own signature.
+// and modification time, and the revision of its reading (absReadRev). ABS
+// rewrites the file without touching the audio, so a scan compares this, not
+// the book's own signature.
 func ABSSignature(info fs.FileInfo) string {
-	return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
+	return fmt.Sprintf("%d:%d@%s", info.Size(), info.ModTime().UnixNano(), absReadRev)
 }
+
+// absReadRev is the revision of ParseABSFile's reading of a metadata.json, in
+// every ABSSignature: bumping it is how a change to that reading reaches the
+// books read before it, as each stored signature (books.abs_sig) then differs
+// from the scan's, so the next scan reads every file once more and records it
+// (catalog.SetABSFiles), its audio unchanged; an older server's reading, its
+// signature without this, is read again the same way. Revision 2 joins a
+// credit's people with "; " when a name holds a comma (joinCredit,
+// server#213), which a book read before kept as ", " until its file changed
+// (server#454).
+const absReadRev = "2"
 
 // ReadABSFile reads the ABS metadata.json at path under root (ParseABSFile): a
 // regular file only, never through a link, including one swapped in after the

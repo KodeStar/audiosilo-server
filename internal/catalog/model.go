@@ -218,14 +218,17 @@ type Book struct {
 	// time would hold a file list of the day it first did. So such a book is
 	// kept only while its files are the stored ones (sameFiles): with a part
 	// added, gone, renamed or changed UpsertBook writes it whole, the part's
-	// problem with it, and clears ReadCutShort to say so.
+	// problem with it, and clears ReadCutShort to say so. A book it keeps is
+	// given today's length revision (durationRev), as a read for the
+	// revision would keep it again (server#452).
 	LengthOnly bool `json:"-"`
 	// LengthsRead narrows ReadCutShort the other way: only tags went unread
 	// (the in-process read cut short) and every file's length was read all the
 	// same (ffprobe answered: metadata.Metadata.LengthRead), so the length,
 	// codec and chapters are known though the names are not. UpsertBook keeps
 	// the stored book's names, cover flag and file signatures (the next scan
-	// reads it again) but writes those lengths (recordLengths), while its files
+	// reads it again) but writes those lengths and today's length revision
+	// (recordLengths), while its files
 	// are the stored ones by path; it clears LengthsRead when it writes none.
 	LengthsRead bool `json:"-"`
 	// ReadRoot is the library folder the book was read under, for a read that
@@ -235,9 +238,10 @@ type Book struct {
 	// folder. "" for no check (a scan's batch writes).
 	ReadRoot string `json:"-"`
 	// LengthUncounted: one of the book's files is a VBR MP3 with no Xing or
-	// VBRI header whose frames the scan could not count for now (a deadline, a
-	// read error: metadata.Metadata.LengthUncounted), its length ffprobe's
-	// estimate. UpsertBook then writes books.duration_rev 0, no
+	// VBRI header whose frames the scan could not count for now (a read error,
+	// a deadline beside other reads: metadata.Metadata.LengthUncounted, never
+	// a count out of its own time read alone, CountOutOfTime), its length
+	// ffprobe's estimate. UpsertBook then writes books.duration_rev 0, no
 	// revision, so the next scan reads the book again (SRV-16).
 	LengthUncounted bool `json:"-"`
 	// FoundAdded is when each of the book's audio files first appeared on disk

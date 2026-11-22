@@ -13,7 +13,8 @@ package metadata
 // the file goes to ffprobe as before: parity is the contract, and the fixture
 // corpus in testdata/probe checks it (probe_golden_test.go, and against a live
 // ffprobe, probe_live_test.go). Its one exception is the length of a VBR MP3
-// with no Xing or VBRI header: counted, never ffprobe's estimate (SRV-16).
+// with no frame count in a Xing or VBRI header: counted, never ffprobe's
+// estimate (SRV-16, server#452).
 
 import (
 	"context"
@@ -153,14 +154,16 @@ func timedOutReason(reason string) bool {
 // maxProbeTime) and ctx, and maxProbeBytes. A bound passed, a reader's panic, a
 // read error and an answer with no duration are all reasons.
 //
-// The one answer that is not ffprobe's is a VBR MP3's with no Xing or VBRI
-// header: ffprobe estimates its length from a bitrate (up to ~7% off, SRV-16),
-// so its frames are counted instead (mp3Uncounted.count, with bounds of its
-// own: the whole file is read), and the result is Counted. One whose count
-// may yet succeed (out of time, the caller's context ended, a read that
-// failed) is uncounted, as is an MP3 whose probe ran out of time before it
-// could tell: the scan reads it again. A count that gave up (frames of another
-// stream) or found no frames reads the same every time, so it is not.
+// The one answer that is not ffprobe's is a VBR MP3's with no frame count in
+// a Xing or VBRI header: ffprobe estimates its length from a bitrate (up to
+// ~7% off, SRV-16; 43% for one mostly silence, server#452), so its frames are
+// counted instead (mp3Uncounted.count, with bounds of its own: the whole file
+// is read), and the result is Counted; under WithoutFrameCount the estimate
+// answers, not Counted. One whose count may yet succeed (out of time, the
+// caller's context ended, a read that failed) is uncounted, as is an MP3
+// whose probe ran out of time before it could tell: the scan reads it again.
+// A count that gave up (over an eighth of the audio no frame) or found no
+// frames reads the same every time, so it is not.
 func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Duration) (p *probeResult, reason string, uncounted bool) {
 	pctx, cancel := context.WithTimeoutCause(ctx, min(timeout, maxProbeTime), errProbeDeadline)
 	defer cancel()
@@ -181,7 +184,9 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 			err = unsure("format " + format)
 		}
 	}); why != "" {
-		return nil, why, format == "mp3" && (timedOutReason(why) || ctx.Err() != nil)
+		// A read for the tags alone (WithoutFrameCount) wants no count, so it is
+		// never uncounted: read again alone, it would count nothing either.
+		return nil, why, format == "mp3" && frameCountWanted(ctx) && (timedOutReason(why) || ctx.Err() != nil)
 	}
 	uc, headerless := errors.AsType[*mp3Uncounted](err)
 	if headerless && b.err == nil {
@@ -197,6 +202,31 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 	p, reason = probeAnswer(b, p, err)
 	return p, reason, headerless && reason != "" && (b.err != nil || timedOutReason(reason) || ctx.Err() != nil)
 }
+
+// countTimedOut reports whether reason, fastProbe's, is a frame count's own
+// deadline (mp3Uncounted.count out of time), not the probe's before it could
+// tell, a read error or a bound on bytes.
+func countTimedOut(reason string) bool {
+	return strings.HasPrefix(reason, reasonUncounted+"; frame count: ") && timedOutReason(reason)
+}
+
+// noFrameCount is the context key WithoutFrameCount sets.
+type noFrameCount struct{}
+
+// WithoutFrameCount is ctx for a read that wants a file's tags, not its
+// length (the setup preview's samples, a scan's backfill of tags into books it
+// found unchanged): a VBR MP3 with no frame count in a header then takes the
+// first frame's bitrate's estimate rather than having its frames counted,
+// which reads the whole file (server#452). The length so read is not to be
+// stored: it is not Counted, and may be off. With the probe off for the
+// configured ffprobe, an MP3 that ffprobe fails on is counted all the same
+// (ExtractTimeout), as a read for its length would have the count stand in.
+func WithoutFrameCount(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noFrameCount{}, true)
+}
+
+// frameCountWanted reports whether ctx is not WithoutFrameCount's.
+func frameCountWanted(ctx context.Context) bool { return ctx.Value(noFrameCount{}) == nil }
 
 // probeAnswer is fastProbe's answer from a reader's: p, or why there is none.
 func probeAnswer(b *blockFile, p *probeResult, err error) (*probeResult, string) {
@@ -244,8 +274,9 @@ func (b *blockFile) boundedBy(ctx context.Context, budget int64, fn func()) (why
 // ExactDuration is the in-process probe's duration in seconds of the file r
 // holds (size bytes; format its extension's, "mp3", "m4a"), by FFmpeg 8.1's
 // rules (gapless MP3), and false when the probe is unsure of the file: a shape
-// it does not model, a read error or a bound passed (a VBR MP3 with no Xing or
-// VBRI header whose frames can't all be counted in time among them). A
+// it does not model, a read error or a bound passed (a VBR MP3 with no frame
+// count in a Xing or VBRI header whose frames can't all be counted in time
+// among them). A
 // duration it gives is the container's own (a frame count, a track's length),
 // a constant bitrate's (checked across the file) or the frames counted, not a
 // VBR guess, so one file can be held to another's (a watch rendition to its

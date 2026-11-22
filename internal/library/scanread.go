@@ -36,13 +36,20 @@ func newReadSlots(n int, timeout time.Duration) *readSlots {
 }
 
 // readSlots is newReadSlots for this scanner's reads: probeTimeout each, through
-// its readFile when one is set.
+// its reader.
 func (s *Scanner) readSlots(n int) *readSlots {
 	slots := newReadSlots(n, s.probeTimeout)
-	if s.readFile != nil {
-		slots.readFile = s.readFile
-	}
+	slots.readFile = s.reader()
 	return slots
+}
+
+// reader is how this scanner reads an audio file: its readFile when one is set
+// (tests), else extractFile.
+func (s *Scanner) reader() readFunc {
+	if s.readFile != nil {
+		return s.readFile
+	}
+	return extractFile
 }
 
 // readFunc reads the audio file at absPath, under the library root root,
@@ -87,6 +94,19 @@ func (r *readSlots) extract(ctx context.Context, root, absPath, ffprobePath stri
 		return nil // stopped while it waited: dropped by the scan
 	}
 	return r.readFile(ctx, root, absPath, ffprobePath, r.timeout)
+}
+
+// uncountedForNow reports whether md is a header-less VBR MP3 whose frames a
+// later read may count (metadata.Metadata.LengthUncounted: a read failed, or
+// it ran out of time beside other reads), so its book's length revision is
+// left unstamped for the next scan to read it again. One whose count ran out
+// of its own time read alone (CountOutOfTime: too large to count in that time
+// on its disk or share) is not: a scan's read would only run out of time
+// again, so the book keeps ffprobe's estimate until its files change or an
+// admin's Re-read (server#452). extract has read one beside others again
+// alone by then.
+func uncountedForNow(md *metadata.Metadata) bool {
+	return md.LengthUncounted() && !md.CountOutOfTime()
 }
 
 // lengthTimedOut reports whether md's length read ran out of time: its ffprobe

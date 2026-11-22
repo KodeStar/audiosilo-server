@@ -75,8 +75,8 @@ type Scanner struct {
 	// batched, when set (tests), hears each book a scan takes into its write
 	// batch, with the batch's length then.
 	batched func(n int)
-	// readFile, when set (tests), stands in for each scan's and on-demand
-	// index's metadata.ExtractTimeout (readSlots.readFile).
+	// readFile, when set (tests), stands in for each scan's, on-demand
+	// index's and preview sample's metadata.ExtractTimeout (readSlots.readFile).
 	readFile readFunc
 
 	// The files this server has seen ffprobe reject (problemCleared), by
@@ -442,6 +442,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
 	// later scans don't test them again.
 	var revBackfill []string
+	// Books whose backfill read found ffprobe rejecting their primary file
+	// (catalog.Signature.TagReadFailed), by the indexed_at the scan read.
+	failedBackfill := map[string]string{}
 	slots := s.readSlots(s.readers())
 	// The path, genre, tag hint, ABS, attachments, file order and ebook backfills are
 	// written as they go: a large one (most of a library laid out Author/Title, or
@@ -458,8 +461,11 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		if len(tagReads) == 0 {
 			return
 		}
+		// The tags alone are recorded: a header-less VBR MP3's frames are not
+		// counted (the whole file read) for a length nothing records.
+		rctx := metadata.WithoutFrameCount(ctx)
 		pool.Each(ctx, slots.size(), tagReads, func() bool { return ctx.Err() == nil }, func(r **tagRead) {
-			md := slots.extract(ctx, lib.Root, (*r).primary, s.ffprobePath)
+			md := slots.extract(rctx, lib.Root, (*r).primary, s.ffprobePath)
 			if ctx.Err() != nil {
 				return // one a Stop may have cut short is dropped, for the next scan
 			}
@@ -467,7 +473,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// A book of several files whose title turns on another file's tags
 			// (partNamed): its last file's, read beside the first.
 			if b := (*r).book; (*r).names && partNamed(b, md) {
-				if last := slots.extract(ctx, lib.Root, absOf(lib, lastPath(b)), s.ffprobePath); ctx.Err() == nil {
+				if last := slots.extract(rctx, lib.Root, absOf(lib, lastPath(b)), s.ffprobePath); ctx.Err() == nil {
 					(*r).last = last
 				}
 			}
@@ -482,7 +488,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			if old.ReleasedUnchecked {
 				releasedBackfill[b.RelPath] = md.Released
 			}
-			if old.HintsUnchecked && (md.ProbeErr == nil || old.ScanError == problemProbe) {
+			if r.hints && (md.ProbeErr == nil || old.ScanError == problemProbe) {
 				hintsBackfill[b.RelPath] = catalog.TagHints{ASIN: md.TagASIN, ISBN: md.TagISBN, Language: md.TagLanguage}
 			}
 			if old.GenresUnchecked {
@@ -492,6 +498,17 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// unread now (stopped, unopenable, cut short), the next scan reads both.
 			if r.names && (md.ProbeErr == nil || old.ScanError == problemProbe) && (!partNamed(b, md) || tagsRead(r.last)) {
 				pathBackfill[b.RelPath] = readNames(b, md, r.last)
+			}
+			// Names or hints left waiting on ffprobe, which rejects the file's
+			// data where the index read it: the same bytes are rejected again,
+			// so the read is remembered until the book is indexed again
+			// (server#318), not made on every scan. A time-out, ffprobe
+			// failing to run, or a frame count standing in for it that a read
+			// may yet finish (uncountedForNow: a read error, others read
+			// beside it) may pass, and is read again.
+			if (r.names || r.hints) && old.ScanError != problemProbe && errors.Is(md.ProbeErr, metadata.ErrProbeRejected) &&
+				!uncountedForNow(md) {
+				failedBackfill[b.RelPath] = old.IndexedAt
 			}
 		}
 		clear(tagReads)
@@ -531,6 +548,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			s.log.Warn("record scanned revisions failed", "library", lib.Name, "err", err)
 		}
 		revBackfill = revBackfill[:0]
+		if err := s.cat.SetTagReadFailed(context.WithoutCancel(ctx), lib.ID, failedBackfill); err != nil {
+			s.log.Warn("record failed tag reads failed", "library", lib.Name, "err", err)
+		}
+		clear(failedBackfill)
 	}
 	// The books to read are read a few files at a time (readFiles), each book on
 	// its own goroutine, up to a window of books ahead of the one written next; the
@@ -708,13 +729,16 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		}
 		old, existed := sigs[b.RelPath]
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
-			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) && !old.DurationStale &&
+			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) && (!old.DurationStale || keptAsStored(old)) &&
 			((s.ffprobePath == "" && !s.rereadUnprobed(lib.ID, b)) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
 			(old.CoverPath != "" || !b.CoverSeen || keptAsStored(old)) && !s.problemCleared(ctx, lib, old, slots) {
 			// Unchanged since last scan, its files in the order stored (a book
 			// indexed in byte order before #160 is read again in natural order),
 			// its lengths read by today's revision (an MP3 book indexed before
-			// SRV-16 is read again once, its header-less VBR files counted);
+			// SRV-16 is read again once, its header-less VBR files counted;
+			// one whose last read was cut short and kept as stored only once
+			// problemCleared says the file answers, server#452, not every part
+			// on every scan);
 			// only skip the probe when a prior probe already stored both duration
 			// and codec (so books indexed before the codec column get it
 			// backfilled), or, with no ffprobe, the in-process probe has had its
@@ -794,12 +818,17 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// A title that may be the album naming the series (before revision 2)
 				// or a leaf that states a series (before revision 3:
 				// catalog.Signature.NamesCheck) is the same read.
-				readPath := old.PathCheck == catalog.PathRead || old.NamesCheck
+				readPath, readHints := old.PathCheck == catalog.PathRead || old.NamesCheck, old.HintsUnchecked
+				if old.TagReadFailed {
+					// ffprobe rejected these very bytes at an earlier such read
+					// (server#318): the names and hints would wait on it again.
+					readPath, readHints = false, false
+				}
 				if old.RevStamp {
 					revBackfill = append(revBackfill, b.RelPath)
 				}
-				if old.ReleasedUnchecked || old.GenresUnchecked || old.HintsUnchecked || readPath {
-					tagReads = append(tagReads, &tagRead{book: b, old: old, primary: primary, names: readPath})
+				if old.ReleasedUnchecked || old.GenresUnchecked || readHints || readPath {
+					tagReads = append(tagReads, &tagRead{book: b, old: old, primary: primary, names: readPath, hints: readHints})
 					if len(tagReads) >= slots.size()*tagReadsPerSlot {
 						readTags()
 					}
@@ -1136,10 +1165,10 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// written whole after all (catalog.Book.LengthOnly); a folder book's parts
 	// say which it is (buildMultiFileChapters).
 	b.LengthOnly = b.ReadCutShort && !md.TagsUnread() && !faulted
-	// A header-less VBR MP3 whose frames went uncounted (its length ffprobe's
-	// estimate) leaves the book's length revision unstamped, so the next scan
-	// reads it again; a folder book's other parts count too.
-	b.LengthUncounted = md.LengthUncounted()
+	// A header-less VBR MP3 whose frames went uncounted for now (its length
+	// ffprobe's estimate) leaves the book's length revision unstamped, so the
+	// next scan reads it again; a folder book's other parts count too.
+	b.LengthUncounted = uncountedForNow(md)
 	// Only the tags cut short, the length read all the same (ffprobe
 	// answered, its frames counted): the stored book keeps its names but takes
 	// the lengths read now (catalog.Book.LengthsRead); a folder book's parts
@@ -1562,7 +1591,7 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 		md := mds[i]
 		tagsUnread = tagsUnread || md.TagsUnread() || openFaulted(md)
 		lengthsKnown = lengthsKnown && lengthKnown(md)
-		b.LengthUncounted = b.LengthUncounted || md.LengthUncounted()
+		b.LengthUncounted = b.LengthUncounted || uncountedForNow(md)
 		f.LengthUnread = lengthUnread(md)
 		if (readCutShort(md) || openFaulted(md)) && !b.ReadCutShort {
 			// Its length and chapters unknown: see enrich. The book is kept as
@@ -2739,6 +2768,7 @@ type tagRead struct {
 	old     catalog.Signature
 	primary string // its absolute path
 	names   bool   // the names are read too (PathRead, Signature.NamesCheck)
+	hints   bool   // the tag hints are read too (Signature.HintsUnchecked)
 	md      *metadata.Metadata
 	// last is the reading of the book's last file, read when the names are and
 	// the title turns on it (partNamed); nil otherwise, or left unread by a Stop.

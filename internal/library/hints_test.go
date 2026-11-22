@@ -8,11 +8,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
@@ -190,5 +192,146 @@ func TestTagHintsWaitForAFailingProbe(t *testing.T) {
 	}
 	if n := countHinted(t, db); n != 1 {
 		t.Fatalf("hints after the next scan: %d books, want the book's", n)
+	}
+}
+
+// A book whose hints wait on an ffprobe that rejects its file's data, where
+// the index had read it, is not read for them again on every scan: the same
+// bytes are rejected again (server#318). An I/O error may pass, so the book
+// read so is read again (TestTagHintsWaitForAFailingProbe). Once the book is
+// indexed again (an admin's Re-read, its files changed) it is read as ever.
+func TestTagHintsRememberARejectingProbe(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	cat, lib, db, healthy := uncheckedHints(t, "One")
+	log := filepath.Join(t.TempDir(), "log")
+	rejecting := stubProbe(t, fmt.Sprintf(`for f; do :; done; echo run >> %q
+echo "[mov @ 0x1] moov atom not found" >&2; echo "$f: Invalid data found when processing input" >&2; exit 1`, log))
+	s := NewScanner(cat, rejecting, slog.Default())
+	runs := func() int {
+		t.Helper()
+		got, err := os.ReadFile(log)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		return strings.Count(string(got), "run")
+	}
+	failed := func() bool {
+		t.Helper()
+		sigs, err := cat.Signatures(ctx, lib.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sigs["Herbert/One"].TagReadFailed
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if n := runs(); n != 1 || !failed() || countHinted(t, db) != 0 {
+		t.Fatalf("first scan: %d ffprobe runs, remembered %t, hinted %d; want one rejected read remembered, the hints waiting", n, failed(), countHinted(t, db))
+	}
+	for range 2 {
+		if _, err := s.Scan(ctx, *lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := runs(); n != 1 {
+		t.Errorf("ffprobe ran %d times over three scans, want the one: the rejection is remembered", n)
+	}
+
+	if _, err := NewScanner(cat, healthy, slog.Default()).ReindexPath(ctx, *lib, "Herbert/One"); err != nil {
+		t.Fatal(err)
+	}
+	if failed() || countHinted(t, db) != 1 {
+		t.Errorf("after a Re-read: remembered %t, hinted %d; want the book read, nothing remembered", failed(), countHinted(t, db))
+	}
+}
+
+// A rejection whose file's frames, counted to stand in for ffprobe, went
+// uncounted for now (a read error: metadata.Metadata.LengthUncounted) is not
+// remembered: the next count may finish, as the index's did, so the book's
+// hints are read again by the next scan. One whose count ran out of its own
+// time read alone (CountOutOfTime) would only do so again, and is remembered.
+func TestTagHintsForgetARejectionWithACountForNow(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	for _, tc := range []struct {
+		name     string
+		mark     func(*metadata.Metadata) *metadata.Metadata
+		remember bool
+	}{
+		{"uncounted for now", metadata.UncountedForTests, false},
+		{"count out of its time", metadata.CountOutOfTimeForTests, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cat, lib, _, _ := uncheckedHints(t, "One")
+			rejecting := stubProbe(t, `for f; do :; done
+echo "[mov @ 0x1] moov atom not found" >&2; echo "$f: Invalid data found when processing input" >&2; exit 1`)
+			s := NewScanner(cat, rejecting, slog.Default())
+			s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+				return tc.mark(extractFile(ctx, root, p, ffprobe, timeout))
+			}
+			if _, err := s.Scan(ctx, *lib); err != nil {
+				t.Fatal(err)
+			}
+			sigs, err := cat.Signatures(ctx, lib.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := sigs["Herbert/One"].TagReadFailed; got != tc.remember {
+				t.Errorf("remembered as rejected %t, want %t", got, tc.remember)
+			}
+		})
+	}
+}
+
+// With an ffprobe whose release the in-process probe has no rules for, one
+// that rejects a header-less VBR MP3 has the frames counted stand in for it,
+// at the index and at a backfill of the book's tag hints alike: the backfill
+// records the hints and remembers no rejected read (server#318), where its
+// index had no problem, rather than leave the hints waiting on ffprobe.
+func TestTagHintsOfACountedFileWithAnUnknownFFprobe(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the ffprobe stand-in is a shell script")
+	}
+	ctx := t.Context()
+	db, cat, lib, _ := headerlessBook(t)
+	// Not forced (stubProbe's ForceFFprobeForTests): the probe is off by its
+	// release, so the count runs as with a real ffprobe of a newer release.
+	rejecting := filepath.Join(t.TempDir(), "ffprobe")
+	script := `#!/bin/sh
+if [ "$1" = "-version" ]; then echo "ffprobe version 6.1.1 Copyright (c) 2007-2026"; exit 0; fi
+for f; do :; done
+echo "[mp3 @ 0x1] Failed to find two consecutive MPEG audio frames." >&2; echo "$f: Invalid data found when processing input" >&2; exit 1
+`
+	if err := os.WriteFile(rejecting, []byte(script), 0o755); err != nil { //nolint:gosec // G306: the stand-in must be executable
+		t.Fatal(err)
+	}
+	s := NewScanner(cat, rejecting, slog.Default())
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Added != 1 {
+		t.Fatalf("first scan = %+v, %v", res, err)
+	}
+	var scanErr string
+	if err := db.QueryRowContext(ctx, `SELECT scan_error FROM books`).Scan(&scanErr); err != nil || scanErr != "" {
+		t.Fatalf("indexed with scan error %q, %v; want the count standing in for ffprobe", scanErr, err)
+	}
+	if d := bookDuration(t, db); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
+		t.Fatalf("duration %v, want the frames counted, %v", d, headerlessSecs)
+	}
+	// As a row from before migration 0067: its hints unread.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET hints_checked = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 0 {
+		t.Fatalf("rescan = %+v, %v; want the hints backfilled, nothing re-indexed", res, err)
+	}
+	sigs, err := cat.Signatures(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sig := sigs["Author"]; sig.TagReadFailed || sig.HintsUnchecked {
+		t.Errorf("after the backfill: remembered as rejected %t, hints unchecked %t; want the hints read", sig.TagReadFailed, sig.HintsUnchecked)
 	}
 }

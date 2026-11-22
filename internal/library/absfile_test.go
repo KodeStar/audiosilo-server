@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -274,5 +275,71 @@ func TestABSSigAt(t *testing.T) {
 	}
 	if sig, err := absSigAt(t.Context(), lib, dirOf(rel), nil, time.Minute); err != nil || sig != "" {
 		t.Errorf("gone since the listing: %q, %v; want none", sig, err)
+	}
+}
+
+// A metadata.json read by an older revision of the reading (its stored
+// signature without today's absReadRev: here a credit whose names hold commas
+// joined with ", ", before server#213) is read once more by the next scan, its
+// audio unchanged, and then left be (server#454).
+func TestScannerRereadsABSFileOfAnOlderReading(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	scanner := NewScanner(cat, "", slog.Default())
+	root := t.TempDir()
+	const p = "Ursula K. Le Guin/A Wizard of Earthsea"
+	copyFixtureM4B(t, filepath.Join(root, filepath.FromSlash(p), "audio.m4b"))
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(p), "metadata.json"),
+		[]byte(`{"title":"A Wizard of Earthsea","authors":["Le Guin, Ursula K.","Vess, Charles"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "ABS", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	const joined = "Le Guin, Ursula K.; Vess, Charles"
+	author := func() string {
+		t.Helper()
+		d, err := cat.AdminBookDetail(ctx, lib.ID, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.Fields[catalog.FieldAuthor].Value
+	}
+	if got := author(); got != joined {
+		t.Fatalf("author %q, want %q", got, joined)
+	}
+
+	// As the older reading stored it: its signature with no revision, the
+	// credit joined with ", ".
+	info, err := os.Stat(filepath.Join(root, filepath.FromSlash(p), "metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET abs_sig = ?,
+		abs_file = json_set(abs_file, '$.author', 'Le Guin, Ursula K., Vess, Charles')`,
+		fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())); err != nil {
+		t.Fatal(err)
+	}
+	res, err := scanner.Scan(ctx, *lib)
+	if err != nil || res.Added+res.Updated != 0 {
+		t.Fatalf("rescan: %+v err=%v, want no re-index", res.ScanCounts, err)
+	}
+	if got := author(); got != joined {
+		t.Errorf("after the rescan: author %q, want %q, the file read again", got, joined)
+	}
+
+	// Read by today's revision: the next scan leaves the stored reading be.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET abs_file = json_set(abs_file, '$.author', 'Marker')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := db.QueryRowContext(ctx, `SELECT json_extract(abs_file, '$.author') FROM books`).Scan(&stored); err != nil || stored != "Marker" {
+		t.Errorf("the scan after read the file again: author %q, %v", stored, err)
 	}
 }

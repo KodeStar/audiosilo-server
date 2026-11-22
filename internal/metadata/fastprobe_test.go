@@ -238,12 +238,12 @@ func TestBoundedReadGivesUpOnAHungRead(t *testing.T) {
 func TestTimedOutReason(t *testing.T) {
 	t.Parallel()
 	for reason, want := range map[string]bool{
-		"limit: probe deadline":            true,
-		"tags: limit: read deadline":       true,
-		"limit: probe read budget":         false,
-		"limit: context canceled":          false,
-		"mp3: no Xing/VBRI header and not": false,
-		"":                                 false,
+		"limit: probe deadline":                 true,
+		"tags: limit: read deadline":            true,
+		"limit: probe read budget":              false,
+		"limit: context canceled":               false,
+		"mp3: no Xing/VBRI frame count and not": false,
+		"":                                      false,
 	} {
 		if got := timedOutReason(reason); got != want {
 			t.Errorf("timedOutReason(%q) = %t, want %t", reason, got, want)

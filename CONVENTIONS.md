@@ -1731,27 +1731,46 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   alone, as an ffprobe time-out; a scan reads an unchanged book with no stored duration or codec
   again once per server run (`Scanner.rereadUnprobed`), so a server that ran without ffprobe
   gets its books' lengths from its first scan since. `metadata.ExtractTags` reads tags alone. A
-  key `applyProbe` starts reading joins `probeTagKeys`. **The one departure from parity (SRV-16)**: a VBR MP3
-  with no Xing/VBRI header (its first 64 frames or the frames at 20-80% of the file differ in bitrate:
-  `mp3ConstantBitrate`) has its frames counted, header to header from the first to the trailing ID3v1/APEv2
-  tags (`mp3Uncounted.count`, `mp3FrameCount`; resyncing past junk, but giving the file to ffprobe once over an eighth of the audio was skipped (`mp3MaxJunk`: a
-  sample rate that changes, free-format frames); a last frame cut off by the end counted, as ffmpeg decodes it), where
+  key `applyProbe` starts reading joins `probeTagKeys`. **The one departure from parity (SRV-16, server#452)**: a VBR MP3
+  with no frame count in a Xing/VBRI header has its frames counted: one with no header whose first 64 frames, or a
+  run of 16 frames at each of 15 places spread over its audio (not into a trailing tag), differ in bitrate or sample rate (`mp3ConstantBitrate`,
+  the runs in the blocks it reads there anyway), or, where the first frame has its MPEG version's lowest bitrate (32
+  kbit/s, 8 for MPEG 2: a VBR encoder's silence, so a file mostly silence samples as CBR, 86 s read for 60 s), any frame
+  in its first 2 MiB (`mp3LowRateWalk`, about 9 minutes at 32 kbit/s, walked frame by frame; a true CBR file that low
+  keeps its estimate, read no further, never whole), and one whose Xing header gives bytes but no frames (less the decoder's
+  start skip, the encoder delay and 529, when an encoder tag gives it). The count goes header to header from the
+  first frame to the trailing ID3v1/APEv2 tags (`mp3Uncounted.count`, `mp3FrameCount`; each frame's samples at its
+  own sample rate, `mp3Count`, a frame of another rate or MPEG version whose next frame is of its stream going on
+  as one, two files joined; resyncing past junk, but giving the file to ffprobe once over an eighth of the audio
+  was skipped (`mp3MaxJunk`: free-format frames, damage); a last frame cut off by the end counted, as ffmpeg decodes it), where
   ffprobe estimates its length from a bitrate (139.42 s for 150.05 s of audio: seeks in the file landed up to
   ~7% off). The count reads the whole file in 1 MiB windows straight from it (`blockFile.raw`), bounded on
   its own as ffprobe's run would be (the ffprobe timeout and the caller's context, the file's size in bytes,
-  each read waited for under them, `await`), never on the hot path (a file with a header, or CBR, is not
+  each read waited for under them, `await`), never on the hot path (a file with a frame count, or CBR, is not
   counted); cut short (a read that fails ends it at once, never retried a byte on), the file goes to ffprobe (its estimate) as before, and with no ffprobe a count out of
-  time is a `ProbeTimedOut`. The result is `probeResult.Counted` (`ProbeView.Counted`: `Diff` leaves its
+  time is a `ProbeTimedOut`. A read that wants the tags alone (`metadata.WithoutFrameCount`: the setup preview's
+  samples, a scan's tag backfill of an unchanged book) counts nothing and takes the first frame's bitrate's
+  estimate, never stored as a length; with an ffprobe of a release with no rules that fails on the file, it
+  counts after all (`countFrames`), as the index's read had the count stand in, so a backfill does not wait
+  on, or remember as rejected, a file its index read (a count it cut short for now is `LengthUncounted`, read
+  again). The result is `probeResult.Counted` (`ProbeView.Counted`: `Diff` leaves its
   duration out; `countedFixtures` in the golden test holds each fixture's decoded length). With an ffprobe
   whose release has no rules, an MP3's estimate is replaced the same way after ffprobe answers (`readFile`'s
-  count, `Metadata.counted`). A stored book read before this (`books.duration_rev` < `catalog.durationRev`,
-  0082, or a `duration_rev_indexed_at` that is not the row's `indexed_at`: an older server re-indexed it
+  count, `Metadata.counted`), and when that ffprobe fails the count's whole answer stands in for it. A stored book read before this (`books.duration_rev` < `catalog.durationRev`,
+  0082, 2 since 0091, or a `duration_rev_indexed_at` that is not the row's `indexed_at`: an older server re-indexed it
   since, as `fileOrderExpr`) that holds an MP3 is `Signature.DurationStale`: the next scan indexes it once
   more, its files unchanged, and every index writes the current revision with its `indexed_at` (bump it, and
-  `durationStaleExpr`'s filter, when a change to the length reading should re-read stored books), except one
-  that left a header-less VBR file uncounted for now (a deadline, a read error: `Metadata.LengthUncounted`,
-  `Book.LengthUncounted`; never a count that gave up, which reads the same every time), which writes 0 so
-  the next scan reads it again (a scan reads one counted beside others again alone first); 0082
+  `durationStaleExpr`'s filter, when a change to the length reading should re-read stored books, with a
+  migration moving the books with no MP3 on, as 0091 does), except one
+  that left a header-less VBR file uncounted for now (a deadline beside other reads, a read error: `Metadata.LengthUncounted`,
+  `Book.LengthUncounted`, `uncountedForNow`; never a count that gave up, which reads the same every time, nor one out of
+  its own time read alone, `Metadata.CountOutOfTime`: a file too large to count in ffprobe's time on its share keeps
+  ffprobe's estimate at the current revision until its files change or a Re-read, server#452), which writes 0 so
+  the next scan reads it again (a scan reads one counted beside others again alone first). A stale book whose
+  last read was kept as stored for a read cut short (`keptAsStored`) waits for `problemCleared` like any other,
+  not re-read whole on every scan; one kept for a part that reads the same every time (`Book.LengthOnly`: a FIFO,
+  a length out of time) and one whose lengths alone were taken (`recordLengths`) record the current revision
+  (`stampDurationRev`), as a read for it would only keep the book again (server#452). 0082
   starts a book with no MP3 at the current revision. A
   multi-file book whose parts' lengths change moves a listener's whole-book place on it (its parts' offsets
   move): no remap, as for the natural file order (#160). A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
@@ -2225,8 +2244,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   dropped; `CleanLabels`), asin, isbn; chapters are not read. An empty value says nothing (never clears a tag's). `absFields` stores each as an edit of its
   field would (`CleanOverride`; a refused value left out), so an ABS ASIN makes a book matched (Health,
   `/meta`, the community chapter check, a refresh run). `books.abs_file` holds those fields (JSON,
-  `''` for none), `abs_sig` the file's signature (`metadata.ABSSignature`: size + mtime ns, `''` for
-  none) and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
+  `''` for none), `abs_sig` the file's signature (`metadata.ABSSignature`: size + mtime ns + `@` the reading's revision
+  `absReadRev`, `''` for none: bump the revision and every stored file is read once more, as 2 did for
+  `joinCredit`'s "; ", server#454) and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
   first so `Signatures` reads no JSON; `UpsertBook` writes all three (`absColumns`; nothing for a
   file book). Discovery records each folder's file signature from the walk itself (`audioDirs`'
   `absFiles`, the walk's own entry, no extra directory read; `IndexPath`, with no walk, stats it: `absSigAt`;
@@ -2435,7 +2455,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   revision with its names unread). The reads run `readSlots` wide (`tagRead`, batched
   `tagReadsPerSlot` per slot, applied before each backfill flush; one a Stop cuts short is dropped
   for the next scan), so a large revision-4 backfill (every narrated book) costs one parallel tag
-  read each, once. A current `@rev` 1 to 4 snapshot it doesn't flag
+  read each, once (and counts no MP3 frames: `metadata.WithoutFrameCount`). The names and the tag
+  hints wait while ffprobe fails on the file where its index did not; one that rejects the file's
+  data (`metadata.ErrProbeRejected`) is remembered (`books.tag_read_failed_at`, `0091`, the row's
+  `indexed_at` then: `Signature.TagReadFailed`, `Catalog.SetTagReadFailed`), so those bytes are not
+  read for them again on every scan (server#318); the next index of the book (its files changed, a
+  Re-read) clears it, and a time-out, a run that failed or a count standing in for it cut short for now
+  (`uncountedForNow`) reads again. A current `@rev` 1 to 4 snapshot it doesn't flag
   (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at today's revision by that
   scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 to 4,
   `revOlderOwn`), so later scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a
