@@ -955,20 +955,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A single-table statement and a correlated subquery are not affected.
 - **JSON compression** (`api/compress.go`, PERF-SPIKE S5, fail closed since server#270): a route
   is compressed only when its registration in `api.go` wraps the handler in `compressJSON`
-  (inside `requireAuth`/`requireAdmin`, so authentication runs first); every other route, a new
-  one included, answers identity. `compressJSON` acts only on a GET (or its HEAD, which so carries
-  the GET's `Vary` and `Content-Encoding`) without a Range or Upgrade header. Opt in only a
-  reviewed JSON read: never a route that returns a credential (BREACH: every credential is minted
-  by a POST, and `GET /auth/tokens`, the Bridge's routes and the Upcoming calendar link stay out),
-  and never a stream (media, a file download, a long poll, anything that flushes; the library
+  (inside `requireAuth`/`requireAdmin`, so authentication runs first; the public `GET /server` is
+  the one wrapped bare); every other route, a new one included, answers identity.
+  `compressJSON` acts only on a GET (or its HEAD, which so carries the GET's `Vary` and
+  `Content-Encoding`) without a Range or Upgrade header. Opt in only a reviewed JSON read: never
+  a route that returns a credential (BREACH: every credential is minted by a POST, and
+  `GET /auth/tokens`, the Bridge's routes and the Upcoming calendar link stay out), and never a
+  stream (media, a file download, a long poll, anything that flushes; the library
   export is JSON and opts in): `gzipWriter` has no Flush and holds the first 1 KiB back. A route
   that stays out has a `TestCompressExclusions` row
   (GET and HEAD) proving it is answered identity. The answer is gzipped (BestSpeed) when it is
   `application/json`, at least 1 KiB, not a 204, 206 or 304, has no Content-Range, Content-Encoding
-  or ETag of its own and the client takes gzip; every JSON answer on an opted-in route carries
-  `Vary: Accept-Encoding`. `gzipAccepted(r)` is the opt-in and the client's gzip together: the
-  list cache and read-along choose their stored gzip (and read-along its `-gz` ETag) from it, so
-  both read false on a route registered without `compressJSON`. The list cache stores each answer's
+  or ETag of its own and the client takes gzip; every JSON answer to a GET or HEAD without Range
+  or Upgrade on an opted-in route carries `Vary: Accept-Encoding`. `gzipAccepted(r)` is the opt-in
+  and the client's gzip together: the list cache and read-along choose their stored gzip (and
+  read-along its `-gz` ETag) from it, so both read false on a route registered without
+  `compressJSON` and for a Range request. The list cache stores each answer's
   gzip beside it and sends that on a hit (`writeCachedJSON`), so a hit compresses nothing. A whole
   answer gzipped in memory (the list cache's, a read-along map, a console file) is `spa.Gzip` at a
   level (BestSpeed per request, the default for a file), nil when gzip saves nothing.

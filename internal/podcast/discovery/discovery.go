@@ -191,7 +191,7 @@ func newService(opts Options, origin netip.AddrPort) *Service {
 		// A directory answers at its fixed URL: no redirect is followed.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect },
 	}
-	// No client timeout: fetchImage bounds each fetch by s.budget.
+	// No client timeout: queuedImage bounds each fetch by s.budget.
 	s.artFetcher = media.NewArtFetcher(artTransport, 0, "AudioSilo/"+opts.Version)
 	s.parent = context.Background()
 	s.resetLocked()
