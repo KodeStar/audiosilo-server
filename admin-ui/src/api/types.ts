@@ -1362,11 +1362,13 @@ export interface DuplicateMember extends AdminBook {
 
 /**
  * catalog.DuplicateGroup: copies of one book in one library (or, asked for with
- * ?across=1, in several: each copy's library_id and library_name say which); books[0] is the one to
+ * ?across=1, one pair from different libraries); books[0] is the one to
  * keep, except under `id_length_differs` (one ASIN/ISBN, lengths that don't match:
  * maybe different recordings, so none is suggested).
  */
 export interface DuplicateGroup {
+  /** Exact path membership, independent of the order of the copies. */
+  key: string;
   reason: 'same_files' | 'same_id' | 'id_length_differs' | 'same_book';
   ignored: boolean;
   books: DuplicateMember[];

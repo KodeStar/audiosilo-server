@@ -1,0 +1,196 @@
+package catalog
+
+import (
+	"errors"
+	"slices"
+	"testing"
+)
+
+func TestDuplicateComparisonIgnores(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/l"})
+	other, _ := c.CreateLibrary(ctx, Library{Name: "M", Root: "/m"})
+	uid := seedUser(t, c, ctx)
+	a := Ref{lib.ID, "Best"}
+	b := Ref{lib.ID, "Second"}
+	x := Ref{other.ID, "Second"}
+	put := func(r Ref, asin string) {
+		t.Helper()
+		f := "mp3"
+		if r == a {
+			f = "m4b"
+		}
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: r.LibraryID, RelPath: r.Path, Title: r.Path, ASIN: asin, Format: f}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, r := range []Ref{a, b, x} {
+		put(r, "same")
+	}
+	key := func(refs ...Ref) string { return comparisonKey(refs) }
+	check := func(ignored, across bool, want ...string) {
+		t.Helper()
+		// All three comparisons may share the first copy across page boundaries.
+		q := DuplicateQuery{Ignored: ignored, Across: across, Limit: 1}
+		var keys []string
+		for {
+			page, err := c.DuplicatePage(ctx, q)
+			if err != nil || page.Total != len(want) || len(keys) > len(want) {
+				t.Fatalf("page %+v, want %v: %v", page, want, err)
+			}
+			for _, g := range page.Groups {
+				keys = append(keys, g.Key)
+			}
+			if page.NextCursor == "" {
+				break
+			}
+			q.Cursor = page.NextCursor
+		}
+		slices.Sort(keys)
+		slices.Sort(want)
+		if !slices.Equal(keys, want) {
+			t.Fatalf("comparison keys = %q, want %q", keys, want)
+		}
+	}
+	check(false, true, key(a, b), key(a, x), key(b, x))
+	if err := c.IgnoreIssue(ctx, IssueDuplicate, []Ref{x, a}, uid); err != nil {
+		t.Fatal(err)
+	}
+	check(true, true, key(a, x))
+	check(false, true, key(a, b), key(b, x))
+	if err := c.IgnoreIssue(ctx, IssueDuplicate, []Ref{b, a}, uid); err != nil {
+		t.Fatal(err)
+	}
+	check(true, false, key(a, b))
+	check(false, true, key(b, x))
+	if err := c.UnignoreIssue(ctx, IssueDuplicate, []Ref{a, x}); err != nil {
+		t.Fatal(err)
+	}
+	check(false, true, key(a, x), key(b, x))
+
+	d, e := Ref{lib.ID, "D"}, Ref{lib.ID, "E"}
+	put(d, "another")
+	put(e, "another")
+	if err := c.IgnoreIssue(ctx, IssueDuplicate, []Ref{d, e}, uid); err != nil {
+		t.Fatal(err)
+	}
+	put(a, "regroup")
+	put(d, "regroup")
+	check(false, false, key(a, d))
+	check(true, false)
+	put(a, "same")
+	put(d, "another")
+	check(true, false, key(a, b), key(d, e))
+	put(d, "same")
+	check(false, false, key(a, b, d))
+	// The exact decision survives an index rebuild, a moved path and a retry.
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM books WHERE library_id=? AND rel_path=?`, lib.ID, b.Path); err != nil {
+		t.Fatal(err)
+	}
+	put(d, "another")
+	moved := Ref{b.LibraryID, "A & B/\"Moved\""}
+	if err := c.MoveDurableState(ctx, b.LibraryID, b.Path, moved.Path); err != nil {
+		t.Fatal(err)
+	}
+	put(moved, "same")
+	check(true, false, key(a, moved), key(d, e))
+	if err := c.UnignoreIssue(ctx, IssueDuplicate, []Ref{moved, a}); err != nil {
+		t.Fatal(err)
+	}
+	check(false, false, key(a, moved))
+	for _, bad := range [][]Ref{{a}, {a, a}, {a, b, x}} {
+		if err := c.IgnoreIssue(ctx, IssueDuplicate, bad, uid); !errors.Is(err, ErrDuplicateSelection) {
+			t.Fatalf("invalid selection %v: %v", bad, err)
+		}
+	}
+}
+
+func TestLegacyDuplicateMappingAndUndo(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	l, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/l"})
+	m, _ := c.CreateLibrary(ctx, Library{Name: "M", Root: "/m"})
+	write := func(q string, args ...any) {
+		t.Helper()
+		if _, err := c.db.ExecContext(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put := func(r Ref, asin string) {
+		t.Helper()
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: r.LibraryID, RelPath: r.Path, Title: r.Path, ASIN: asin}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, b, x := Ref{l.ID, "A"}, Ref{l.ID, "B"}, Ref{m.ID, "X"}
+	for _, r := range []Ref{a, b, x} {
+		put(r, "one")
+		write(`INSERT INTO issue_ignores(library_id,path,kind,created_at) VALUES(?,?,'duplicate',?)`, r.LibraryID, r.Path, r.Path)
+	}
+	y := Ref{m.ID, "Missing"}
+	write(`INSERT INTO issue_ignores(library_id,path,kind,created_at) VALUES(?,?,'duplicate','other')`, m.ID, y.Path)
+	write(`INSERT INTO server_state VALUES('map_duplicate_ignores_0092','true','t')`)
+	for range 2 {
+		if err := c.MapLegacyDuplicateIgnores(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(ignored bool, expected int) {
+		t.Helper()
+		page, err := c.DuplicatePage(ctx, DuplicateQuery{Ignored: ignored, Across: true})
+		if err != nil || page.Total != expected {
+			t.Fatalf("ignored %v: %+v (%v), want %d", ignored, page, err, expected)
+		}
+	}
+	check(true, 3)
+	put(y, "one") // unmapped at upgrade: retains its old coverage
+	check(true, 6)
+	if err := c.UnignoreIssue(ctx, IssueDuplicate, []Ref{y, a}); err != nil {
+		t.Fatal(err)
+	}
+	check(true, 5)
+	check(false, 1)
+}
+
+func TestCrossLibraryPairsUseDirectEvidence(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	l, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/l"})
+	m, _ := c.CreateLibrary(ctx, Library{Name: "M", Root: "/m"})
+	for _, b := range []Book{
+		{LibraryID: l.ID, RelPath: "A", Title: "A", ContentHash: "audio", Size: 100},
+		{LibraryID: l.ID, RelPath: "B", Title: "B", ContentHash: "audio", Size: 100, ISBN: "123", Duration: 1000},
+		{LibraryID: m.ID, RelPath: "C", Title: "C", ISBN: "123", Duration: 9000},
+	} {
+		if _, err := c.UpsertBook(ctx, &b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := c.DuplicatePage(ctx, DuplicateQuery{Across: true})
+	if err != nil || page.Total != 2 {
+		t.Fatalf("all comparisons %+v, %v", page, err)
+	}
+	for _, g := range page.Groups {
+		refs := make([]Ref, 0, len(g.Books))
+		for _, b := range g.Books {
+			refs = append(refs, Ref{b.LibraryID, b.Path})
+		}
+		switch comparisonKey(refs) {
+		case comparisonKey([]Ref{{l.ID, "A"}, {l.ID, "B"}}):
+			if g.Reason != dupSameFiles {
+				t.Fatalf("A/B reason %s", g.Reason)
+			}
+		case comparisonKey([]Ref{{l.ID, "B"}, {m.ID, "C"}}):
+			if g.Reason != dupIDLengthDiffers {
+				t.Fatalf("B/C reason %s", g.Reason)
+			}
+		default:
+			t.Fatalf("indirect comparison %+v", refs)
+		}
+	}
+	page, err = c.DuplicatePage(ctx, DuplicateQuery{LibraryID: m.ID, Across: true})
+	if err != nil || page.Total != 1 || page.Groups[0].Reason != dupIDLengthDiffers {
+		t.Fatalf("library M comparisons %+v, %v", page, err)
+	}
+}

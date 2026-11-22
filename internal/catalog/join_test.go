@@ -365,10 +365,32 @@ func TestSplitDiscsIssue(t *testing.T) {
 	if counts, _ = c.IssueCounts(ctx, []string{IssueSplitDiscs}); counts[0].Count != 0 || counts[0].Ignored != 1 {
 		t.Fatalf("after ignoring: %+v", counts[0])
 	}
+	// Another folder still needs its own decision. In the
+	// original folder Disc 2 now leads Disc 10, even after the old disc goes.
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM books WHERE library_id=? AND split_parent=?`, lib.ID, "Cowell/Dragonese"); err != nil {
+		t.Fatal(err)
+	}
+	add("Cowell/Dragonese/Disc 10", "Cowell/Dragonese")
+	add("Cowell/Dragonese/Disc 2", "Cowell/Dragonese")
+	add("Other/Disc 1", "Other")
+	page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Issue: IssueSplitDiscs, IssueIgnored: true}})
+	if err != nil || len(page.Books) != 1 || page.Books[0].Path != "Cowell/Dragonese/Disc 2" {
+		t.Fatalf("ignored disc set %+v (%v)", page, err)
+	}
+	if got := listed(); len(got) != 1 || got[0] != "Other/Disc 1" {
+		t.Fatalf("open disc sets: %v", got)
+	}
+	if err := c.SetFolderOverride(ctx, lib.ID, "Other", OverrideCollection); err != nil {
+		t.Fatal(err)
+	}
+	first[0].Path = "Cowell/Dragonese/Disc 2"
 	if err := c.UnignoreIssue(ctx, IssueSplitDiscs, first); err != nil {
 		t.Fatal(err)
 	}
 
+	if got := listed(); len(got) != 1 || got[0] != first[0].Path {
+		t.Fatalf("suggest again: %v", got)
+	}
 	// Fixed: the folder set to one book settles it at once.
 	if err := c.SetFolderOverride(ctx, lib.ID, "Cowell/Dragonese", OverrideBook); err != nil {
 		t.Fatal(err)

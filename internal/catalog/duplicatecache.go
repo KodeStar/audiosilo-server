@@ -45,7 +45,7 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64, across boo
 			return f.rows, f.sets, nil
 		}
 	}
-	rows, sets, err := c.findDuplicateSets(ctx, libraryID, across)
+	rows, sets, err := findDuplicateSets(ctx, c.db, libraryID, across)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -59,18 +59,18 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64, across boo
 // compactDuplicates keeps only the rows sets' members index (a library with a
 // few copies holds a few rows, not every book's), renumbering the members.
 func compactDuplicates(rows []dupRow, sets []dupSet) ([]dupRow, []dupSet) {
-	n := 0
+	at := make(map[int]int)
+	var kept []dupRow
 	for _, s := range sets {
-		n += len(s.members)
-	}
-	kept := make([]dupRow, 0, n)
-	for i := range sets {
-		members := make([]int, len(sets[i].members))
-		for j, m := range sets[i].members {
-			members[j] = len(kept)
-			kept = append(kept, rows[m])
+		for j, m := range s.members {
+			k, ok := at[m]
+			if !ok {
+				k = len(kept)
+				at[m] = k
+				kept = append(kept, rows[m])
+			}
+			s.members[j] = k
 		}
-		sets[i].members = members
 	}
 	return kept, sets
 }

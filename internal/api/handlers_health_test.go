@@ -606,3 +606,51 @@ func TestIssuesUnknownASIN(t *testing.T) {
 		t.Fatalf("admin list with the report on again = %d %s", resp.StatusCode, body)
 	}
 }
+
+// A membership key lets the console dismiss a large group in one request.
+// The anchor must belong to that exact group. Undo still resolves the saved
+// decision if the index gained another copy in the meantime.
+func TestDuplicateGroupKeyAction(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	admin, member, _ := adminAndMember(t, e)
+	ctx := context.Background()
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(p string) {
+		t.Helper()
+		if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: p, Title: p, ASIN: "B0SHARED"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("A")
+	put("B")
+	const list = "/api/v1/admin/issues/duplicates"
+	resp, body := e.do(t, "GET", list, admin, "")
+	var page catalog.DuplicatePage
+	if err := json.Unmarshal([]byte(body), &page); err != nil || resp.StatusCode != 200 || len(page.Groups) != 1 || len(page.Groups[0].Key) != 64 {
+		t.Fatalf("GET %d %s", resp.StatusCode, body)
+	}
+	key := page.Groups[0].Key
+	action := func(method, token, path, group string, want int) {
+		t.Helper()
+		input := fmt.Sprintf(`{"kind":"duplicate","books":[{"library_id":%d,"path":%q}],"group_key":%q}`, lib.ID, path, group)
+		if res, body := e.do(t, method, "/api/v1/admin/issues/ignore", token, input); res.StatusCode != want {
+			t.Fatalf("%s (%s): %d %s, want %d", method, path, res.StatusCode, body, want)
+		}
+	}
+	action("POST", admin, "A", strings.Repeat("0", 64), 400)
+	action("POST", admin, "elsewhere", key, 400)
+	action("POST", member, "A", key, 403)
+	action("POST", admin, "A", key, 204)
+	resp, body = e.do(t, "GET", list+"?ignored=true", admin, "")
+	if resp.StatusCode != 200 || !strings.Contains(body, key) {
+		t.Fatalf("ignored %d %s", resp.StatusCode, body)
+	}
+	put("C")
+	action("DELETE", member, "A", key, 403)
+	action("DELETE", admin, "A", key, 204)
+	action("DELETE", admin, "A", key, 204) // retry after the selection disappeared
+}
