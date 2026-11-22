@@ -217,7 +217,8 @@ export function importStatus(
     case 'needs_attention':
       return { key: 'audible.import.parked', tone: 'warn', code };
     case 'done':
-      return { key: 'audible.import.done', tone: 'ok' };
+      // A stored refusal is always this job's: queueing a backup clears it.
+      return x.fold_refusal_reason ? null : { key: 'audible.import.done', tone: 'ok' };
     case 'failed':
       return { key: 'audible.import.failed', tone: 'bad', code };
     case 'cancelled':
@@ -335,6 +336,26 @@ export const REASON_CONTESTED = 'contested';
 export function reasonKey(reason: string): string | null {
   if (!reason || reason === REASON_CONTESTED) return null;
   return /^[a-z][a-z0-9_]*$/.test(reason) ? 'audible.reason.other' : null;
+}
+
+/**
+ * The reasons the server stores on a title whose completed backup it could not
+ * match (`fold_refusal_reason`), each worded as `audible.fold.<reason>`.
+ */
+export const FOLD_REASONS = [
+  'invalid_result',
+  'not_indexed',
+  'not_own_book',
+  'rejected_match',
+] as const;
+
+/** The i18n key a title's stored backup refusal reads as, null for none; a newer code reads as `other`. */
+export function foldReasonKey(x: Pick<AudibleTitle, 'fold_refusal_reason'>): string | null {
+  const reason = x.fold_refusal_reason;
+  if (!reason) return null;
+  return (FOLD_REASONS as readonly string[]).includes(reason)
+    ? `audible.fold.${reason}`
+    : 'audible.fold.other';
 }
 
 /**

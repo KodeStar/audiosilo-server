@@ -3427,6 +3427,9 @@ export interface AudibleTitle {
   import_job_id: number | null;
   /** Its backup (Phase 4b); null when none was asked for. */
   import: AudibleImport | null;
+  /** Why the server could not match a completed backup to this title, and when it tried. */
+  fold_refusal_reason?: string;
+  fold_refused_at?: string;
   /** A preorder still not available 14 days after its release date. */
   needs_attention: boolean;
   /** Where a backup would go, as the Bridge planned it at its last check; null when matched or not planned. */

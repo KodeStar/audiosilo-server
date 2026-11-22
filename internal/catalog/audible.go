@@ -586,6 +586,10 @@ type AudibleTitle struct {
 	// Import is the title's backup (Phase 4b): its job's state and code, or a
 	// console request waiting for a preorder ("pending"); nil for none.
 	Import *AudibleImport `json:"import"`
+	// FoldRefusalReason and FoldRefusedAt record why and when a completed
+	// backup could not be matched. An accepted match clears both.
+	FoldRefusalReason string  `json:"fold_refusal_reason,omitempty"`
+	FoldRefusedAt     *string `json:"fold_refused_at,omitempty"`
 	// NeedsAttention: a preorder still not available AudiblePreorderWait after
 	// its release date; the account is no longer checked hourly for it.
 	NeedsAttention bool `json:"needs_attention"`
@@ -1049,7 +1053,7 @@ func (c *Catalog) fillContests(ctx context.Context, titles []AudibleTitle) error
 const audibleTitleSelect = `SELECT t.account, t.asin, t.title, t.authors, t.series, t.release_date, t.runtime_s, t.state,
 	t.reason, t.match_library_id, t.match_path, t.match_how, t.rejected, t.ignored, t.no_sync, t.dest_path, t.first_seen,
 	t.updated_at, t.import_job_id, t.import_pending, j.state, j.error, j.result, j.progress,
-	t.planned, t.contest_library_id, t.contest_path, acct.library_id
+	t.planned, t.contest_library_id, t.contest_path, acct.library_id, t.fold_refusal_reason, t.fold_refused_at
 	FROM audible_titles t LEFT JOIN bridge_jobs j ON j.id = t.import_job_id
 	LEFT JOIN audible_accounts acct ON acct.account = t.account`
 
@@ -1069,7 +1073,8 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 	)
 	if err := row.Scan(&t.Account, &t.ASIN, &t.Title, &authors, &series, &t.ReleaseDate, &t.RuntimeS, &t.State,
 		&t.Reason, &matchLib, &matchPath, &how, &t.Rejected, &t.Ignored, &t.NoSync, &t.DestPath, &t.FirstSeen, &t.UpdatedAt,
-		&jobID, &pending, &jobState, &jobErr, &jobRes, &jobProgrs, &planned, &contestLib, &contest, &acctLib); err != nil {
+		&jobID, &pending, &jobState, &jobErr, &jobRes, &jobProgrs, &planned, &contestLib, &contest, &acctLib,
+		&t.FoldRefusalReason, &t.FoldRefusedAt); err != nil {
 		return nil, err
 	}
 	if json.Unmarshal([]byte(authors), &t.Authors) != nil || t.Authors == nil {

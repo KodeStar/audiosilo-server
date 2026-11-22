@@ -622,9 +622,13 @@ func (o *seriesOwner) any(ctx context.Context, series []AudibleSeries) (bool, er
 
 // SetAudibleImportTx records job as the backup of account's title asin (a
 // pending request is now queued), in tx: the transaction that queued the job
-// (bridge.EnqueueAll), so a job and its title's record commit together.
+// (bridge.EnqueueAll), so a job and its title's record commit together. An
+// earlier backup's refusal (fold_refusal_reason, 0093) goes: the title's
+// status is this backup's now, so a stored refusal is always its import
+// job's.
 func (c *Catalog) SetAudibleImportTx(ctx context.Context, tx *sql.Tx, account, asin string, job int64) error {
-	_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET import_job_id = ?, import_pending = 0, updated_at = ?
+	_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET import_job_id = ?, import_pending = 0,
+		    fold_refusal_reason = '', fold_refused_at = NULL, updated_at = ?
 		  WHERE account = ? AND asin = ?`, job, c.ts(), account, asin)
 	return err
 }
@@ -641,36 +645,94 @@ var (
 	ErrImportNotOwn = errors.New("the backup's book is not the title's own")
 )
 
+// The reasons a done backup could not become its title's match, stored on the
+// title (fold_refusal_reason, 0093) and worded by the console.
+const (
+	// AudibleFoldInvalidResult: the result is unreadable, names another
+	// library or no usable book path.
+	AudibleFoldInvalidResult = "invalid_result"
+	// AudibleFoldNotIndexed: no book is indexed at the result's path.
+	AudibleFoldNotIndexed = "not_indexed"
+	// AudibleFoldNotOwnBook: the book there isn't the title's own.
+	AudibleFoldNotOwnBook = "not_own_book"
+	// AudibleFoldRejectedMatch: the book there is the one marked Not this book.
+	AudibleFoldRejectedMatch = "rejected_match"
+)
+
+// foldRefusal is a done backup the fold refused: the reason it stores on the
+// title, and the error (ErrImport*, or the result's read error) it returns.
+type foldRefusal struct {
+	reason string
+	err    error
+}
+
+func (e *foldRefusal) Error() string { return e.err.Error() }
+func (e *foldRefusal) Unwrap() error { return e.err }
+
+// AudibleFoldRefusal is the reason (one of AudibleFold*) of a
+// FoldAudibleImport error that is a refusal, "" for one that is not (the fold
+// could not run).
+func AudibleFoldRefusal(err error) string {
+	if r, ok := errors.AsType[*foldRefusal](err); ok {
+		return r.reason
+	}
+	return ""
+}
+
 // FoldAudibleImport takes a done backup's place as its title's match (how
 // "import"), and clears its "Not this book" (the match is now this title's
-// own) and what the last poll said of it unmatched (its planned destination
-// and contested book). The result must name the job's own library and a book indexed there
+// own), what the last poll said of it unmatched (its planned destination
+// and contested book) and an earlier backup's refusal. The result must name the job's own library and a book indexed there
 // (the Bridge rescans before it reports done), else ErrImportNotIndexed, and
-// the title's own book (importOwnBook), else ErrImportNotOwn. A job that isn't
-// a done audible.import, or whose title has another backup since, changes
-// nothing. A user-state write.
+// the title's own book (importOwnBook), else ErrImportNotOwn. A refusal is
+// recorded on the title (fold_refusal_reason, fold_refused_at) in the same
+// transaction, then returned. Unreadable params name no title and change
+// nothing. A job that isn't a done audible.import, or whose title has another
+// backup since, changes nothing. A user-state write.
 func (c *Catalog) FoldAudibleImport(ctx context.Context, j bridge.Job) error {
 	if j.Kind != bridge.KindAudibleImport || j.State != bridge.StateDone || j.LibraryID == nil {
 		return nil
 	}
-	p, r, err := bridge.AudibleImportOf(j)
-	if err != nil {
+	var (
+		p       bridge.AudibleImportParams
+		r       bridge.AudibleImportResult
+		refused *foldRefusal
+	)
+	if err := json.Unmarshal(j.Params, &p); err != nil {
 		return fmt.Errorf("read backup %d: %w", j.ID, err)
 	}
-	if r.LibraryID != *j.LibraryID || r.LibraryID != p.LibraryID || !bridgeBookPath(r.Path) {
-		return ErrImportNotIndexed
+	if len(j.Result) > 0 {
+		if err := json.Unmarshal(j.Result, &r); err != nil {
+			refused = &foldRefusal{AudibleFoldInvalidResult, fmt.Errorf("read backup %d: %w", j.ID, err)}
+		}
 	}
-	return c.db.WithUserStateTx(ctx, "FoldAudibleImport", func(tx *sql.Tx) error {
-		if err := importOwnBook(ctx, tx, p, r); err != nil {
+	if refused == nil && (r.LibraryID != *j.LibraryID || r.LibraryID != p.LibraryID || !bridgeBookPath(r.Path)) {
+		refused = &foldRefusal{AudibleFoldInvalidResult, ErrImportNotIndexed}
+	}
+	err := c.db.WithUserStateTx(ctx, "FoldAudibleImport", func(tx *sql.Tx) error {
+		if refused == nil {
+			if err := importOwnBook(ctx, tx, p, r); !errors.As(err, &refused) && err != nil {
+				return err
+			}
+		}
+		if refused != nil {
+			_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET fold_refusal_reason = ?1, fold_refused_at = ?2,
+				    updated_at = ?2, import_job_id = ?3
+				  WHERE account = ?4 AND asin = ?5 AND (import_job_id IS NULL OR import_job_id = ?3)`,
+				refused.reason, c.ts(), j.ID, p.Account, p.ASIN)
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET match_library_id = ?, match_path = ?, match_how = ?,
 			    rejected = 0, import_pending = 0, import_job_id = ?, planned = '',
-			    contest_library_id = NULL, contest_path = '', updated_at = ?
+			    contest_library_id = NULL, contest_path = '', fold_refusal_reason = '', fold_refused_at = NULL, updated_at = ?
 			  WHERE account = ? AND asin = ? AND (import_job_id IS NULL OR import_job_id = ?)`,
 			r.LibraryID, r.Path, AudibleMatchImport, j.ID, c.ts(), p.Account, p.ASIN, j.ID)
 		return err
 	})
+	if err != nil || refused == nil {
+		return err
+	}
+	return refused
 }
 
 // importOwnBook checks, through tx, that the book a done backup's result names
@@ -680,7 +742,7 @@ func (c *Catalog) FoldAudibleImport(ctx context.Context, j bridge.Job) error {
 // backup placed (a book the backup made). A file the Bridge placed into a
 // folder book already there (the scan makes a folder one book) joins that
 // book, which stays its own title's. Never the book the admin marked "Not
-// this book" for the title.
+// this book" for the title. A refusal is a *foldRefusal.
 func importOwnBook(ctx context.Context, tx *sql.Tx, p bridge.AudibleImportParams, r bridge.AudibleImportResult) error {
 	var (
 		id       int64
@@ -696,11 +758,11 @@ func importOwnBook(ctx context.Context, tx *sql.Tx, p bridge.AudibleImportParams
 		p.Account, p.ASIN, r.LibraryID, r.Path, KindBooks).Scan(&id, &folder, &asin, &rejected)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return ErrImportNotIndexed
+		return &foldRefusal{AudibleFoldNotIndexed, ErrImportNotIndexed}
 	case err != nil:
 		return err
 	case rejected:
-		return ErrImportNotOwn
+		return &foldRefusal{AudibleFoldRejectedMatch, ErrImportNotOwn}
 	case strings.EqualFold(asin, p.ASIN):
 		return nil
 	}
@@ -716,11 +778,11 @@ func importOwnBook(ctx context.Context, tx *sql.Tx, p bridge.AudibleImportParams
 		}
 	}
 	if len(files) == 0 {
-		return ErrImportNotOwn
+		return &foldRefusal{AudibleFoldNotOwnBook, ErrImportNotOwn}
 	}
 	for _, f := range files {
 		if !placed[f] {
-			return ErrImportNotOwn
+			return &foldRefusal{AudibleFoldNotOwnBook, ErrImportNotOwn}
 		}
 	}
 	return nil

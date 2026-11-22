@@ -24,6 +24,8 @@ import {
   canSync,
   chosenAccount,
   cleanDest,
+  FOLD_REASONS,
+  foldReasonKey,
   importStatus,
   lookList,
   matchedParam,
@@ -747,6 +749,45 @@ describe('settings > audible', () => {
 });
 
 describe('audible backups', () => {
+  it("shows the title's stored reason in place of Backed up, even after the job is gone", async () => {
+    const done = { job_id: 4, state: 'done', code: '' } as const;
+    const reasons = ['invalid_result', 'not_indexed', 'not_own_book', 'rejected_match', 'new_code'];
+    const titles = reasons.map((reason, i) =>
+      title({
+        asin: `B00000000${i}`,
+        match: null,
+        fold_refusal_reason: reason,
+        fold_refused_at: '2026-11-01T09:00:00Z',
+        import: i === 0 ? null : done,
+      }),
+    );
+    titles.push(title({ asin: 'B000000009', match: null, import: done }));
+    mockFetch(routes(true, { 'GET /admin/audible/titles': { body: { titles, next: '' } } }));
+    renderApp('/server?topic=audible');
+    const list = await screen.findByRole('list', { name: 'Audible titles' });
+    const rows = within(list).getAllByRole('listitem');
+    const messages = [
+      "The server couldn't use the backup details to match this title to a book in its library.",
+      "The server couldn't find the backed-up book in the library index.",
+      "The server couldn't confirm that the book at the backup destination belongs to this title.",
+      "The backup went into the book marked “Not this book” for this title, so the server didn't match it.",
+      "The server couldn't match the backup to this title.",
+    ];
+    messages.forEach((message, i) =>
+      expect(within(rows[i]).getByText(message)).toBeInTheDocument(),
+    );
+    expect(within(list).getAllByText('Backed up')).toHaveLength(1);
+    expect(within(rows[5]).getByText('Backed up')).toBeInTheDocument();
+  });
+
+  it('words every stored backup refusal, a newer one plainly', () => {
+    const dict = en as Record<string, string>;
+    const keys = FOLD_REASONS.map((r) => foldReasonKey({ fold_refusal_reason: r }));
+    expect(keys.filter((k) => !k || !dict[k])).toEqual([]);
+    expect(foldReasonKey({ fold_refusal_reason: 'new_code' })).toBe('audible.fold.other');
+    expect(foldReasonKey({})).toBeNull();
+  });
+
   it('offers Not this book except on a backup of its own, and reads a rejected match as not here', () => {
     expect(canReject(title())).toBe(true);
     expect(canReject(title({ match: null }))).toBe(true);
