@@ -170,6 +170,8 @@ func (p seriesPath) leafNames(title string) bool {
 // Leaf is what a book's leaf named "Author; Series; Book NN[; Title]" states
 // (LeafSeries).
 type Leaf struct {
+	// Author is the first part, used when there is no author folder.
+	Author string
 	// Series is the series part ("Indian Hill").
 	Series string
 	// Title is the title part, "" with none.
@@ -202,7 +204,7 @@ func LeafSeries(leaf string) (Leaf, bool) {
 	if parts[0] == "" || parts[1] == "" || m == nil {
 		return Leaf{}, false
 	}
-	l := Leaf{Series: parts[1], Title: strings.Join(parts[3:], "; ")}
+	l := Leaf{Author: parts[0], Series: parts[1], Title: strings.Join(parts[3:], "; ")}
 	if start, end, ok := ParseSeriesRange(m[1]); ok {
 		l.Position, l.PositionEnd = start, end
 	} else {
@@ -212,8 +214,11 @@ func LeafSeries(leaf string) (Leaf, bool) {
 }
 
 // PathLeafSeries reports whether a book's own leaf (its file's name without the
-// extension, or its folder's) is one LeafSeries reads, as DeriveFromPath reads it.
+// extension, its folder, or the parent of a disc folder) is one LeafSeries reads.
 func PathLeafSeries(relPath string, isFolder bool) bool {
+	if !strings.Contains(relPath, ";") {
+		return false
+	}
 	segs := pathSegments(relPath, isFolder)
 	_, ok := LeafSeries(segs[len(segs)-1])
 	return ok
@@ -223,7 +228,7 @@ func PathLeafSeries(relPath string, isFolder bool) bool {
 // in submatch 1 and the number it leads with, if any, in submatch 2. A marker
 // is a number ("04", "01-05", "2.5") or the placeholder "XX" ("??"), never a
 // word, so "Oprah; Picks; Book Club" states no series.
-var leafVolume = regexp.MustCompile(`^(?i:book)\s+((\d+(?:\.\d+)?)\S*|(?i:x+)|\?+)$`)
+var leafVolume = regexp.MustCompile(`^(?i:books?)\s+((\d+(?:\.\d+)?)\S*|(?i:x+)|\?+)$`)
 
 // volumeMarker reports whether a name is only a volume marker, "Book 10",
 // "Vol. 2", "C02", "#3" (splitSeriesIndex's prefixes and a number): no title.

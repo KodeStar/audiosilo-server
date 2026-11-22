@@ -27,6 +27,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/mounts"
 	"github.com/kodestar/audiosilo-server/internal/pool"
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // Scanner walks library roots and keeps the catalog index up to date. The
@@ -1051,17 +1052,10 @@ func (l *runLog) finish() []catalog.RunEvent {
 // pathFlushEvery is how many path readings a scan gathers before writing them.
 const pathFlushEvery = 500
 
-// readNames is book b's title, author and series: the path's reading
-// (metadata.DeriveFromPath, the series and position a leaf named "Author;
-// Series; Book NN[; Title]" states included) as the baseline, then md's tags,
-// which are authoritative when present (an unreadable file's md carries none;
-// nil reads the same), except a book of several files' first title tag that
-// names that file (metadata.PartsTitle: the album instead, unless the book's
-// folder or last, its last file's tags, nil for unread, says the tag is the
-// book's, or the two tags share a name past the album), and an album tag that
-// only names the book's series, which gives way to the book's own title
-// (metadata.TitleNotSeries), and md's narrator. So the leaf's series fills
-// only a series the tags leave out.
+// readNames takes the path as its baseline and overlays the primary file's
+// tags. A leaf's position belongs to its series. PartsTitle uses the last
+// file's tags to tell chapter titles from book titles, and TitleNotSeries
+// resolves albums that name a known series.
 func readNames(b *catalog.Book, md, last *metadata.Metadata) *metadata.Metadata {
 	n := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	if md == nil {
@@ -1076,6 +1070,9 @@ func readNames(b *catalog.Book, md, last *metadata.Metadata) *metadata.Metadata 
 		n.Author = md.Author
 	}
 	if strings.TrimSpace(md.Series) != "" {
+		if md.SeriesIndex == 0 && n.SeriesIndex != 0 && !match.SameSeries(n.Series, md.Series) && metadata.PathLeafSeries(b.RelPath, b.IsFolder) {
+			n.SeriesIndex, n.SeriesIndexEnd = 0, 0
+		}
 		n.Series = md.Series
 	}
 	if md.SeriesIndex != 0 {

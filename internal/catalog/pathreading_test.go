@@ -177,8 +177,8 @@ func TestStampScannedRev(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantRevs := map[string]string{
-		plain: "5|A Parade of Horribles", stale: "1|The Final Empire", series: "1|Without Law",
-		series2: "5|Without Law", leaf: "2|From The Ashes", plain2: "5|The Butcher's Masquerade",
+		plain: "6|A Parade of Horribles", stale: "1|The Final Empire", series: "1|Without Law",
+		series2: "6|Without Law", leaf: "2|From The Ashes", plain2: "6|The Butcher's Masquerade",
 	}
 	for rel, w := range wantRevs {
 		var got string
@@ -220,7 +220,9 @@ func TestNamesCheckByRevision(t *testing.T) {
 		{"Latin accent at 3", 3, "A/Les Misérables", "mp3", "Les Misérables", "", "", true},
 		{"punctuation only at 3", 3, "A/B – C", "mp3", "B – C", "", "", false},
 		{"leaf series at 2", 2, leaf, "mp3", "From The Ashes", "", "", true},
-		{"leaf series at 3", 3, leaf, "mp3", "From The Ashes", "", "", false},
+		{"leaf series at 5", 5, leaf, "mp3", "From The Ashes", "", "", true},
+		{"leaf series at 6", 6, leaf, "mp3", "From The Ashes", "", "", false},
+		{"disc under leaf at 5", 5, leaf + "/CD1", "mp3", "CD1", leaf, "", true},
 		{"no revision", 0, "Charles Dickens/Great Expectations", "mp3", "Great Expectations", "", "", false},
 	}
 	for _, c := range cases {

@@ -979,6 +979,24 @@ var titleStopwords = map[string]bool{
 	"or": true, "nor": true, "from": true,
 }
 
+// TitlesShareWord reports whether two titles have a word in common beyond
+// articles and joining words. The scanner uses this to preserve an album
+// whose title is a fuller spelling of the book folder's.
+func TitlesShareWord(a, b string) bool {
+	words := func(s string) []string {
+		return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsNumber(r) && !unicode.IsMark(r)
+		})
+	}
+	bw := words(b)
+	for _, w := range words(a) {
+		if !titleStopwords[w] && slices.Contains(bw, w) {
+			return true
+		}
+	}
+	return false
+}
+
 // titleTokens reduces a title to its set of significant lowercase word tokens after
 // CleanTitle has removed the series name and fluff.
 func titleTokens(title, series string, o Options) []string {

@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"cmp"
 	"strconv"
 	"strings"
 )
@@ -80,6 +81,7 @@ func FromPathLayout(relPath string, isFolder bool) *Metadata {
 	l := ReadPathLayout(relPath, isFolder)
 	m := &Metadata{Author: strings.TrimSpace(l.Author)}
 	if leaf, ok := LeafSeries(l.Title); ok {
+		m.Author = cmp.Or(m.Author, leaf.Author)
 		m.Title, m.Series, m.SeriesIndex, m.SeriesIndexEnd = leaf.Title, leaf.Series, leaf.Position, leaf.PositionEnd
 		return m
 	}
@@ -93,6 +95,19 @@ func FromPathLayout(relPath string, isFolder bool) *Metadata {
 		}
 	}
 	return m
+}
+
+// SeriesTitle names a book by its series and position when the path supplies
+// no title of its own ("Dark Road 1-5").
+func (m *Metadata) SeriesTitle() string {
+	if m.Series == "" || m.SeriesIndex <= 0 {
+		return m.Series
+	}
+	title := m.Series + " " + strconv.FormatFloat(m.SeriesIndex, 'f', -1, 64)
+	if ValidSeriesRange(m.SeriesIndex, m.SeriesIndexEnd) {
+		title += "-" + strconv.FormatFloat(m.SeriesIndexEnd, 'f', -1, 64)
+	}
+	return title
 }
 
 // plainVolume reads a part label that is a plain number ("03") as the volume

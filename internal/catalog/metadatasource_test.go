@@ -450,9 +450,9 @@ func TestPreferPathKeepsWhatThePathDoesNotSay(t *testing.T) {
 // the series and position (metadata.DeriveFromPath, metadata.FromPathLayout),
 // so the scan's reading of them reads as the path's; a library that prefers its
 // folders keeps them (its layout reads the leaf too) and takes the title part
-// over the tags' title, and a range is the leaf's in both. An untagged book's
-// title is the whole leaf: the folders' library still takes its title part and
-// position, beside a series tag spelled another way.
+// over the tags' title, and a range is the leaf's in both. The untagged title is the leaf's title part.
+// Only a library preferring the leaf's series takes its position beside a
+// tag that names another series.
 func TestLeafSeriesSources(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -467,8 +467,8 @@ func TestLeafSeriesSources(t *testing.T) {
 			{RelPath: tufo, Title: "From The Ashes (Unabridged)", Author: "Mark Tufo", Series: "Indian Hill", SeriesIndex: 4},
 			{RelPath: rules, Title: "The Rules: The Complete Series", Author: "Aaron Oster", Series: "The Rules",
 				SeriesIndex: 1, SeriesIndexEnd: 3},
-			{RelPath: spell, Title: "Larry Correia; Grimnoir Chronicles; Book 02; Spellbound", Author: "Larry Correia",
-				Series: "Grimnoir", SeriesIndex: 2},
+			{RelPath: spell, Title: "Spellbound", Author: "Larry Correia",
+				Series: "Grimnoir"},
 		} {
 			b.LibraryID, b.IsFolder, b.AddedAt = lib.ID, true, "2020-01-01"
 			if _, err := c.UpsertBook(ctx, b); err != nil {
@@ -477,8 +477,8 @@ func TestLeafSeriesSources(t *testing.T) {
 		}
 		title := [2]string{"From The Ashes (Unabridged)", SourceTag}
 		untagged := map[string][2]string{
-			FieldTitle:  {"Larry Correia; Grimnoir Chronicles; Book 02; Spellbound", SourcePath},
-			FieldSeries: {"Grimnoir", SourceTag}, FieldSeriesIndex: {"2", SourcePath},
+			FieldTitle:  {"Spellbound", SourcePath},
+			FieldSeries: {"Grimnoir", SourceTag}, FieldSeriesIndex: {"", ""},
 		}
 		if src == MetadataFromPath {
 			title = [2]string{"From The Ashes", SourcePath}

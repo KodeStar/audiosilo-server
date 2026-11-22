@@ -78,52 +78,52 @@ func TestDeriveFromPath(t *testing.T) {
 			want: Metadata{Title: "Unsouled", SeriesIndex: 1},
 		},
 		// A leaf named "Author; Series; Book NN[; Title]" states its series and
-		// position (LeafSeries), the shapes of the LibraForge benchmark; its
-		// title stays the whole leaf (TitleNotSeries reads the title part).
+		// position (LeafSeries), the shapes of the LibraForge benchmark; its title
+		// part or the numbered series identifies it.
 		{
 			name:     "leaf series and position",
 			rel:      "Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes",
 			isFolder: true,
-			want: Metadata{Title: "Mark Tufo; Indian Hill; Book 04; From The Ashes", Author: "Mark Tufo",
+			want: Metadata{Title: "From The Ashes", Author: "Mark Tufo",
 				Series: "Indian Hill", SeriesIndex: 4},
 		},
 		{
 			name: "leaf file without a title part",
 			rel:  "A.R. Wise/A.R. Wise; Deadlocked; Book 01.m4b",
-			want: Metadata{Title: "A.R. Wise; Deadlocked; Book 01", Author: "A.R. Wise", Series: "Deadlocked", SeriesIndex: 1},
+			want: Metadata{Title: "Deadlocked 1", Author: "A.R. Wise", Series: "Deadlocked", SeriesIndex: 1},
 		},
 		{
 			name:     "leaf range",
 			rel:      "Bruno Miller/Bruno Miller; Dark Road; Book 01-05",
 			isFolder: true,
-			want: Metadata{Title: "Bruno Miller; Dark Road; Book 01-05", Author: "Bruno Miller", Series: "Dark Road",
+			want: Metadata{Title: "Dark Road 1-5", Author: "Bruno Miller", Series: "Dark Road",
 				SeriesIndex: 1, SeriesIndexEnd: 5},
 		},
 		{
 			name:     "leaf range with a title part",
 			rel:      "Tao Wong/Tao Wong; System Apocalypse; Book 10-12; Omnibus Volume 4",
 			isFolder: true,
-			want: Metadata{Title: "Tao Wong; System Apocalypse; Book 10-12; Omnibus Volume 4", Author: "Tao Wong",
+			want: Metadata{Title: "Omnibus Volume 4", Author: "Tao Wong",
 				Series: "System Apocalypse", SeriesIndex: 10, SeriesIndexEnd: 12},
 		},
 		{
 			name:     "leaf Book XX states no position",
 			rel:      "B.V. Larson/B.V. Larson; Star Force; Book XX; Army of One",
 			isFolder: true,
-			want:     Metadata{Title: "B.V. Larson; Star Force; Book XX; Army of One", Author: "B.V. Larson", Series: "Star Force"},
+			want:     Metadata{Title: "Army of One", Author: "B.V. Larson", Series: "Star Force"},
 		},
 		{
 			name:     "leaf Book 00 states no position",
 			rel:      "Larry Correia/Larry Correia; Grimnoir Chronicles; Book 00; Tokyo Raider",
 			isFolder: true,
-			want: Metadata{Title: "Larry Correia; Grimnoir Chronicles; Book 00; Tokyo Raider", Author: "Larry Correia",
+			want: Metadata{Title: "Tokyo Raider", Author: "Larry Correia",
 				Series: "Grimnoir Chronicles"},
 		},
 		{
 			name:     "a leaf's series over the folder's",
 			rel:      "Mark Tufo/Zombies/Mark Tufo; Zombie Fallout; Book 02",
 			isFolder: true,
-			want: Metadata{Title: "Mark Tufo; Zombie Fallout; Book 02", Author: "Mark Tufo", Series: "Zombie Fallout",
+			want: Metadata{Title: "Zombie Fallout 2", Author: "Mark Tufo", Series: "Zombie Fallout",
 				SeriesIndex: 2},
 		},
 	}
@@ -364,7 +364,13 @@ func TestPartsTitle(t *testing.T) {
 		{"underscore tail gives way", "The Diary of a Nobody", "The Diary of a Nobody_Ch00", "The Diary of a Nobody", unread, "The Diary of a Nobody"},
 		{"another file without a title tag", "The Odyssey", "The Odyssey: Book 01", "The Odyssey", "", "The Odyssey"},
 		{"album already chosen", "Pride and Prejudice", "Chapters 21-22", "Pride and Prejudice", "Chapters 21-22", "Pride and Prejudice"},
-		{"no album", "", "The Essays of Francis Bacon 01", "Essays", unread, "The Essays of Francis Bacon 01"},
+		{"no album", "", "The Essays of Francis Bacon 01", "Essays", unread, "Essays"},
+		{"no album, generic first tag", "", "Track 1", "The Eye of the World", unread, "The Eye of the World"},
+		{"no album, named chapters", "", "Ravens", "The Eye of the World", "The Peddler", "The Eye of the World"},
+		{"no album, shared title", "", "The Quiet Harbour", "Files", "The Quiet Harbour", "The Quiet Harbour"},
+		{"unrelated album, chapter names", "The Wheel of Time", "Ravens Rising", "The Dragon Reborn", "The Peddler", "The Dragon Reborn"},
+		{"filename tags keep the album", "Real Title", "Part 01.mp3", "Odd Name", "Part 02.mp3", "Real Title"},
+		{"album corroborated by folder", "The Odyssey", "The Voyage", "Odyssey", "Homecoming", "The Odyssey"},
 		{"no title tag", "Main Street", "", "Main Street", unread, "Main Street"},
 		// A box set's album beside each book's own title: the tail names the folder.
 		{"tail names the folder", "The Expanse Box Set", "The Expanse Box Set: Leviathan Wakes", "Leviathan Wakes", unread, "The Expanse Box Set: Leviathan Wakes"},
@@ -387,10 +393,8 @@ func TestPartsTitle(t *testing.T) {
 		{"shared name of two parts", "Cosmere", "Cosmere: Mistborn - The Final Empire - Chapter 1", "Book 1", "Cosmere: Mistborn - The Final Empire - Chapter 38", "Mistborn - The Final Empire"},
 		{"shared subtitle, generic folder", "Sapiens", "Sapiens: A Brief History (Part 1)", "Book 2", "Sapiens: A Brief History (Part 2)", "A Brief History"},
 		// Tags that share nothing past the album but a marker: each file's own
-		// chapter, so the album. With the series as the album and no series tag
-		// that is the series' name ("The Eye of the World"): the files name no
-		// book, and TitleNotSeries takes the folder only once a tag says series.
-		{"only chapters past the album", "The Wheel of Time", "The Wheel of Time - Ravens", "The Eye of the World", "The Wheel of Time - The Peddler", "The Wheel of Time"},
+		// chapter. An unrelated album yields to the book folder.
+		{"only chapters past the album", "The Wheel of Time", "The Wheel of Time - Ravens", "The Eye of the World", "The Wheel of Time - The Peddler", "The Eye of the World"},
 		{"only a part marker shared", "Dune", "Dune: Part 1 - Chapter 1", "Book 1", "Dune: Part 1 - Chapter 9", "Dune"},
 		{"only a volume marker shared", "The Expanse", "The Expanse: Book 1 - Chapter 01", "Folder", "The Expanse: Book 1 - Chapter 30", "The Expanse"},
 		{"underscore chapters", "The Diary of a Nobody", "The Diary of a Nobody_Ch00", "Diary of a Nobody", "The Diary of a Nobody_Ch24", "The Diary of a Nobody"},
@@ -407,9 +411,21 @@ func TestPartsTitle(t *testing.T) {
 		if got := m.PartsTitle(tc.path, other); got != tc.want {
 			t.Errorf("%s: PartsTitle(%q, %q, %q, %q) = %q, want %q", tc.name, tc.album, tc.title, tc.path, tc.other, got, tc.want)
 		}
-		// PartNamed: only a title that turns on the other file asks for it.
-		if turns := m.PartsTitle(tc.path, nil) != m.PartsTitle(tc.path, &Metadata{TitleTag: m.TitleTag}); turns != m.PartNamed(tc.path) {
-			t.Errorf("%s: PartNamed = %v, want %v", tc.name, m.PartNamed(tc.path), turns)
+	}
+	for _, tc := range []struct {
+		album, title, path string
+		want               bool
+	}{
+		{"", "Prologue", "The Dragon Reborn", true},
+		{"The Wheel of Time", "Chapter 1", "The Dragon Reborn", true},
+		{"The Odyssey", "Chapter 1", "Odyssey", false},
+		{"The Expanse", "The Expanse: Leviathan Wakes", "Leviathan Wakes", false},
+		{"", "The Dragon Reborn", "The Dragon Reborn", false},
+	} {
+		var m Metadata
+		m.setTitle(tc.album, tc.title)
+		if got := m.PartNamed(tc.path); got != tc.want {
+			t.Errorf("PartNamed(%q, %q in %q) = %v, want %v", tc.album, tc.title, tc.path, got, tc.want)
 		}
 	}
 	if (*Metadata)(nil).PartNamed("Any") {

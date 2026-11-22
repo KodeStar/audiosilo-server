@@ -60,7 +60,7 @@ const pathCheckExpr = `CASE
 //
 // The fifth column is revOlderOwn, so an older snapshot a scan finds needs no
 // read can be stamped with today's revision (StampScannedRev). The sixth is
-// whether a folder book whose snapshot predates revision 5 has several files
+// whether a folder book with an older snapshot has several files
 // (always false for today's, so the count is never taken for it).
 const snapshotNamesExpr = `CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$."@rev"') END,
 	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.title'), '') ELSE title END,
@@ -70,12 +70,12 @@ const snapshotNamesExpr = `CASE WHEN json_valid(scanned) THEN json_extract(scann
 	CASE WHEN is_folder AND CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$."` + scannedRevKey + `"') END IS NOT '` + scannedRev + `'
 	     THEN (SELECT COUNT(*) > 1 FROM (SELECT 1 FROM book_files f WHERE f.book_id = books.id LIMIT 2)) ELSE 0 END`
 
-// revOlderOwn is whether a books row's snapshot is of revision 1 to 4 (older
+// revOlderOwn is whether a books row's snapshot is of revision 1 to 5 (older
 // than today's, scannedRev, but read with a lone folder as the author) and its
 // own (its stamp the row's indexed_at, scannedStampKey): Signature.RevStamp,
 // and StampScannedRev's compare-and-set.
 const revOlderOwn = `CASE WHEN json_valid(scanned)
-	THEN IFNULL(json_extract(scanned, '$."` + scannedRevKey + `"'), '') IN ('1', '2', '3', '4')
+	THEN IFNULL(json_extract(scanned, '$."` + scannedRevKey + `"'), '') IN ('1', '2', '3', '4', '5')
 	 AND json_extract(scanned, '$."` + scannedStampKey + `"') IS indexed_at
 	ELSE 0 END`
 
@@ -87,11 +87,20 @@ const revOlderOwn = `CASE WHEN json_valid(scanned)
 // series (PathLeafSeries), before 4 a book the tag reading of 2.4.0 and 2.5.0
 // may read otherwise (tagReadingMayDiffer), before 5 a book of several files
 // (severalFiles: its first file's title tag may have been taken over the
-// album, metadata.PartsTitle).
+// album, metadata.PartsTitle). Before revision 6 a structured leaf (including
+// the parent of a disc) may supply different names, or a multi-file book
+// may take its path title if that differs from its snapshot.
 func namesCheck(rev int, rel string, isFolder, severalFiles bool, format, title, series, narrator string) bool {
-	return (rev < revPartsTitle && severalFiles) ||
-		(rev < revLeafSeries && metadata.PathLeafSeries(rel, isFolder)) ||
-		(rev < revTitleNotSeries && metadata.MaybeSeriesTitle(rel, isFolder, title, series)) ||
+	if rev < revFolderNames {
+		if metadata.PathLeafSeries(rel, isFolder) {
+			return true
+		}
+		if severalFiles {
+			pathTitle := metadata.PathTitle(rel, isFolder)
+			return rev < revPartsTitle || (pathTitle != "" && title != pathTitle)
+		}
+	}
+	return (rev < revTitleNotSeries && metadata.MaybeSeriesTitle(rel, isFolder, title, series)) ||
 		(rev < revTagReading && tagReadingMayDiffer(rel, format, title, series, narrator))
 }
 
@@ -118,7 +127,7 @@ func tagReadingMayDiffer(rel, format, title, series, narrator string) bool {
 // (Signature.RevStamp: no NamesCheck), so later scans don't test them again.
 // Their values are unchanged, so nothing is re-resolved or announced; a row
 // re-indexed or re-read since the scan read its signature (no longer a current
-// revision 1 to 4 snapshot) is left as it is. It commits every
+// revision 1 to 5 snapshot) is left as it is. It commits every
 // pathReadingBatch books.
 func (c *Catalog) StampScannedRev(ctx context.Context, libraryID int64, paths []string) error {
 	return c.eachPathBatch(ctx, "StampScannedRev", libraryID, paths, func(tx *sql.Tx, relPath string) (bool, error) {

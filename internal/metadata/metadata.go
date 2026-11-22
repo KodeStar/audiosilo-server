@@ -775,32 +775,48 @@ func bookTitle(album, title string) string {
 	return a
 }
 
-// PartsTitle is the title of a book of several files whose tags gave m (its
-// first file's) and maybe its last file's, other (nil for unread; the scan
-// reads it only when PartNamed says the title turns on it). A title tag that
-// extends the album may name its file, a chapter rather than the book
-// (server#272), so where PartNamed holds the title is, in order: the tag, when
-// other carries the same one; the name the two share past the album
-// (partsName), unless the folder (pathTitle) names the album; the tag without
-// its bracketed part markers, when that is all they differ by; else the album.
-// With other unread the folder alone says, so the album. An album that names
-// only the book's series then gives way as TitleNotSeries says.
+// PartsTitle chooses the book title from the first and last files. Matching
+// title tags, or a book name shared past the album, can name the book. When
+// the tags name different chapters, an album corroborated by the folder still
+// names the book. Without that evidence an unrelated album can name a series.
 func (m *Metadata) PartsTitle(pathTitle string, other *Metadata) string {
+	if m.AlbumTag == "" && m.TitleTag != "" && IsGenericTitle(m.TitleTag) && pathTitle != "" {
+		return pathTitle
+	}
 	if !m.PartNamed(pathTitle) || (other != nil && strings.EqualFold(m.TitleTag, other.TitleTag)) {
 		return m.Title
+	}
+	if m.AlbumTag == "" {
+		return pathTitle
 	}
 	if other == nil {
 		return m.AlbumTag
 	}
-	if !sameName(m.AlbumTag, pathTitle) {
-		if name := partsName(m.AlbumTag, m.TitleTag, other.TitleTag); name != "" {
-			return name
+	if m.Title != m.AlbumTag {
+		if !sameName(m.AlbumTag, pathTitle) {
+			if name := partsName(m.AlbumTag, m.TitleTag, other.TitleTag); name != "" {
+				return name
+			}
+		}
+		if canonTag(m.TitleTag) == canonTag(other.TitleTag) {
+			return cleanTag(m.TitleTag)
 		}
 	}
-	if canonTag(m.TitleTag) == canonTag(other.TitleTag) {
-		return cleanTag(m.TitleTag)
+	if other.TitleTag != "" && !IsAudio(other.TitleTag) && (other.AlbumTag == "" || sameName(m.AlbumTag, other.AlbumTag)) && m.folderOverAlbum(pathTitle) {
+		return pathTitle
 	}
 	return m.AlbumTag
+}
+
+// folderOverAlbum reports whether an unconfirmed album and the folder appear
+// to name different works. A longer album such as "Frankenstein; or, The
+// Modern Prometheus" still names the book in "Frankenstein". A known series
+// is handled separately by TitleNotSeries. A filename tag like "Part 01.mp3"
+// supplies no chapter name to weigh against the album.
+func (m *Metadata) folderOverAlbum(pathTitle string) bool {
+	return m.Series == "" && !IsAudio(m.TitleTag) && !IsGenericTitle(cleanTag(pathTitle)) && !volumeMarker(pathTitle) &&
+		!strings.EqualFold(pathTitle, "Folder") &&
+		!sameName(pathTitle, m.AlbumTag) && !match.TitlesShareWord(pathTitle, m.AlbumTag)
 }
 
 // partsName is the name two title tags of one book's files (first, last) share
@@ -853,14 +869,19 @@ func cutAlbum(title, album string) (string, bool) {
 // colon, or a spaced dash or bar ("Series: Book - Chapter").
 var nameSep = regexp.MustCompile(`(?:\s*:|\s+[-–—|])\s+`)
 
-// PartNamed reports whether m's title may name its file, not the book of
-// several files it is the first of: a title tag bookTitle took over the album
-// it extends, which doesn't name the book's folder (pathTitle) as PartsTitle
-// reads it. Only then does the book's title turn on another file's tags, so
-// only then is one worth reading. Nil reads as no tags.
+// PartNamed reports whether another file's tags could change the choice of
+// title. A tag confirmed by the book folder needs no second read.
 func (m *Metadata) PartNamed(pathTitle string) bool {
-	return m != nil && m.AlbumTag != "" && m.Title == m.TitleTag && m.TitleTag != m.AlbumTag &&
-		!sameName(m.TitleTag, pathTitle) && !sameName(albumTail(m.AlbumTag, m.TitleTag), pathTitle)
+	if m == nil || m.TitleTag == "" {
+		return false
+	}
+	if m.AlbumTag == "" {
+		return pathTitle != m.TitleTag && !IsGenericTitle(m.TitleTag)
+	}
+	if m.Title == m.TitleTag && m.TitleTag != m.AlbumTag {
+		return !sameName(m.TitleTag, pathTitle) && !sameName(albumTail(m.AlbumTag, m.TitleTag), pathTitle)
+	}
+	return !sameName(m.TitleTag, m.AlbumTag) && m.folderOverAlbum(pathTitle)
 }
 
 // albumTail is what a title tag adds to the album when it extends it at a word
@@ -1018,7 +1039,7 @@ func firstNonEmpty(vals ...string) string {
 //
 //	Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes   (series Indian Hill, #4)
 //
-// Its title stays the whole leaf; TitleNotSeries reads the title part.
+// The title part names the book. Without one, the series and position identify it.
 func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 	m := &Metadata{}
 	segments := pathSegments(relPath, isFolder)
@@ -1033,6 +1054,13 @@ func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 	}
 	if l, ok := LeafSeries(name); ok {
 		m.Series, m.SeriesIndex, m.SeriesIndexEnd = l.Series, l.Position, l.PositionEnd
+		if m.Author == "" {
+			m.Author = l.Author
+		}
+		m.Title = l.Title
+		if m.Title == "" {
+			m.Title = m.SeriesTitle()
+		}
 	}
 	return m
 }
@@ -1044,6 +1072,13 @@ func pathSegments(relPath string, isFolder bool) []string {
 	if !isFolder {
 		last := segs[len(segs)-1]
 		segs[len(segs)-1] = strings.TrimSuffix(last, filepath.Ext(last))
+	}
+	// An individually indexed disc in a structured book folder belongs to
+	// that leaf. Use the same book segment for all path and backfill rules.
+	if isFolder && len(segs) > 1 && strings.Contains(segs[len(segs)-2], ";") && IsDiscFolder(segs[len(segs)-1]) {
+		if _, ok := LeafSeries(segs[len(segs)-2]); ok {
+			segs = segs[:len(segs)-1]
+		}
 	}
 	return segs
 }

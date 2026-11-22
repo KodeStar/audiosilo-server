@@ -2366,7 +2366,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   layout over the tags (`bookLayers.scannedFields`: `metadata.FromPathLayout`, where the top
   folder is the AUTHOR and disc/track folders are parts, unlike `DeriveFromPath`'s two nearest folders; a layout value goes
   over a tag's wherever it says anything and replaces the baseline's own reading even with
-  nothing (a leaf named `Author; Series; Book NN[; Title]` says its series, position and title part, `LeafSeries`); the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it (never a `LeafSeries` leaf, whose parts the layout reads even when the title is the whole leaf, as an untagged book's is); the position goes with the series: the layout's own, else
+  nothing (a leaf named `Author; Series; Book NN[; Title]` says its series, position and title part, `LeafSeries`); the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it; the position goes with the series: the layout's own, else
   the scanned one only while the series it numbers stays). It is a resolve rule, not a scan one: the snapshot is unchanged,
   and `UpdateLibrary` marks the library's books due a re-resolve in the edit's own transaction
   (`markResolve`: the `library_resolve_due` row of `server_state`, the library's id and the change's
@@ -2426,8 +2426,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`ParseSeriesRange`, the start and `SeriesIndexEnd`), "Book XX" and "Book 00" the series with no
   position. As the path baseline it fills only a series the tags leave out (a series tag still
   wins, `readNames`), and it reads as the path's source; a path-first library's
-  `FromPathLayout` reads the leaf too (its series, position and title part). The leaf's title
-  stays the whole name in `DeriveFromPath` (`TitleNotSeries` reads the title part). The LibraForge
+  `FromPathLayout` reads the leaf too (its series, position and title part). Revision 3 kept the whole leaf as the path title. The LibraForge
   benchmark's library of these (about 600 books): +39 auto-right, auto-wrong 8 to 7.
   **The tag reading** (`@rev` 4, server#175): a snapshot written before 2.4.0 and 2.5.0 read tags
   as they do now (a series tag carrying its position, `metadata.SplitSeriesTag`; a title in any
@@ -2449,13 +2448,27 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A book of one file keeps the title tag ("Portal to Nova Roma: Paris"). Corpus check: the LibriVox perf library (120 books) and the testbed libraries
   renamed four books, each to its album (Frankenstein, The Odyssey, The Diary of a Nobody, The Secret
   Agent's `secret_agent`), and nothing else.
-  **Backfill of revisions 2 to 5**: a snapshot older than today's that a newer revision may read
+  **Folder titles and leaf names** (`@rev` 6, server#272, server#325). For a book of several
+  files without an album, a title tag that differs between the first and last files gives way
+  to `PathTitle`. If the files carry different chapter titles and agree on any album they both name,
+  and the first has an album and no series tag, the scan uses a meaningful folder title when the album and folder
+  share no distinctive word. This preserves a fuller album title such as "Frankenstein; or, The
+  Modern Prometheus" in "Frankenstein". Filename tags such as "Part 01.mp3" leave the album in
+  place. Shared book names from revision 5 still apply.
+  A structured leaf now supplies its title part, or its series and position when it has no title
+  part ("Dark Road 1-5"). A tagged series can use the leaf's position only when both name the
+  same series (`match.SameSeries`). "Books 01-03" states the same range as "Book 01-03".
+  A disc folder indexed on its own takes the structured leaf above it as its book. At the
+  library root the author comes from the first part of a structured leaf.
+  **Backfill of revisions 2 to 6**: a snapshot older than today's that a newer revision may read
   otherwise (`Signature.NamesCheck`, `namesCheck` by `revNumber`: before revision 2 a title
   `metadata.MaybeSeriesTitle` flags, over the snapshot's title and series; before revision 3 a leaf
   `metadata.PathLeafSeries` reads; before revision 4 `tagReadingMayDiffer`: an MP4, a narrator, a
   series `SplitSeriesTag` splits, a non-ASCII letter in the title or path; before revision 5 a book
   of several files, which `Signatures` counts in `book_files` only for a folder book's older snapshot,
-  and whose last file is read too where its title turns on it, `partNamed`)
+  and whose last file is read too where its title turns on it, `partNamed`; before revision 6 a
+  structured leaf, a disc directly under one, or a multi-file book whose path title differs from
+  the snapshot title)
   is read once by the next scan with the PathRead read and rewritten by `SetPathReading` (which
   skips only a snapshot already at `scannedRev`), no re-index and no migration (a
   `PathFromSnapshot` one waits for that read too, so an unreadable file never records today's
@@ -2468,9 +2481,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `indexed_at` then: `Signature.TagReadFailed`, `Catalog.SetTagReadFailed`), so those bytes are not
   read for them again on every scan (server#318); the next index of the book (its files changed, a
   Re-read) clears it, and a time-out, a run that failed or a count standing in for it cut short for now
-  (`uncountedForNow`) reads again. A current `@rev` 1 to 4 snapshot it doesn't flag
+  (`uncountedForNow`) reads again. A current `@rev` 1 to 5 snapshot it doesn't flag
   (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at today's revision by that
-  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 to 4,
+  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 to 5,
   `revOlderOwn`), so later scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a
   snapshot of no revision stays until its next re-index or path reading. A stamped book is never
   tested again, so a later change that makes the reading change more books (`TitleNotSeries` more
@@ -2847,7 +2860,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the community title is written; any other word or number keeps the file's ("part" names a split
   of the book, "abridged" another edition, "Book 2" of a work at position 1 another volume), and a
   title of the community's words and nothing more only when it is in one case. The review lists it
-  like any planned change.
+  like any planned change. An admin reverting a community title chooses the value underneath it.
+  The revert stores that title as an ordinary edited override, which later fills respect. Reverting
+  that edit releases the lock.
   **Tag identifiers are hints** (`0067`: `books.tag_asin` / `tag_isbn` / `tag_language`, read from
   `asin` / `audible_asin` / the iTunes freeform ASIN / an ID3 TXXX ASIN, `isbn`, `language` / TLAN in
   both tag passes, an ASIN or ISBN only in its proper form (`match.ValidASIN`/`ValidISBN`: `N/A` beside
