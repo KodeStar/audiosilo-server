@@ -236,6 +236,12 @@ func TestNamesCheckByRevision(t *testing.T) {
 			t.Errorf("several files at %d: namesCheck = %v, want %v", rev, got, want)
 		}
 	}
+	// Revision 6: one of revision 5 only when its title isn't the folder's.
+	for title, want := range map[string]bool{"The Wheel of Time": true, "frankenstein (Unabridged)": false} {
+		if got := namesCheck(5, "Mary Shelley/Frankenstein", true, true, "mp3", title, "", ""); got != want {
+			t.Errorf("several files titled %q at 5: namesCheck = %v, want %v", title, got, want)
+		}
+	}
 	if revNumber("3") != 3 || revNumber("") != 0 || revNumber("x") != 0 || revNumber("-1") != 0 {
 		t.Error("revNumber misreads a revision")
 	}

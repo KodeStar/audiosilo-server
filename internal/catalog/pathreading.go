@@ -100,7 +100,9 @@ func namesCheck(rev int, rel string, isFolder, severalFiles bool, format, title,
 				return true
 			}
 			pathTitle := metadata.PathTitle(rel, isFolder)
-			return pathTitle != "" && title != pathTitle
+			// A title the folder already gives (case and brackets aside) is
+			// one revision 6 reads the same.
+			return pathTitle != "" && !metadata.SameName(title, pathTitle)
 		}
 	}
 	return (rev < revTitleNotSeries && metadata.MaybeSeriesTitle(rel, isFolder, title, series)) ||

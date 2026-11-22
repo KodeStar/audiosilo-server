@@ -297,3 +297,7 @@ func namesAny(name string, names []string) bool {
 func sameName(a, b string) bool {
 	return match.SameSeries(canonTag(a), canonTag(b))
 }
+
+// SameName is sameName for the backfill's test of a stored title against the
+// folder's (catalog's namesCheck).
+func SameName(a, b string) bool { return sameName(a, b) }
