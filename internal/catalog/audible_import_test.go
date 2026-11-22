@@ -672,6 +672,45 @@ func TestFoldRefusalKeptByUnchangedMatch(t *testing.T) {
 	}
 }
 
+// A backup's refusal goes with the library the backup went into, as the job
+// does; one into another library stays.
+func TestFoldRefusalGoesWithItsLibrary(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	f.poll(t, "p1", avail("B000000001", ""), avail("B000000002", ""))
+	other, err := f.c.CreateLibrary(f.ctx, Library{Name: "Other", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, lib := range []int64{f.lib.ID, other.ID} {
+		asin := fmt.Sprintf("B00000000%d", i+1)
+		res, err := f.c.db.ExecContext(f.ctx, `INSERT INTO bridge_jobs(kind, library_id, rel_path, state, params, dedupe_key, created_at, updated_at)
+			VALUES(?, ?, '', 'done', '{}', ?, 't', 't')`, bridge.KindAudibleImport, lib, "k"+asin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		if err := f.setImport("acct0001", asin, id); err != nil {
+			t.Fatal(err)
+		}
+		params, _ := json.Marshal(bridge.AudibleImportParams{Account: "acct0001", ASIN: asin, LibraryID: lib})
+		j := bridge.Job{ID: id, Kind: bridge.KindAudibleImport, State: bridge.StateDone, LibraryID: &lib, Params: params,
+			Result: json.RawMessage(fmt.Sprintf(`{"library_id":%d,"path":"Missing"}`, lib))}
+		if err := f.c.FoldAudibleImport(f.ctx, j); AudibleFoldRefusal(err) != AudibleFoldNotIndexed {
+			t.Fatalf("fold %s: %v", asin, err)
+		}
+	}
+	if err := f.c.DeleteLibrary(f.ctx, f.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if x := f.title(t, "B000000001"); x.FoldRefusalReason != "" || x.FoldRefusedAt != nil {
+		t.Fatalf("refused into the deleted library: %+v", x)
+	}
+	if x := f.title(t, "B000000002"); x.FoldRefusalReason != AudibleFoldNotIndexed || x.FoldRefusedAt == nil {
+		t.Fatalf("refused into another library: %+v", x)
+	}
+}
+
 // Back up's refusals, and Back up everything's set and estimate.
 func TestAudibleBackupRequests(t *testing.T) {
 	t.Parallel()

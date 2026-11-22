@@ -4481,7 +4481,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   records `fold_refusal_reason` and `fold_refused_at` on the title (`0093`). The admin title includes both until
   a later import clears them, or a newly accepted match does (a poll naming another book, Not this book undone:
   the `0093` trigger compares old and new, so a poll repeating the match keeps them; a book's move or join
-  keeps the title's book, so `moveAudibleTitles` puts them back). Settings > Audible explains an unusable report (`invalid_result`),
+  keeps the title's book, so `moveAudibleTitles` puts them back), or deleting the library the backup went
+  into does (`DeleteLibrary`). Settings > Audible explains an unusable report (`invalid_result`),
   a missing book (`not_indexed`), a book the backup could not claim (`not_own_book`), or one marked
   Not this book (`rejected_match`) (`AudibleFold*`, the console's `FOLD_REASONS`), even after the job is gone;
   the log names the reason (`AudibleFoldRefusal`). Older rows keep their existing backup status.

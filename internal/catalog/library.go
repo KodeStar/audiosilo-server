@@ -395,7 +395,8 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 		return err
 	}
 	// Audible titles matched to its books lose the match (path-keyed, no FK), those
-	// contested over one the contest, and
+	// contested over one the contest, those whose backup into it was refused the
+	// refusal (0093; the job cascades away with the library), and
 	// the accounts mapped to it pause (library_id SET NULL by the FK), their open
 	// polls cancelled: all with the library's own delete, so no titles call can
 	// match a book of it in between. The delete takes every grant of the library
@@ -426,6 +427,13 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE audible_titles SET contest_library_id = NULL, contest_path = '' WHERE contest_library_id = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE audible_titles SET fold_refusal_reason = '', fold_refused_at = NULL
+			  WHERE fold_refused_at IS NOT NULL
+			    AND import_job_id IN (SELECT id FROM bridge_jobs WHERE library_id = ? AND kind = ?)`,
+			id, bridge.KindAudibleImport); err != nil {
 			return err
 		}
 		paused, err := queryRows(ctx, tx, func(rows *sql.Rows, account *string) error { return rows.Scan(account) },
