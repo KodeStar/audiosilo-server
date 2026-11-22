@@ -2457,7 +2457,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Modern Prometheus" in "Frankenstein". Tags that name no chapter (`chapterNamed`: filename tags such as
   "Part 01.mp3", track labels, the album and a number, "The Gunslinger 01"), a folder that names no
   title (`untitledFolder`: a bare number "03", a volume label "Book One", "Books 1-3", or what it
-  holds, `containerFolder`: "Files", "MP3", "Unabridged"), a numbered slot (`folderSlot`: "The Dark
+  holds, `containerFolder`: "Files", "MP3", "Unabridged", or a code, `codeFolder`: "HP1", an ASIN, an ISBN), a numbered slot (`folderSlot`: "The Dark
   Tower 1", "Mistborn Book One") or the author tag ("Andy Weir", a book straight in its author's
   folder), and tags numbering one name in turn (`numberedAlike`: "Harry Potter: Philosopher's
   Stone 01" to "... 17"), leave the album in place; without an album a folder that names no title

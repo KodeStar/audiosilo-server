@@ -395,6 +395,11 @@ func TestPartsTitle(t *testing.T) {
 		{"series album, numbered book tags, container folder", "Harry Potter", "Harry Potter: Philosopher's Stone 01", "Files", "Harry Potter: Philosopher's Stone 17", "Harry Potter"},
 		{"numbered book tags keep the album", "Harry Potter", "Philosopher's Stone 01", "Sorcerer Rip", "Philosopher's Stone 17", "Harry Potter"},
 		{"no album, container folder keeps the tag", "", "Ravens", "MP3", "The Peddler", "Ravens"},
+		// A folder named by a code (an abbreviation and a number, an ASIN, an
+		// ISBN) names no title either.
+		{"abbreviated folder keeps the album", "Harry Potter and the Philosopher's Stone", "The Boy Who Lived", "HP1", "The Vanishing Glass", "Harry Potter and the Philosopher's Stone"},
+		{"ASIN folder keeps the album", "Project Hail Mary", "Chapter One: Ryland", "B08GB58KD5", "Chapter Thirty", "Project Hail Mary"},
+		{"ISBN folder keeps the album", "Dune", "Prophecy", "9780441013593", "Arrakis", "Dune"},
 		{"no title tag", "Main Street", "", "Main Street", unread, "Main Street"},
 		// A box set's album beside each book's own title: the tail names the folder.
 		{"tail names the folder", "The Expanse Box Set", "The Expanse Box Set: Leviathan Wakes", "Leviathan Wakes", unread, "The Expanse Box Set: Leviathan Wakes"},

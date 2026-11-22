@@ -847,12 +847,13 @@ func (m *Metadata) folderNamesTag(pathTitle string) bool {
 
 // untitledFolder reports whether a book's folder name (pathTitle) names no
 // title of its own: a track label or a bare number ("03"), a volume marker
-// or label ("Book 3", "Book One", "Books 1-3": volumeFolder) or what it holds
-// ("Files", "MP3", "Unabridged": containerFolder).
+// or label ("Book 3", "Book One", "Books 1-3": volumeFolder), what it holds
+// ("Files", "MP3", "Unabridged": containerFolder) or a code for the book
+// ("HP1", an ASIN or an ISBN: codeFolder).
 func untitledFolder(pathTitle string) bool {
 	folder := strings.TrimSpace(cleanTag(pathTitle))
 	return IsGenericTitle(folder) || volumeMarker(pathTitle) || volumeFolder.MatchString(folder) ||
-		containerFolder.MatchString(folder)
+		containerFolder.MatchString(folder) || codeFolder.MatchString(folder)
 }
 
 // chapterNamed reports whether a title tag of one of a book's files names a
@@ -884,6 +885,11 @@ var folderSlot = regexp.MustCompile(`\s(?:` + volumeLabel + `|#?\d{1,3})$`)
 // containerFolder matches a folder named for what it holds rather than which
 // book ("Files", "MP3", "Audiobook", "Unabridged", "New Folder").
 var containerFolder = regexp.MustCompile(`^(?i:files?|mp3s?|m4[ab]s?|audio|audio ?books?|unabridged|abridged|complete|full|media|tracks?|chapters?|parts?|discs?|cds?|(?:new )?folder|untitled|unknown)$`)
+
+// codeFolder matches a folder named by a code rather than a title: a short
+// abbreviation and a number ("HP1", "LOTR2"), an ASIN ("B00ABCDEFG") or an
+// ISBN ("9780441013593").
+var codeFolder = regexp.MustCompile(`^(?:[A-Za-z]{1,5}\d{1,3}|B0[0-9A-Z]{8}|(?:97[89])?\d{9}[\dXx])$`)
 
 // trailingTrack is a track number ending a title tag ("Philosopher's Stone 01").
 var trailingTrack = regexp.MustCompile(`[\s._-]+\d{1,3}$`)
