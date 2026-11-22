@@ -191,7 +191,8 @@ func newService(opts Options, origin netip.AddrPort) *Service {
 		// A directory answers at its fixed URL: no redirect is followed.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect },
 	}
-	s.artFetcher = media.NewArtFetcher(artTransport, fetchBudget, "AudioSilo/"+opts.Version)
+	// No client timeout: fetchImage bounds each fetch by s.budget.
+	s.artFetcher = media.NewArtFetcher(artTransport, 0, "AudioSilo/"+opts.Version)
 	s.parent = context.Background()
 	s.resetLocked()
 	return s
@@ -215,16 +216,9 @@ var errRedirect = errors.New("discovery: redirect refused")
 // guardedTransport dials only addresses allowed accepts (netguard), through no
 // proxy, with the connect/TLS/header timeouts inside the fetch budget.
 func guardedTransport(allowed func(netip.AddrPort) bool, conns int) *http.Transport {
-	return &http.Transport{
-		Proxy:                 nil,
-		DialContext:           netguard.Dialer(allowed, connectTimeout).DialContext,
-		TLSHandshakeTimeout:   tlsTimeout,
-		ResponseHeaderTimeout: headerTimeout,
-		MaxIdleConns:          conns,
-		MaxIdleConnsPerHost:   conns,
-		IdleConnTimeout:       30 * time.Second,
-		ForceAttemptHTTP2:     true,
-	}
+	t := netguard.Transport(allowed, netguard.Timeouts{Connect: connectTimeout, TLS: tlsTimeout, Header: headerTimeout}, conns)
+	t.ForceAttemptHTTP2 = true
+	return t
 }
 
 // Providers lists the providers in their fixed order: Podcast Index is

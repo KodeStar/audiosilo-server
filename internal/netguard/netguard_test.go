@@ -95,6 +95,29 @@ func TestDialerChecksTheDialledAddress(t *testing.T) {
 	}
 }
 
+// Transport dials through the guard and never a proxy, even with one set in the
+// environment.
+func TestTransportGuardsEveryDial(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://10.255.255.1:3128")
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits++ }))
+	defer srv.Close()
+	target := netip.MustParseAddrPort(srv.Listener.Addr().String())
+	tr := Transport(PublicAddrPort, Timeouts{Connect: time.Second, TLS: time.Second, Header: time.Second}, 2)
+	if tr.Proxy != nil {
+		t.Fatal("guarded transport has a proxy")
+	}
+	if _, err := (&http.Client{Transport: tr}).Get(srv.URL); !errors.Is(err, ErrBlockedAddress) || hits != 0 {
+		t.Fatalf("public rule on loopback = %v, %d hits", err, hits)
+	}
+	tr = Transport(func(ap netip.AddrPort) bool { return ap == target }, Timeouts{Connect: time.Second}, 2)
+	resp, err := (&http.Client{Transport: tr}).Get(srv.URL)
+	if err != nil || hits != 1 {
+		t.Fatalf("allowed address = %v, %d hits", err, hits)
+	}
+	_ = resp.Body.Close()
+}
+
 func TestDowngrade(t *testing.T) {
 	t.Parallel()
 	req := func(u string) *http.Request {

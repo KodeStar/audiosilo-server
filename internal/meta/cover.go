@@ -36,14 +36,8 @@ const (
 
 // coverTransport checks every resolved address at dial time, including redirects.
 func coverTransport(allowed func(netip.AddrPort) bool) *http.Transport {
-	return &http.Transport{
-		DialContext:           netguard.Dialer(allowed, 5*time.Second).DialContext,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second,
-		MaxIdleConns:          maxConcurrentCoverFetches,
-		MaxIdleConnsPerHost:   maxConcurrentCoverFetches,
-		IdleConnTimeout:       30 * time.Second,
-	}
+	return netguard.Transport(allowed, netguard.Timeouts{Connect: 5 * time.Second, TLS: 5 * time.Second, Header: 10 * time.Second},
+		maxConcurrentCoverFetches)
 }
 
 // FetchCover GETs a community cover image of at most limit bytes: ErrCoverURL for
@@ -52,8 +46,8 @@ func coverTransport(allowed func(netip.AddrPort) bool) *http.Transport {
 // non-200 answer, ctx ending while it waited for a fetch slot). What the bytes are
 // is the caller's to check.
 func (s *Service) FetchCover(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
-	u := httpURL(rawURL)
-	if u == nil || u.User != nil || len(rawURL) > maxCoverURLLen {
+	_, u := absoluteHTTP(rawURL)
+	if u == nil || len(rawURL) > maxCoverURLLen {
 		return nil, ErrCoverURL
 	}
 	select {

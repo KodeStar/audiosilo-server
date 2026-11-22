@@ -84,6 +84,27 @@ func Dialer(allowed func(netip.AddrPort) bool, timeout time.Duration) *net.Diale
 	return &net.Dialer{Timeout: timeout, Control: Control(allowed)}
 }
 
+// Timeouts bound one guarded connection: the connect, the TLS handshake and
+// the wait for the response headers.
+type Timeouts struct {
+	Connect, TLS, Header time.Duration
+}
+
+// Transport is an HTTP transport that dials only addresses allowed accepts,
+// redirects' included, through no proxy, keeping up to conns idle connections
+// (30 s) for the callers' fetch slots.
+func Transport(allowed func(netip.AddrPort) bool, t Timeouts, conns int) *http.Transport {
+	return &http.Transport{
+		Proxy:                 nil,
+		DialContext:           Dialer(allowed, t.Connect).DialContext,
+		TLSHandshakeTimeout:   t.TLS,
+		ResponseHeaderTimeout: t.Header,
+		MaxIdleConns:          conns,
+		MaxIdleConnsPerHost:   conns,
+		IdleConnTimeout:       30 * time.Second,
+	}
+}
+
 // Downgrade reports whether following a redirect to req, after the requests
 // in via, would step down from https to anything else: the guarded clients'
 // CheckRedirect refuses it, so a fetch begun over https stays on it.
