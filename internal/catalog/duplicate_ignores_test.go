@@ -153,6 +153,44 @@ func TestLegacyDuplicateMappingAndUndo(t *testing.T) {
 	check(false, 1)
 }
 
+// The old across view showed a component whole while any copy in it had no
+// flag. Its flagged pair stays on show after the upgrade, over the decision
+// 0092 recovered from the request's stamp, until an admin decides it.
+func TestLegacyMixedComponentPairStaysShown(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	l, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/l"})
+	m, _ := c.CreateLibrary(ctx, Library{Name: "M", Root: "/m"})
+	n, _ := c.CreateLibrary(ctx, Library{Name: "N", Root: "/n"})
+	a, x, z := Ref{l.ID, "A"}, Ref{m.ID, "X"}, Ref{n.ID, "Z"}
+	for _, r := range []Ref{a, x, z} {
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: r.LibraryID, RelPath: r.Path, Title: r.Path, ASIN: "one"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		`INSERT INTO issue_ignores(library_id,path,kind,created_at) VALUES(?1,'A','duplicate','t'),(?2,'X','duplicate','t')`,
+		`INSERT INTO duplicate_decisions(library_id,other_library_id,paths,created_at) VALUES(?1,?2,'["A","X"]','t')`,
+		`INSERT INTO server_state VALUES('map_duplicate_ignores_0092','true','t')`,
+	} {
+		if _, err := c.db.ExecContext(ctx, q, l.ID, m.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.MapLegacyDuplicateIgnores(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if page, err := c.DuplicatePage(ctx, DuplicateQuery{Across: true}); err != nil || page.Total != 3 {
+		t.Fatalf("open comparisons %+v (%v), want all three", page, err)
+	}
+	if err := c.IgnoreIssue(ctx, IssueDuplicate, []Ref{x, a}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if page, err := c.DuplicatePage(ctx, DuplicateQuery{Across: true, Ignored: true}); err != nil || page.Total != 1 || page.Groups[0].Key != comparisonKey([]Ref{a, x}) {
+		t.Fatalf("ignored comparisons %+v (%v), want A/X", page, err)
+	}
+}
+
 func TestCrossLibraryPairsUseDirectEvidence(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)

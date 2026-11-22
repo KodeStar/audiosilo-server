@@ -266,7 +266,10 @@ func (c *Catalog) MapLegacyDuplicateIgnores(ctx context.Context) error {
 			return err
 		}
 		// The old across view joined a mixed component transitively. Its pairs
-		// were hidden only when every book in that component had a legacy flag.
+		// were hidden only when every book in that component had a legacy flag,
+		// so a flagged pair of a mixed one is stored as shown: neither the
+		// all-members fallback nor a decision 0092 recovered from the request's
+		// stamp may hide what the old view showed.
 		components := newDisjointSet(len(rows))
 		for _, s := range sets {
 			for _, m := range s.members[1:] {
@@ -281,11 +284,8 @@ func (c *Catalog) MapLegacyDuplicateIgnores(ctx context.Context) error {
 		}
 		mapped := map[Ref]bool{}
 		for _, s := range sets {
-			first := rows[s.members[0]]
-			cross := rows[s.members[1]].libraryID != first.libraryID
-			if cross && open[components.find(s.members[0])] {
-				continue
-			}
+			cross := rows[s.members[1]].libraryID != rows[s.members[0]].libraryID
+			hidden := !cross || !open[components.find(s.members[0])]
 			refs := make([]Ref, 0, len(s.members))
 			for _, m := range s.members {
 				r := rows[m]
@@ -298,11 +298,13 @@ func (c *Catalog) MapLegacyDuplicateIgnores(ctx context.Context) error {
 				continue
 			}
 			sortComparison(refs)
-			if err := storeDecision(ctx, tx, refs, true, sql.NullInt64{}, c.ts()); err != nil {
+			if err := storeDecision(ctx, tx, refs, hidden, sql.NullInt64{}, c.ts()); err != nil {
 				return err
 			}
-			for _, r := range refs {
-				mapped[r] = true
+			if hidden {
+				for _, r := range refs {
+					mapped[r] = true
+				}
 			}
 		}
 		for r := range mapped {
