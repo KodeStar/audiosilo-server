@@ -24,6 +24,8 @@ import {
   canSync,
   chosenAccount,
   cleanDest,
+  FOLD_REASONS,
+  foldReasonKey,
   importStatus,
   lookList,
   matchedParam,
@@ -777,6 +779,14 @@ describe('audible backups', () => {
     expect(within(rows[1]).getByText(en['audible.import.queued'])).toBeInTheDocument();
     expect(within(list).getAllByText('Backed up')).toHaveLength(1);
     expect(within(rows[5]).getByText('Backed up')).toBeInTheDocument();
+  });
+
+  it('words every stored backup refusal, a newer one plainly', () => {
+    const dict = en as Record<string, string>;
+    const keys = FOLD_REASONS.map((r) => foldReasonKey({ fold_refusal_reason: r }));
+    expect(keys.filter((k) => !k || !dict[k])).toEqual([]);
+    expect(foldReasonKey({ fold_refusal_reason: 'new_code' })).toBe('audible.fold.other');
+    expect(foldReasonKey({})).toBeNull();
   });
 
   it('offers Not this book except on a backup of its own, and reads a rejected match as not here', () => {

@@ -338,6 +338,26 @@ export function reasonKey(reason: string): string | null {
 }
 
 /**
+ * The reasons the server stores on a title whose completed backup it could not
+ * match (`fold_refusal_reason`), each worded as `audible.fold.<reason>`.
+ */
+export const FOLD_REASONS = [
+  'invalid_result',
+  'not_indexed',
+  'not_own_book',
+  'rejected_match',
+] as const;
+
+/** The i18n key a title's stored backup refusal reads as, null for none; a newer code reads as `other`. */
+export function foldReasonKey(x: Pick<AudibleTitle, 'fold_refusal_reason'>): string | null {
+  const reason = x.fold_refusal_reason;
+  if (!reason) return null;
+  return (FOLD_REASONS as readonly string[]).includes(reason)
+    ? `audible.fold.${reason}`
+    : 'audible.fold.other';
+}
+
+/**
  * The destination field's placeholder: where the Bridge planned the backup at
  * its last check, else an example. Never the field's value: a saved value
  * would freeze a destination of the admin's own.
