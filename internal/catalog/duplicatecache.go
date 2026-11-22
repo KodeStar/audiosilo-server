@@ -8,12 +8,12 @@ import "context"
 // summary's count and each page of Health > Duplicates share one detection, and
 // a console that refetches every loaded page (an ignore's Undo, a refocus) does
 // not run it once a page (server#270). The groups are a function of the
-// database alone, read from the books, their files, the issue ignores and the
-// progress rows (each copy's listeners rank it), so they are kept under the
-// sum of the content and listener generations (a new or removed progress row
-// moves only the second: store.DB.ListenerGeneration). Both only go up, so the
-// sum moves whenever either does, and each is read before the detection reads
-// anything.
+// database alone, read from the books, their files, the issue ignores, the
+// duplicate decisions and the progress rows (each copy's listeners rank it), so
+// they are kept under the sum of the content and listener generations (a new or
+// removed progress row moves only the second: store.DB.ListenerGeneration).
+// Both only go up, so the sum moves whenever either does, and each is read
+// before the detection reads anything.
 
 // maxDuplicateCaches bounds the cache: one entry per library asked for, across
 // or not, and the summary's.

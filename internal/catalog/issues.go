@@ -253,8 +253,9 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 	return out, nil
 }
 
-// DuplicateGroup is a set of books that look like the same book: in one library,
-// or with across (?across=1) in any (each copy's AdminBook names its library).
+// DuplicateGroup is a set of books that look like the same book in one library,
+// or with across (?across=1) a direct pair from two (each copy's AdminBook names
+// its library).
 // Books[0] is the copy worth keeping (format, single file, bitrate, listeners),
 // except under dupIDLengthDiffers, where the order says nothing about which to keep.
 type DuplicateGroup struct {
