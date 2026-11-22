@@ -439,7 +439,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books found unchanged whose ebook is new, changed or gone (or never looked
 	// for: indexed before 0056): recorded without a re-index (SetEbooks).
 	ebookBackfill := map[string]catalog.EbookReading{}
-	// Books found unchanged whose revision 1 to 4 snapshot needs no read
+	// Books found unchanged whose revision 1 to 5 snapshot needs no read
 	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
 	// later scans don't test them again.
 	var revBackfill []string
@@ -499,6 +499,13 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// unread now (stopped, unopenable, cut short), the next scan reads both.
 			if r.names && (md.ProbeErr == nil || old.ScanError == problemProbe) && (!partNamed(b, md) || tagsRead(r.last)) {
 				pathBackfill[b.RelPath] = readNames(b, md, r.last)
+			}
+			// A last file that won't open waits the same way as a primary file
+			// ffprobe rejects, below: until the book is indexed again (its files
+			// changed, a Re-read), not with two reads on every scan. Its title
+			// stays the one stored, never one guessed without those tags.
+			if r.names && partNamed(b, md) && unopened(r.last) {
+				failedBackfill[b.RelPath] = old.IndexedAt
 			}
 			// Names or hints left waiting on ffprobe, which rejects the file's
 			// data where the index read it: the same bytes are rejected again,
@@ -816,8 +823,8 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// Rows indexed before 0067 haven't had their ASIN, ISBN and language
 				// tags read: the same read, and they wait with the names, as the
 				// hints only ffprobe reads (an M4B's mdta items) would be recorded as none.
-				// A title that may be the album naming the series (before revision 2)
-				// or a leaf that states a series (before revision 3:
+				// A book a newer revision may read otherwise (an album naming the
+				// series, a structured leaf, a book of several files:
 				// catalog.Signature.NamesCheck) is the same read.
 				readPath, readHints := old.PathCheck == catalog.PathRead || old.NamesCheck, old.HintsUnchecked
 				if old.TagReadFailed {
@@ -1115,6 +1122,12 @@ func lastPath(b *catalog.Book) string { return b.Files[len(b.Files)-1].RelPath }
 // Stop (nil), an open that failed or a read cut short.
 func tagsRead(md *metadata.Metadata) bool {
 	return md != nil && md.OpenErr == nil && !md.TagsUnread()
+}
+
+// unopened reports whether md is a file's reading whose open failed
+// (OpenErr), not one a Stop or a time limit cut short.
+func unopened(md *metadata.Metadata) bool {
+	return md != nil && md.OpenErr != nil
 }
 
 // setNames sets b's title, author, series and position (readNames), its

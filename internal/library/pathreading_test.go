@@ -354,8 +354,9 @@ func TestScanPartsTitle(t *testing.T) {
 	}
 
 	// A title that turns on the last file's tags waits for them: with that file
-	// unreadable the snapshot keeps its revision for the next scan, never the
-	// album recorded on a guess.
+	// unreadable the snapshot keeps its revision and title, never the album
+	// recorded on a guess, and later scans don't read it again until the book is
+	// indexed again.
 	rev := func() (r string) {
 		t.Helper()
 		if err := db.QueryRowContext(ctx, `SELECT json_extract(scanned, '$."@rev"') FROM books WHERE rel_path = ?`, shared).Scan(&r); err != nil {
@@ -376,9 +377,27 @@ func TestScanPartsTitle(t *testing.T) {
 	}
 	check("last file unreadable")
 	if got := rev(); got != "4" {
-		t.Fatalf("revision with the last file unreadable = %q, want 4 (left for the next scan)", got)
+		t.Fatalf("revision with the last file unreadable = %q, want 4 (left as it is)", got)
+	}
+	sigs, err = cat.Signatures(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sigs[shared].TagReadFailed {
+		t.Fatalf("an unopenable last file = %+v, want the read remembered as failed (not made on every scan)", sigs[shared])
 	}
 	if err := os.Chmod(last, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if got := rev(); got != "4" {
+		t.Fatalf("revision on the next scan = %q, want 4 (not read again before the book is indexed)", got)
+	}
+	// Its files changed (as a Re-read would), the book is indexed again.
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(last, later, later); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Scan(ctx, *lib); err != nil {

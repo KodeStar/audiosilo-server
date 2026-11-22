@@ -543,7 +543,8 @@ type Signature struct {
 	DurationStale bool
 	// TagReadFailed: a scan's backfill read of the book's primary file for its
 	// names or tag hints found ffprobe rejecting the file, where the index had
-	// not, and the book has not been indexed since (books.tag_read_failed_at,
+	// not, or found the last file of a book whose title turns on it
+	// (metadata.PartNamed) unopenable, and the book has not been indexed since (books.tag_read_failed_at,
 	// 0091), so its files are the bytes that read failed on: the next scan does
 	// not read it again for them (server#318). An index of the book (its files
 	// changed, a Re-read) clears it.
