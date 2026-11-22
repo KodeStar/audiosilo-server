@@ -87,6 +87,17 @@ func comparisonKey(refs []Ref) string {
 	return hex.EncodeToString(h[:])
 }
 
+// holdsAny reports whether refs, in storage order (comparisonKey sorted them),
+// holds every reference of one of subsets.
+func holdsAny(refs []Ref, subsets [][]Ref) bool {
+	return slices.ContainsFunc(subsets, func(sub []Ref) bool {
+		return !slices.ContainsFunc(sub, func(r Ref) bool {
+			_, found := slices.BinarySearchFunc(refs, r, compareRefs)
+			return !found
+		})
+	})
+}
+
 type duplicateDecision struct {
 	first, last int64
 	paths       string
@@ -156,8 +167,10 @@ func storeDecision(ctx context.Context, tx *sql.Tx, refs []Ref, ignored bool, by
 	}
 	b, _ := json.Marshal(paths)
 	if !ignored {
-		// Only unresolved pre-upgrade rows need an explicit "suggest again".
-		// Removing a member flag here would also reopen its other comparisons.
+		// Only pre-upgrade rows need an explicit "suggest again": an unmapped
+		// one would hide this comparison, and either kind a later group holding
+		// it (findDuplicateSets). Removing a member flag here would also reopen
+		// its other comparisons.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM duplicate_decisions WHERE library_id=?1 AND other_library_id=?2 AND paths=`+decisionPaths, first, last, string(b)); err != nil {
 			return err
 		}
@@ -166,7 +179,8 @@ func storeDecision(ctx context.Context, tx *sql.Tx, refs []Ref, ignored bool, by
 		SELECT ?1,?2,`+decisionPaths+`,?4,?5,?6
 		WHERE EXISTS (SELECT 1 FROM libraries WHERE id=?1) AND EXISTS (SELECT 1 FROM libraries WHERE id=?2)
         AND (?4 OR EXISTS(SELECT 1 FROM json_each(?3) p JOIN issue_ignores ii
-			ON ii.path=p.value AND ii.library_id=CASE WHEN p.key=0 THEN ?1 ELSE ?2 END AND ii.kind='duplicate'))
+			ON ii.path=p.value AND ii.library_id=CASE WHEN p.key=0 THEN ?1 ELSE ?2 END
+			AND ii.kind IN ('duplicate','duplicate_mapped')))
 		ON CONFLICT(library_id,other_library_id,paths) DO UPDATE SET ignored=excluded.ignored,
 			created_by=excluded.created_by,created_at=excluded.created_at WHERE ignored<>excluded.ignored`,
 		first, last, string(b), ignored, by, at)

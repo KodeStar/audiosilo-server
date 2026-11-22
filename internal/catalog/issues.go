@@ -499,6 +499,14 @@ func findDuplicateSets(ctx context.Context, db rowQuerier, libraryID int64, acro
 	if err != nil {
 		return nil, nil, err
 	}
+	// The comparisons an admin suggested again. The old flags cleared on that,
+	// so their legacy fallback no longer hides a later group holding one.
+	var restored [][]Ref
+	for _, d := range decisions {
+		if !d.ignored {
+			restored = append(restored, d.refs)
+		}
+	}
 	for i := range sets {
 		s := &sets[i]
 		refs := make([]Ref, 0, len(s.members))
@@ -513,7 +521,7 @@ func findDuplicateSets(ctx context.Context, db rowQuerier, libraryID int64, acro
 		if d, found := decisions[s.key]; found {
 			s.ignored = d.ignored
 		} else {
-			s.ignored = allOld && unresolved
+			s.ignored = allOld && unresolved && !holdsAny(refs, restored)
 		}
 		sort.SliceStable(s.members, func(a, b int) bool {
 			return betterCopy(rows[s.members[a]], rows[s.members[b]])

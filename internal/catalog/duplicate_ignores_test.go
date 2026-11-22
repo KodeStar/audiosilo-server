@@ -153,6 +153,50 @@ func TestLegacyDuplicateMappingAndUndo(t *testing.T) {
 	check(false, 1)
 }
 
+// Suggest again on a mapped group stands when a copy with an unmapped flag
+// joins it later: the old Suggest again cleared both copies' flags, so the
+// all-members fallback must not hide the larger group. Comparisons that don't
+// hold the restored one keep the fallback.
+func TestSuggestAgainOutlastsALaterLegacyCopy(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	l, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/l"})
+	m, _ := c.CreateLibrary(ctx, Library{Name: "M", Root: "/m"})
+	write := func(q string, args ...any) {
+		t.Helper()
+		if _, err := c.db.ExecContext(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put := func(r Ref) {
+		t.Helper()
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: r.LibraryID, RelPath: r.Path, Title: r.Path, ASIN: "one"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, b, late, y := Ref{l.ID, "A"}, Ref{l.ID, "B"}, Ref{l.ID, "Late"}, Ref{m.ID, "Y"}
+	put(a)
+	put(b)
+	for _, r := range []Ref{a, b, late, y} {
+		write(`INSERT INTO issue_ignores(library_id,path,kind,created_at) VALUES(?,?,'duplicate',?)`, r.LibraryID, r.Path, r.Path)
+	}
+	write(`INSERT INTO server_state VALUES('map_duplicate_ignores_0092','true','t')`)
+	if err := c.MapLegacyDuplicateIgnores(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.UnignoreIssue(ctx, IssueDuplicate, []Ref{b, a}); err != nil {
+		t.Fatal(err)
+	}
+	put(late)
+	put(y)
+	if page, err := c.DuplicatePage(ctx, DuplicateQuery{Across: true}); err != nil || page.Total != 1 || page.Groups[0].Key != comparisonKey([]Ref{a, b, late}) {
+		t.Fatalf("open comparisons %+v (%v), want A/B/Late", page, err)
+	}
+	if page, err := c.DuplicatePage(ctx, DuplicateQuery{Across: true, Ignored: true}); err != nil || page.Total != 3 {
+		t.Fatalf("ignored comparisons %+v (%v), want the three pairs with Y", page, err)
+	}
+}
+
 // The old across view showed a component whole while any copy in it had no
 // flag. Its flagged pair stays on show after the upgrade, over the decision
 // 0092 recovered from the request's stamp, until an admin decides it.
