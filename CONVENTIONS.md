@@ -2012,7 +2012,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   above both rows. A favourite on a navigation folder (author, series) has no book to move:
   `detectMoves` re-keys it (`catalog.MoveFolderFavourites`) to the folder its moved books
   went to (`renamedFolders`), only when every move out of it agrees and it is gone from disk
-  by exact name (so a case-only rename, of it or a folder above it, counts). The on-demand move
+  by exact name (so a case-only rename, of it or a folder above it, counts). A split book's
+  Health ignore (`split_disc_set`, keyed on the disc set's folder) follows the folder the same way. The on-demand move
   (`IndexPath`'s `movedFrom`, `IndexMoved`) does the same from one listener's request: a move is a fact
   about the disk, so every listener's folder favourite follows it (owner decision on server#254,
   `TestIndexPathMovesEveryListenersFolderFavourite`).
@@ -3195,7 +3196,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   spellings: [{name, books}], books}]}`, from the same predicate, `suggested` being `seriesName`;
   open = a book not ignored, ignored view = a book ignored; the console's fix is the author merge's bulk
   `series` edit), `split_discs` (one book split across disc folders, listed by
-  its first disc: `books.split_parent` set, no override on that folder; the console's fix sets
+  its lowest disc number, with ties ordered by path. The ignore belongs to `books.split_parent`. That folder must have no override; the console's fix sets
   `book` on it, which joins them; its discs never also group as duplicates). `split_parent` is
   worked out during discovery (`library.markSplitDiscs`: a folder book whose folder is a disc
   set, the same `discSets` predicate the join uses, so the fix always joins; `IndexPath` the
@@ -3204,22 +3205,25 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   reindex. `duplicate` is groups within one
   library (`DuplicateGroups`: same fingerprint AND size, same ASIN/ISBN (whatever the lengths),
   or `metaKey` with a length within 1 min / 2% (`sameLength`), an unknown length matching only
-  another unknown one; copies across libraries are usually deliberate, so they group only with
-  `?across=1` on the duplicates list, never in the Health count: the signals are then not kept
-  per library, and with `?library_id=` only the groups holding one of its books are kept). Each join marks its kind on one
+  another unknown one). The duplicates list adds directly matching cross-library pairs with
+  `?across=1`. Same-library groups and the Health count keep their usual membership.
+  `?library_id=` selects comparisons involving that library. Each join marks its kind on one
   copy and a group's `reason` is the strongest its joins support (`dupSet.reason`):
   `id_length_differs` (a group a shared ASIN/ISBN joined whose shortest and longest known
   lengths `sameLength` rejects, the whole group's so an unknown-length book can't bridge two
   recordings; an unknown length is no evidence either way); outranks even identical audio, as the group holds a different
   recording, and the console then calls no copy the one to keep) > `same_files` (only when every
   copy holds the same audio: a group identical audio joins in part takes the next reason, ADMIN-04) > `same_id` >
-  `same_book`. A group is hidden while every member is ignored, so a new copy brings it back. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
+  `same_book`. Migration 0092 stores “different books” for an exact set of library/path references in
+  `duplicate_decisions`. A changed group needs its own decision, and a cross-library dismissal
+  applies to its pair. Unresolved pre-upgrade rows keep their previous all-members behaviour. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
   libraries with books/listeners + `checked_at`), `GET /admin/issues/duplicates` (the open
   groups, or with `?ignored=true` only the ignored ones; `catalog.DuplicatePage`: `?limit=` groups
-  (<= 500, the default) after `?cursor=`, keyset on the kept copy's library + path, a paged one
+  (<= 500, the default) after `?cursor=`, keyset on the kept copy's library, path and comparison key, a paged one
   ending early past 300 copies; `{groups, total, next_cursor?}`; the groups are found once per
   content and listener generation and kept for the summary and every page, `Catalog.dups`,
-  server#270), `POST`/`DELETE /admin/issues/ignore` (<= 1000), `POST
+  server#270), `POST`/`DELETE /admin/issues/ignore` (up to 1000 references. A larger group
+  sends one member and the group’s `key` as `group_key`), `POST
   /admin/libraries/{id}/book/rescan?path=` (`IndexPath` now, on a context detached from the
   request timeout so a slow re-read is still saved; 404 `not_indexable`), `GET
   /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`

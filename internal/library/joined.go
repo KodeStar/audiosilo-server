@@ -1,7 +1,6 @@
 package library
 
 import (
-	"cmp"
 	"context"
 	"iter"
 	"maps"
@@ -82,13 +81,13 @@ func joinRoot(overrides map[string]string, rel string, isDiscSet func(string) bo
 
 // joinedBook builds the book of the joined folder at rootRel from discs, its disc
 // folders (library-relative) with their audio files: the folders in natural order
-// (discOrder: CD2 before CD10), each folder's files in the order a book of that
+// (metadata.DiscOrder: CD2 before CD10), each folder's files in the order a book of that
 // folder alone has them (sortFileOrder, as audioEntries and the discovery walk read
 // them), so a position on a disc book lands on the same file once offset onto the
 // joined book (carryJoinedState). nil when there is no audio.
 func joinedBook(lib catalog.Library, rootRel string, discs map[string][]audioFile) *catalog.Book {
 	var audio []audioFile
-	for _, d := range slices.SortedFunc(maps.Keys(discs), discOrder) {
+	for _, d := range slices.SortedFunc(maps.Keys(discs), metadata.DiscOrder) {
 		audio = append(audio, discs[d]...)
 	}
 	return folderBook(lib, absOf(lib, rootRel), audio)
@@ -200,63 +199,6 @@ func joinedPartTitle(bookPath, fileRel string) string {
 	return title
 }
 
-// discOrder orders the disc folders of a joined book (library-relative, all in
-// one folder): by name as naturalCompare reads it ("CD2" before "CD10", "CD 1" with
-// "CD1"), then by path, so two folders whose names read alike ("CD01" and "CD1")
-// keep a stable order and never interleave their files.
-func discOrder(a, b string) int {
-	if c := naturalCompare(path.Base(a), path.Base(b)); c != 0 {
-		return c
-	}
-	return strings.Compare(a, b)
-}
-
-// naturalCompare compares two names the way people number things: case folded,
-// runs of digits by their value ("2" before "10", "01" equal to "1"), and spaces,
-// hyphens and underscores left out ("CD 2" sorts with "CD2").
-func naturalCompare(a, b string) int {
-	ra, rb := naturalRunes(a), naturalRunes(b)
-	i, j := 0, 0
-	for i < len(ra) && j < len(rb) {
-		if isASCIIDigit(ra[i]) && isASCIIDigit(rb[j]) {
-			si, sj := i, j
-			for i < len(ra) && isASCIIDigit(ra[i]) {
-				i++
-			}
-			for j < len(rb) && isASCIIDigit(rb[j]) {
-				j++
-			}
-			na := strings.TrimLeft(string(ra[si:i]), "0")
-			nb := strings.TrimLeft(string(rb[sj:j]), "0")
-			if len(na) != len(nb) {
-				return cmp.Compare(len(na), len(nb))
-			}
-			if c := strings.Compare(na, nb); c != 0 {
-				return c
-			}
-			continue
-		}
-		if ra[i] != rb[j] {
-			return cmp.Compare(ra[i], rb[j])
-		}
-		i++
-		j++
-	}
-	return cmp.Compare(len(ra)-i, len(rb)-j)
-}
-
-// naturalRunes is a name as naturalCompare reads it.
-func naturalRunes(s string) []rune {
-	out := make([]rune, 0, len(s))
-	for _, r := range strings.ToLower(s) {
-		if r == ' ' || r == '-' || r == '_' || r == '\t' {
-			continue
-		}
-		out = append(out, r)
-	}
-	return out
-}
-
 // sortFileOrder sorts one folder's audio files into the order its book plays
 // them: natural name order (naturalLess, #160: "2- Part" before "10- Part"),
 // each name case folded once rather than at every comparison.
@@ -286,7 +228,7 @@ func sortFileOrder(files []audioFile) {
 // importer into the server; TestNaturalLessIsMetas holds it to the original.
 // Digit runs compare by value (a shorter significant run first: "2" before "10",
 // "02" level with "2"), everything else byte by byte with case folded, and names
-// equal that way by their bytes. Separators count, unlike naturalCompare's: "01 -
+// equal that way by their bytes. Separators count, unlike metadata.DiscOrder's: "01 -
 // Prologue" plays before "01a - Interlude" and "1 - One" before "1.5 - Interlude".
 func naturalLess(a, b string) bool {
 	return naturalLessFolded(strings.ToLower(a), strings.ToLower(b), a, b)

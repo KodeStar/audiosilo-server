@@ -100,15 +100,14 @@ function DuplicatePages({
   const pages = groups.data?.pages;
   // The server lists the open, or only the ignored, groups. A group can shift
   // across a page boundary between two page loads (a better copy came, so another
-  // copy leads it and sorts it elsewhere): shown once, where any of its copies first was.
+  // copy leads it and sorts it elsewhere). Distinct pairs may share a copy.
   const shown = useMemo(() => {
     const seen = new Set<string>();
     return (pages ?? [])
       .flatMap((p) => p.groups)
       .filter((g) => {
-        const keys = g.books.map(refKey);
-        if (keys.some((k) => seen.has(k))) return false;
-        for (const k of keys) seen.add(k);
+        if (seen.has(g.key)) return false;
+        seen.add(g.key);
         return true;
       });
   }, [pages]);
@@ -120,14 +119,7 @@ function DuplicatePages({
   return (
     <>
       {shown.map((g, i) => (
-        <GroupCard
-          key={refKey(g.books[0])}
-          group={g}
-          index={i}
-          total={total}
-          actions={actions}
-          roots={roots}
-        />
+        <GroupCard key={g.key} group={g} index={i} total={total} actions={actions} roots={roots} />
       ))}
       {groups.hasNextPage ? (
         <LoadMore
@@ -236,12 +228,16 @@ function GroupCard({
           </Button>
         ) : null}
         {g.ignored ? (
-          <Button variant="outline" size="sm" onClick={() => void actions.unignore(g.books)}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void actions.unignore(g.books, { groupKey: g.key })}
+          >
             <Eye aria-hidden="true" />
             {t('health.dup.suggestAgain')}
           </Button>
         ) : (
-          <Button variant="ghost" size="sm" onClick={() => void actions.ignore(g.books)}>
+          <Button variant="ghost" size="sm" onClick={() => void actions.ignore(g.books, g.key)}>
             {t('health.dup.different')}
           </Button>
         )}

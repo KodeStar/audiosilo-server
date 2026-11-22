@@ -365,16 +365,73 @@ func TestSplitDiscsIssue(t *testing.T) {
 	if counts, _ = c.IssueCounts(ctx, []string{IssueSplitDiscs}); counts[0].Count != 0 || counts[0].Ignored != 1 {
 		t.Fatalf("after ignoring: %+v", counts[0])
 	}
+	// Another folder still needs its own decision. In the
+	// original folder Disc 2 now leads Disc 10, even after the old disc goes.
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM books WHERE library_id=? AND split_parent=?`, lib.ID, "Cowell/Dragonese"); err != nil {
+		t.Fatal(err)
+	}
+	add("Cowell/Dragonese/Disc 10", "Cowell/Dragonese")
+	add("Cowell/Dragonese/Disc 2", "Cowell/Dragonese")
+	add("Other/Disc 1", "Other")
+	page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Issue: IssueSplitDiscs, IssueIgnored: true}})
+	if err != nil || len(page.Books) != 1 || page.Books[0].Path != "Cowell/Dragonese/Disc 2" {
+		t.Fatalf("ignored disc set %+v (%v)", page, err)
+	}
+	if got := listed(); len(got) != 1 || got[0] != "Other/Disc 1" {
+		t.Fatalf("open disc sets: %v", got)
+	}
+	if err := c.SetFolderOverride(ctx, lib.ID, "Other", OverrideCollection); err != nil {
+		t.Fatal(err)
+	}
+	first[0].Path = "Cowell/Dragonese/Disc 2"
 	if err := c.UnignoreIssue(ctx, IssueSplitDiscs, first); err != nil {
 		t.Fatal(err)
 	}
 
+	if got := listed(); len(got) != 1 || got[0] != first[0].Path {
+		t.Fatalf("suggest again: %v", got)
+	}
 	// Fixed: the folder set to one book settles it at once.
 	if err := c.SetFolderOverride(ctx, lib.ID, "Cowell/Dragonese", OverrideBook); err != nil {
 		t.Fatal(err)
 	}
 	if got := listed(); len(got) != 0 {
 		t.Fatalf("still listed after the fix: %v", got)
+	}
+}
+
+// A split book's ignore belongs to its folder, so a renamed folder keeps it: the
+// scan moves each disc (MoveDurableState), then the folder (MoveFolderFavourites).
+func TestSplitDiscIgnoreFollowsRenamedFolder(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/l"})
+	uid := seedUser(t, c, ctx)
+	put := func(p, parent string) {
+		t.Helper()
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, Title: "Box", IsFolder: true, SplitParent: parent}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("Box/CD1", "Box")
+	put("Box/CD2", "Box")
+	if err := c.IgnoreIssue(ctx, IssueSplitDiscs, []Ref{{lib.ID, "Box/CD1"}}, uid); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"CD1", "CD2"} {
+		put("Box 2/"+d, "Box 2")
+		if err := c.MoveDurableState(ctx, lib.ID, "Box/"+d, "Box 2/"+d); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.db.ExecContext(ctx, `DELETE FROM books WHERE library_id=? AND rel_path=?`, lib.ID, "Box/"+d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.MoveFolderFavourites(ctx, lib.ID, "Box", "Box 2"); err != nil {
+		t.Fatal(err)
+	}
+	if counts, err := c.IssueCounts(ctx, []string{IssueSplitDiscs}); err != nil || counts[0].Count != 0 || counts[0].Ignored != 1 {
+		t.Fatalf("renamed split book %+v (%v), want still ignored", counts, err)
 	}
 }
 

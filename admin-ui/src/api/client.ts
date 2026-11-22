@@ -985,10 +985,10 @@ export const api = {
       `/admin/issues/series-spellings${bookQuery(opts)}`,
     ),
   /** Stops showing these books under a category (at most BULK_LIMIT). */
-  ignoreIssue: (kind: IssueKind, books: BookRef[]) =>
-    request<void>('POST', '/admin/issues/ignore', { kind, books }),
-  unignoreIssue: (kind: IssueKind, books: BookRef[]) =>
-    request<void>('DELETE', '/admin/issues/ignore', { kind, books }),
+  ignoreIssue: (kind: IssueKind, books: BookRef[], groupKey?: string) =>
+    request<void>('POST', '/admin/issues/ignore', { kind, books, group_key: groupKey }),
+  unignoreIssue: (kind: IssueKind, books: BookRef[], groupKey?: string) =>
+    request<void>('DELETE', '/admin/issues/ignore', { kind, books, group_key: groupKey }),
   jobs: () => request<JobsState>('GET', '/admin/jobs'),
   /** Drops a queued scan or stops the running one (it stops before removing anything). */
   cancelJob: (id: number) => request<void>('DELETE', `/admin/jobs/${id}`),

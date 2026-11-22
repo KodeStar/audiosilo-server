@@ -40,17 +40,28 @@ export function useIssueActions(
     else inFlight.current.delete(key);
     setBusy(new Set(inFlight.current));
   };
-  // Large selections go in batches of the server's limit.
-  const send = async (fn: typeof api.ignoreIssue, refs: BookRef[]) => {
-    for (const part of chunk(refs, BULK_LIMIT)) await fn(kind, part);
+  // Large selections go in batches of the server's limit. A duplicate group
+  // larger than that goes as its key and one member, so it is one decision.
+  const send = async (fn: typeof api.ignoreIssue, refs: BookRef[], groupKey?: string) => {
+    if (groupKey && refs.length > BULK_LIMIT) {
+      await fn(kind, [refs[0]], groupKey);
+    } else {
+      for (const part of chunk(refs, BULK_LIMIT)) await fn(kind, part);
+    }
   };
 
-  const unignore = async (refs: BookRef[], quiet = false) => {
+  const unignore = async (
+    refs: BookRef[],
+    { quiet = false, groupKey }: { quiet?: boolean; groupKey?: string } = {},
+  ) => {
     try {
-      await send(api.unignoreIssue, refs.map(refOf));
+      await send(api.unignoreIssue, refs.map(refOf), groupKey);
       if (!quiet) {
         toast.add({
-          title: t('health.toast.unignored', counted(refs.length, lang)),
+          title:
+            kind === 'duplicate'
+              ? t('health.dup.restored')
+              : t('health.toast.unignored', counted(refs.length, lang)),
           type: 'success',
         });
       }
@@ -62,18 +73,29 @@ export function useIssueActions(
   };
 
   /** Ignores the books under this category, with an Undo in the toast. */
-  const ignore = async (books: Pick<AdminBook, 'library_id' | 'path' | 'title'>[]) => {
+  const ignore = async (
+    books: Pick<AdminBook, 'library_id' | 'path' | 'title'>[],
+    groupKey?: string,
+  ) => {
     const refs = books.map(refOf);
     try {
-      await send(api.ignoreIssue, refs);
+      await send(api.ignoreIssue, refs, groupKey);
       toast.add({
         title:
-          books.length === 1
-            ? t('health.toast.ignoredOne', { title: books[0].title || books[0].path })
-            : t('health.toast.ignored', counted(books.length, lang)),
-        description: t('health.toast.ignoredBody', { kind: t(`health.kind.${kind}`) }),
+          kind === 'duplicate'
+            ? t('health.dup.ignored')
+            : books.length === 1
+              ? t('health.toast.ignoredOne', { title: books[0].title || books[0].path })
+              : t('health.toast.ignored', counted(books.length, lang)),
+        description:
+          kind === 'duplicate'
+            ? undefined
+            : t('health.toast.ignoredBody', { kind: t(`health.kind.${kind}`) }),
         type: 'success',
-        actionProps: { children: t('health.undo'), onClick: () => void unignore(refs, true) },
+        actionProps: {
+          children: t('health.undo'),
+          onClick: () => void unignore(refs, { quiet: true, groupKey }),
+        },
       });
     } catch (err) {
       toastError(t('health.toast.ignoreFailed'), err);

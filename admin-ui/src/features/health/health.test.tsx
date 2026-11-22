@@ -962,6 +962,7 @@ describe('library health', () => {
 
   it('compares duplicates side by side and stops suggesting ones that differ', async () => {
     const group: DuplicateGroup = {
+      key: 'dune',
       reason: 'same_book',
       ignored: false,
       books: [
@@ -998,6 +999,7 @@ describe('library health', () => {
 
   it("groups copies across libraries only when asked, naming each copy's library (#165)", async () => {
     const across: DuplicateGroup = {
+      key: 'fiction-kids',
       reason: 'same_files',
       ignored: false,
       books: [
@@ -1046,6 +1048,87 @@ describe('library health', () => {
     expect(within(card).getByText(across.books[0].library_name)).toBeInTheDocument();
   });
 
+  it('ignores and restores one of two comparisons that share the same copy', async () => {
+    const book = (library: number, path: string) => ({
+      ...adminBook({ library_id: library, path, title: path }),
+      listeners: 0,
+    });
+    const a = book(1, 'Best');
+    const b = book(2, 'Kids copy');
+    const c = book(1, 'Other copy');
+    const pair = { key: 'across', reason: 'same_id', ignored: false, books: [a, b] };
+    const local = { key: 'local', reason: 'same_id', ignored: false, books: [a, c] };
+    let ignored = false;
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues/duplicates': () => ({
+          body: { groups: ignored ? [local] : [pair, local], total: ignored ? 1 : 2 },
+        }),
+        'POST /admin/issues/ignore': () => {
+          ignored = true;
+          return { status: 204 };
+        },
+        'DELETE /admin/issues/ignore': () => {
+          ignored = false;
+          return { status: 204 };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=duplicate&across=1');
+    const cards = await screen.findAllByRole('heading', { name: 'Best' });
+    expect(cards).toHaveLength(2);
+    await user.click(
+      within(cards[0].closest('section')!).getByRole('button', { name: "They're different books" }),
+    );
+    await waitFor(() => expect(screen.getAllByRole('heading', { name: 'Best' })).toHaveLength(1));
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(screen.getAllByRole('heading', { name: 'Best' })).toHaveLength(2));
+    const expected = {
+      kind: 'duplicate',
+      books: [
+        { library_id: 1, path: 'Best' },
+        { library_id: 2, path: 'Kids copy' },
+      ],
+    };
+    expect(calls.filter((c) => c.path === '/admin/issues/ignore').map((c) => c.body)).toEqual([
+      expected,
+      expected,
+    ]);
+  });
+
+  it('sends one decision and Undo for a group larger than the bulk limit', async () => {
+    const books = Array.from({ length: 1001 }, (_, i) => ({
+      ...adminBook({ path: `Copy ${i}`, title: 'Dune' }),
+      listeners: 0,
+    }));
+    const key = 'a'.repeat(64);
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues/duplicates': {
+          body: { groups: [{ key, reason: 'same_files', ignored: false, books }], total: 1 },
+        },
+        'POST /admin/issues/ignore': { status: 204 },
+        'DELETE /admin/issues/ignore': { status: 204 },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=duplicate');
+    await user.click(await screen.findByRole('button', { name: "They're different books" }));
+    await user.click(await screen.findByRole('button', { name: 'Undo' }));
+    const expected = {
+      kind: 'duplicate',
+      books: [{ library_id: 1, path: 'Copy 0' }],
+      group_key: key,
+    };
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === '/admin/issues/ignore').map((c) => c.body)).toEqual([
+        expected,
+        expected,
+      ]),
+    );
+  });
+
   it('keeps "Include other libraries" in the URL, so a reload keeps it (ADMIN-11)', async () => {
     const calls = mockFetch(routes({ 'GET /admin/issues/duplicates': { body: { groups: [] } } }));
     renderApp('/health?issue=duplicate&across=1');
@@ -1064,6 +1147,7 @@ describe('library health', () => {
 
   it('reaches the groups ignored across libraries, which the count (within each) leaves out', async () => {
     const across: DuplicateGroup = {
+      key: 'fiction-kids',
       reason: 'same_files',
       ignored: true,
       books: [
@@ -1109,14 +1193,25 @@ describe('library health', () => {
     const burning = [21420, 25980];
     const groups: DuplicateGroup[] = [
       {
+        key: 'burning',
         reason: 'id_length_differs',
         ignored: false,
         books: pair('The Burning', 'The Burning [Dramatized Adaptation]', 'The Burning', burning),
       },
-      { reason: 'same_id', ignored: false, books: pair('Dune', 'Dune', 'Dune (mp3)') },
-      { reason: 'same_files', ignored: false, books: pair('Emma', 'Emma', 'Emma (copy)') },
+      { key: 'dune', reason: 'same_id', ignored: false, books: pair('Dune', 'Dune', 'Dune (mp3)') },
+      {
+        key: 'emma',
+        reason: 'same_files',
+        ignored: false,
+        books: pair('Emma', 'Emma', 'Emma (copy)'),
+      },
       // Said to be different books: what to check is moot.
-      { reason: 'id_length_differs', ignored: true, books: pair('Mythos', 'A', 'B', burning) },
+      {
+        key: 'mythos',
+        reason: 'id_length_differs',
+        ignored: true,
+        books: pair('Mythos', 'A', 'B', burning),
+      },
     ];
     mockFetch(routes({ 'GET /admin/issues/duplicates': { body: { groups } } }));
     renderApp('/health?issue=duplicate');
@@ -1155,6 +1250,7 @@ describe('library health', () => {
 
   it('loads duplicate groups a page at a time, numbering them out of the total', async () => {
     const pair = (n: number): DuplicateGroup => ({
+      key: String(n),
       reason: 'same_files',
       ignored: false,
       books: [
@@ -1193,6 +1289,7 @@ describe('library health', () => {
 
   it('keeps the loaded duplicate groups when a later page fails', async () => {
     const pair = (n: number): DuplicateGroup => ({
+      key: String(n),
       reason: 'same_files',
       ignored: false,
       books: [
@@ -1225,7 +1322,10 @@ describe('library health', () => {
     const calls = mockFetch(
       routes({
         'GET /admin/issues/duplicates': {
-          body: { groups: [{ reason: 'same_files', ignored: false, books }], total: 1 },
+          body: {
+            groups: [{ key: 'emma', reason: 'same_files', ignored: false, books }],
+            total: 1,
+          },
         },
         'POST /admin/issues/ignore': { status: 204 },
       }),
@@ -1267,6 +1367,7 @@ describe('library health', () => {
       vi.unstubAllGlobals();
     });
     const group: DuplicateGroup = {
+      key: 'dune',
       reason: 'same_files',
       ignored: false,
       books: [

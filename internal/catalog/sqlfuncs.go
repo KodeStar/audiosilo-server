@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
@@ -18,6 +19,14 @@ import (
 // in a migration, view, index or generated column, or a database could no longer
 // be opened by a plain sqlite3 shell (or an older AudioSilo build).
 func init() {
+	// disc_before(a, b): whether disc folder a comes before b in the order the
+	// scanner joins a split book's discs (metadata.DiscOrder: CD2 before CD10).
+	store.RegisterFunction("disc_before", 2, func(args []driver.Value) (driver.Value, error) {
+		if metadata.DiscOrder(sqlText(args[0]), sqlText(args[1])) < 0 {
+			return int64(1), nil
+		}
+		return int64(0), nil
+	})
 	// name_sort(credit): the surname-first sort key of an Author/Narrator credit,
 	// so a query orders by exactly what a keyset cursor holds (keySurname).
 	store.RegisterFunction("name_sort", 1,

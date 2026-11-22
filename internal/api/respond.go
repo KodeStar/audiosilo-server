@@ -258,6 +258,8 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeErrorCode(w, http.StatusUnsupportedMediaType, codeUnsupportedImage, "the cover must be a JPEG, PNG or WebP image")
 	case errors.Is(err, catalog.ErrCoverTooLarge):
 		writeErrorCode(w, http.StatusRequestEntityTooLarge, codeTooLarge, "the image is larger than 5 MB")
+	case errors.Is(err, catalog.ErrDuplicateSelection):
+		writeError(w, http.StatusBadRequest, catalog.ErrDuplicateSelection.Error())
 	case errors.Is(err, catalog.ErrUnknownIssue):
 		writeError(w, http.StatusBadRequest, "unknown issue")
 	case errors.Is(err, library.ErrInvalidSchedule):

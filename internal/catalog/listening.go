@@ -958,6 +958,9 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 		newPath, libraryID, oldPath); err != nil {
 		return err
 	}
+	if err := moveDuplicateDecisions(ctx, tx, libraryID, oldPath, newPath); err != nil {
+		return err
+	}
 	// So do its Bridge jobs (migration 0047).
 	if err := bridge.MoveJobs(ctx, tx, libraryID, oldPath, newPath, now); err != nil {
 		return err

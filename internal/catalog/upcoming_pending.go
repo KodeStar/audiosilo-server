@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"cmp"
 	"context"
 	"slices"
 )
@@ -21,8 +20,6 @@ func (c *Catalog) UpcomingPending(ctx context.Context) ([]Ref, error) {
 // SaveUpcomingPending replaces the upcoming job's pending books with refs,
 // sorting refs in place (a stable order).
 func (c *Catalog) SaveUpcomingPending(ctx context.Context, refs []Ref) error {
-	slices.SortFunc(refs, func(a, b Ref) int {
-		return cmp.Or(cmp.Compare(a.LibraryID, b.LibraryID), cmp.Compare(a.Path, b.Path))
-	})
+	slices.SortFunc(refs, compareRefs)
 	return putServerState(ctx, c.db, upcomingPendingKey, refs, c.stamp())
 }

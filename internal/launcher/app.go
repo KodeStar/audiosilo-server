@@ -202,6 +202,9 @@ func Run(ctx context.Context, opts Options) (err error) {
 
 	authSvc := auth.New(db, time.Now)
 	cat := catalog.New(db, time.Now)
+	if err := cat.MapLegacyDuplicateIgnores(ctx); err != nil {
+		return fmt.Errorf("mapping duplicate ignores: %w", err)
+	}
 	if restored != nil {
 		recordRestore(ctx, cat, restored, log)
 	}

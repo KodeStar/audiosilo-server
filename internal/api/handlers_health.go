@@ -114,8 +114,8 @@ func (a *API) offlineLibraries(r *http.Request) ([]offlineLibrary, error) {
 // handleDuplicates serves GET /admin/issues/duplicates: groups of books that look
 // like the same book within a library (?library_id= narrows it; ?ignored=true
 // lists instead the groups an admin said are different books). ?across=1 also
-// groups copies in different libraries (each copy names its library_id and
-// library_name), the groups holding one of ?library_id='s books with it (#165).
+// lists direct pairs across libraries. Each copy names its library. With
+// ?library_id=, only comparisons involving that library are included.
 // A page at a time: ?limit= groups (at most 500, the default) after ?cursor=,
 // the last page's next_cursor; total counts every page's groups.
 func (a *API) handleDuplicates(w http.ResponseWriter, r *http.Request) {
@@ -159,8 +159,9 @@ func (a *API) handleSeriesSpellings(w http.ResponseWriter, r *http.Request) {
 
 // ignoreRequest is the body of POST/DELETE /admin/issues/ignore.
 type ignoreRequest struct {
-	Kind  string                   `json:"kind"`
-	Books boundedList[catalog.Ref] `json:"books"`
+	Kind     string                   `json:"kind"`
+	Books    boundedList[catalog.Ref] `json:"books"`
+	GroupKey string                   `json:"group_key"`
 }
 
 // handleIgnoreIssue serves POST /admin/issues/ignore: stop showing these books
@@ -196,6 +197,26 @@ func (a *API) applyIgnore(w http.ResponseWriter, r *http.Request, action string,
 			writeError(w, http.StatusBadRequest, "every book needs a library_id and a path")
 			return
 		}
+	}
+	if req.GroupKey != "" {
+		if req.Kind != catalog.IssueDuplicate || len(req.Books) != 1 || len(req.GroupKey) != 64 {
+			writeError(w, http.StatusBadRequest, "group_key needs one member of a duplicate group")
+			return
+		}
+		refs, err := a.cat.DuplicateSelection(r.Context(), req.GroupKey, req.Books[0])
+		if err != nil {
+			a.writeCatalogError(w, err, "duplicate selection failed", "could not find duplicate group")
+			return
+		}
+		if len(refs) == 0 {
+			if r.Method == http.MethodDelete {
+				w.WriteHeader(http.StatusNoContent)
+			} else {
+				writeError(w, http.StatusBadRequest, "duplicate group has changed")
+			}
+			return
+		}
+		req.Books = refs
 	}
 	if err := apply(req); err != nil {
 		a.writeCatalogError(w, err, "ignore issue failed", "could not save", "kind", req.Kind)

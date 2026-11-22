@@ -434,10 +434,11 @@ func (f BookFilter) where(skip string) (string, []any) {
 			pred = "0"
 		}
 		add(pred)
+		ignored, ignoredArgs := bookIgnoredExpr(f.Issue)
 		if f.IssueIgnored {
-			add(ignoredExpr, f.Issue)
+			add(ignored, ignoredArgs...)
 		} else {
-			add("NOT "+ignoredExpr, f.Issue)
+			add("NOT "+ignored, ignoredArgs...)
 		}
 	}
 	return strings.Join(conds, " AND "), args
