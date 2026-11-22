@@ -665,6 +665,16 @@ type foldRefusal struct {
 func (e *foldRefusal) Error() string { return e.err.Error() }
 func (e *foldRefusal) Unwrap() error { return e.err }
 
+// AudibleFoldRefusal is the reason (one of AudibleFold*) of a
+// FoldAudibleImport error that is a refusal, "" for one that is not (the fold
+// could not run).
+func AudibleFoldRefusal(err error) string {
+	if r, ok := errors.AsType[*foldRefusal](err); ok {
+		return r.reason
+	}
+	return ""
+}
+
 // FoldAudibleImport takes a done backup's place as its title's match (how
 // "import"), and clears its "Not this book" (the match is now this title's
 // own), what the last poll said of it unmatched (its planned destination

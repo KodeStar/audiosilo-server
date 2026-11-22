@@ -643,8 +643,12 @@ func TestFoldRefusalKeptByUnchangedMatch(t *testing.T) {
 	params, _ := json.Marshal(bridge.AudibleImportParams{Account: "acct0001", ASIN: "B000000001", LibraryID: lib})
 	j := bridge.Job{ID: 5, Kind: bridge.KindAudibleImport, State: bridge.StateDone, LibraryID: &lib, Params: params,
 		Result: json.RawMessage(fmt.Sprintf(`{"library_id":%d,"path":"Author/X","files":[{"path":"Author/X/Book.m4b","size":1}]}`, lib))}
-	if err := f.c.FoldAudibleImport(f.ctx, j); !errors.Is(err, ErrImportNotOwn) {
-		t.Fatalf("joined X: %v, want ErrImportNotOwn", err)
+	err := f.c.FoldAudibleImport(f.ctx, j)
+	if !errors.Is(err, ErrImportNotOwn) || AudibleFoldRefusal(err) != AudibleFoldNotOwnBook {
+		t.Fatalf("joined X: %v, want ErrImportNotOwn refused %s", err, AudibleFoldNotOwnBook)
+	}
+	if AudibleFoldRefusal(nil) != "" || AudibleFoldRefusal(ErrImportNotOwn) != "" {
+		t.Fatal("a refusal reason for an error that refused nothing")
 	}
 	f.tick(time.Second)
 	f.poll(t, "p3", matchedTo("Author/X"))
