@@ -70,11 +70,13 @@ func (c *crossMatches) sets() []dupSet {
 	return sets
 }
 
-func sortComparison(refs []Ref) {
-	slices.SortFunc(refs, func(a, b Ref) int {
-		return cmp.Or(cmp.Compare(a.LibraryID, b.LibraryID), strings.Compare(a.Path, b.Path))
-	})
+// compareRefs orders refs by library, then path bytes: the stable order stored
+// lists of refs keep (the upcoming job's pending books, a duplicate decision).
+func compareRefs(a, b Ref) int {
+	return cmp.Or(cmp.Compare(a.LibraryID, b.LibraryID), strings.Compare(a.Path, b.Path))
 }
+
+func sortComparison(refs []Ref) { slices.SortFunc(refs, compareRefs) }
 
 // comparisonKey sorts its scratch references into storage order. JSON frames
 // the paths, including literal quotes and separators.
@@ -112,21 +114,32 @@ func scanDecision(rows *sql.Rows, d *duplicateDecision) error {
 
 const decisionCols = "library_id, other_library_id, paths, ignored, created_by, created_at"
 
-func readDuplicateDecisions(ctx context.Context, db rowQuerier, lib int64) (map[string]bool, error) {
-	rows, err := queryRows(ctx, db, scanDecision, `SELECT `+decisionCols+` FROM duplicate_decisions
-		WHERE ?1=0 OR library_id=?1 OR other_library_id=?1`, lib)
+// keyedDecision is a stored decision under its comparisonKey.
+type keyedDecision struct {
+	refs    []Ref
+	ignored bool
+}
+
+// readDecisions reads the decisions where selects, by comparison key.
+func readDecisions(ctx context.Context, db rowQuerier, where string, args ...any) (map[string]keyedDecision, error) {
+	rows, err := queryRows(ctx, db, scanDecision, `SELECT `+decisionCols+` FROM duplicate_decisions WHERE `+where, args...)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]bool, len(rows))
+	out := make(map[string]keyedDecision, len(rows))
 	for _, d := range rows {
 		refs, err := d.refs()
 		if err != nil {
 			return nil, err
 		}
-		out[comparisonKey(refs)] = d.ignored
+		out[comparisonKey(refs)] = keyedDecision{refs, d.ignored}
 	}
 	return out, nil
+}
+
+// readDuplicateDecisions is the decisions touching lib (every one for 0).
+func readDuplicateDecisions(ctx context.Context, db rowQuerier, lib int64) (map[string]keyedDecision, error) {
+	return readDecisions(ctx, db, `?1=0 OR library_id=?1 OR other_library_id=?1`, lib)
 }
 
 var ErrDuplicateSelection = errors.New("select a duplicate group in one library or a pair in different libraries")
@@ -176,22 +189,15 @@ func (c *Catalog) setDuplicateDecision(ctx context.Context, refs []Ref, userID i
 // selection after a rescan has changed the live group. A missing selection
 // returns no refs, so deleting a decision can be retried.
 func (c *Catalog) DuplicateSelection(ctx context.Context, key string, anchor Ref) ([]Ref, error) {
-	decisions, err := queryRows(ctx, c.db, scanDecision, `SELECT `+decisionCols+` FROM duplicate_decisions
-		WHERE library_id=? AND other_library_id=?`, anchor.LibraryID, anchor.LibraryID)
+	decisions, err := readDecisions(ctx, c.db, `library_id=?1 AND other_library_id=?1`, anchor.LibraryID)
 	if err != nil {
 		return nil, err
 	}
-	for _, d := range decisions {
-		refs, err := d.refs()
-		if err != nil {
-			return nil, err
+	if d, ok := decisions[key]; ok {
+		if !slices.Contains(d.refs, anchor) {
+			return nil, ErrDuplicateSelection
 		}
-		if comparisonKey(refs) == key {
-			if !slices.Contains(refs, anchor) {
-				return nil, ErrDuplicateSelection
-			}
-			return refs, nil
-		}
+		return d.refs, nil
 	}
 	rows, sets, err := c.duplicateSets(ctx, anchor.LibraryID, false)
 	if err != nil {
@@ -203,7 +209,7 @@ func (c *Catalog) DuplicateSelection(ctx context.Context, key string, anchor Ref
 		}
 		refs := make([]Ref, len(s.members))
 		for i, m := range s.members {
-			refs[i] = Ref{rows[m].libraryID, rows[m].path}
+			refs[i] = rows[m].ref()
 		}
 		if !slices.Contains(refs, anchor) {
 			return nil, ErrDuplicateSelection
@@ -213,8 +219,8 @@ func (c *Catalog) DuplicateSelection(ctx context.Context, key string, anchor Ref
 	return nil, nil
 }
 
-// Moves and joins carry both endpoints. A join that collapses a group to a
-// single path settles that comparison.
+// A move carries the moved book's path in every decision naming it. A move onto
+// another member's path collapses the comparison to one book, which settles it.
 func moveDuplicateDecisions(ctx context.Context, tx *sql.Tx, lib int64, oldPath, newPath string) error {
 	rows, err := queryRows(ctx, tx, scanDecision, `SELECT `+decisionCols+` FROM duplicate_decisions d
 		WHERE (library_id=?1 OR other_library_id=?1) AND EXISTS (SELECT 1 FROM json_each(d.paths)
@@ -251,8 +257,7 @@ func moveDuplicateDecisions(ctx context.Context, tx *sql.Tx, lib int64, oldPath,
 // retries the same index snapshot.
 func (c *Catalog) MapLegacyDuplicateIgnores(ctx context.Context) error {
 	const marker = "map_duplicate_ignores_0092"
-	var pending bool
-	if err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM server_state WHERE key=?)`, marker).Scan(&pending); err != nil || !pending {
+	if pending, err := getServerState[bool](ctx, c.db, marker); err != nil || !pending {
 		return err
 	}
 	return c.db.WithTx(ctx, "MapLegacyDuplicateIgnores", func(tx *sql.Tx) error {
@@ -287,7 +292,7 @@ func (c *Catalog) MapLegacyDuplicateIgnores(ctx context.Context) error {
 				if r.legacyIgnore == "" {
 					break
 				}
-				refs = append(refs, Ref{r.libraryID, r.path})
+				refs = append(refs, r.ref())
 			}
 			if len(refs) != len(s.members) {
 				continue

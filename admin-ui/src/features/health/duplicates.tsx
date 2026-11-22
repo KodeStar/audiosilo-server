@@ -231,7 +231,7 @@ function GroupCard({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void actions.unignore(g.books, false, g.key)}
+            onClick={() => void actions.unignore(g.books, { groupKey: g.key })}
           >
             <Eye aria-hidden="true" />
             {t('health.dup.suggestAgain')}

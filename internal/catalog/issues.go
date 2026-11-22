@@ -120,10 +120,10 @@ const ignoredExpr = `EXISTS(SELECT 1 FROM issue_ignores ii
 
 // Older unplaceable disc rows retain their original path. The parent decision
 // covers every representative of the same set.
-const discIgnoredExpr = `(EXISTS (SELECT 1 FROM issue_ignores ii WHERE ii.library_id = b.library_id
+const discIgnoredExpr = `(b.split_parent <> '' AND (EXISTS (SELECT 1 FROM issue_ignores ii WHERE ii.library_id = b.library_id
 	AND ii.path = b.split_parent AND ii.kind = 'split_disc_set') OR EXISTS (
 	SELECT 1 FROM books s JOIN issue_ignores ii ON ii.library_id = s.library_id AND ii.path = s.rel_path
-	WHERE s.library_id = b.library_id AND s.split_parent = b.split_parent AND s.split_parent <> '' AND ii.kind = 'split_discs'))`
+	WHERE s.library_id = b.library_id AND s.split_parent = b.split_parent AND ii.kind = 'split_discs')))`
 
 func bookIgnoredExpr(kind string) (string, []any) {
 	if kind == IssueSplitDiscs {
@@ -171,7 +171,7 @@ func issueCountsSQL(kinds []string) string {
 		pred := issuePredicates[k]
 		ignored := "ig." + k
 		if k == IssueSplitDiscs {
-			ignored = "(b.split_parent <> '' AND " + discIgnoredExpr + ")"
+			ignored = discIgnoredExpr
 		}
 		cols = append(cols,
 			// The ignore first: a costly predicate (series_spellings' seeks) then
@@ -312,10 +312,15 @@ type dupRow struct {
 	duration                           float64
 	size                               int64
 	files, listeners                   int
-	legacyIgnore                       string
+	// legacyIgnore is the book's pre-0092 duplicate flag: "duplicate" while
+	// still unmapped, "duplicate_mapped" once MapLegacyDuplicateIgnores placed
+	// it, "" for none. MIN prefers the unmapped one when a book has both.
+	legacyIgnore string
 }
 
 // quality is the row as the Book betterQuality and identitySignals read.
+func (r *dupRow) ref() Ref { return Ref{r.libraryID, r.path} }
+
 func (r *dupRow) quality() Book {
 	return Book{Title: r.title, Author: r.author, Narrator: r.narrator, ASIN: r.asin, ISBN: r.isbn,
 		ContentHash: r.hash, Format: r.format, Duration: r.duration, Size: r.size}
@@ -487,7 +492,6 @@ func findDuplicateSets(ctx context.Context, db rowQuerier, libraryID int64, acro
 			}
 		}
 		ds.lengthsDiffer = longest > 0 && !sameLength(shortest, longest)
-
 		sets = append(sets, ds)
 	}
 	decisions, err := readDuplicateDecisions(ctx, db, libraryID)
@@ -500,13 +504,14 @@ func findDuplicateSets(ctx context.Context, db rowQuerier, libraryID int64, acro
 		allOld, unresolved := true, false
 		for _, m := range s.members {
 			r := rows[m]
-			refs = append(refs, Ref{r.libraryID, r.path})
+			refs = append(refs, r.ref())
 			allOld = allOld && r.legacyIgnore != ""
 			unresolved = unresolved || r.legacyIgnore == IssueDuplicate
 		}
 		s.key = comparisonKey(refs)
-		var found bool
-		if s.ignored, found = decisions[s.key]; !found {
+		if d, found := decisions[s.key]; found {
+			s.ignored = d.ignored
+		} else {
 			s.ignored = allOld && unresolved
 		}
 		sort.SliceStable(s.members, func(a, b int) bool {

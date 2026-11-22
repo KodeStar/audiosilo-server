@@ -40,7 +40,8 @@ export function useIssueActions(
     else inFlight.current.delete(key);
     setBusy(new Set(inFlight.current));
   };
-  // Large selections go in batches of the server's limit.
+  // Large selections go in batches of the server's limit. A duplicate group
+  // larger than that goes as its key and one member, so it is one decision.
   const send = async (fn: typeof api.ignoreIssue, refs: BookRef[], groupKey?: string) => {
     if (groupKey && refs.length > BULK_LIMIT) {
       await fn(kind, [refs[0]], groupKey);
@@ -49,7 +50,10 @@ export function useIssueActions(
     }
   };
 
-  const unignore = async (refs: BookRef[], quiet = false, groupKey?: string) => {
+  const unignore = async (
+    refs: BookRef[],
+    { quiet = false, groupKey }: { quiet?: boolean; groupKey?: string } = {},
+  ) => {
     try {
       await send(api.unignoreIssue, refs.map(refOf), groupKey);
       if (!quiet) {
@@ -90,7 +94,7 @@ export function useIssueActions(
         type: 'success',
         actionProps: {
           children: t('health.undo'),
-          onClick: () => void unignore(refs, true, groupKey),
+          onClick: () => void unignore(refs, { quiet: true, groupKey }),
         },
       });
     } catch (err) {
