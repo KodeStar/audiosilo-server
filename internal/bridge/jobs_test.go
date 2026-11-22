@@ -141,6 +141,17 @@ func TestEnqueuePrunesKindHistory(t *testing.T) {
 	}
 }
 
+// EnqueueAll runs none of Enqueue's per-kind refusals, cancels, promotion or
+// pruning, so a kind it queues declares none.
+func TestBatchKindsDeclareNoSideEffects(t *testing.T) {
+	t.Parallel()
+	for kind := range batchKinds {
+		if s := kinds[kind]; s.prune != nil || s.promotes || len(s.cancelsOpen) > 0 || len(s.refusedWhileOpen) > 0 {
+			t.Errorf("batch kind %s prunes, promotes, cancels or refuses", kind)
+		}
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
 
 // damageParams stores params that are not JSON on job id, as a damaged row has.
