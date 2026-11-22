@@ -667,8 +667,8 @@ func (e *foldRefusal) Unwrap() error { return e.err }
 
 // FoldAudibleImport takes a done backup's place as its title's match (how
 // "import"), and clears its "Not this book" (the match is now this title's
-// own) and what the last poll said of it unmatched (its planned destination
-// and contested book). The result must name the job's own library and a book indexed there
+// own), what the last poll said of it unmatched (its planned destination
+// and contested book) and an earlier backup's refusal. The result must name the job's own library and a book indexed there
 // (the Bridge rescans before it reports done), else ErrImportNotIndexed, and
 // the title's own book (importOwnBook), else ErrImportNotOwn. A refusal is
 // recorded on the title (fold_refusal_reason, fold_refused_at) in the same
@@ -710,7 +710,7 @@ func (c *Catalog) FoldAudibleImport(ctx context.Context, j bridge.Job) error {
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET match_library_id = ?, match_path = ?, match_how = ?,
 			    rejected = 0, import_pending = 0, import_job_id = ?, planned = '',
-			    contest_library_id = NULL, contest_path = '', updated_at = ?
+			    contest_library_id = NULL, contest_path = '', fold_refusal_reason = '', fold_refused_at = NULL, updated_at = ?
 			  WHERE account = ? AND asin = ? AND (import_job_id IS NULL OR import_job_id = ?)`,
 			r.LibraryID, r.Path, AudibleMatchImport, j.ID, c.ts(), p.Account, p.ASIN, j.ID)
 		return err

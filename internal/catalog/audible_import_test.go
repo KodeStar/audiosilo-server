@@ -614,6 +614,52 @@ func TestFoldAudibleImportOwnBook(t *testing.T) {
 	}
 }
 
+// A refusal recorded while the title is already matched (a poll matched it
+// mid-backup) stays through writes that leave the match as it was, and goes
+// with a newly accepted one.
+func TestFoldRefusalKeptByUnchangedMatch(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	f.poll(t, "p1", avail("B000000001", ""))
+	if err := f.setImport("acct0001", "B000000001", 5); err != nil {
+		t.Fatal(err)
+	}
+	lib := f.lib.ID
+	for _, b := range []*Book{
+		{LibraryID: lib, RelPath: "Author/X", IsFolder: true, Title: "X",
+			Files: []BookFile{{RelPath: "Author/X/Old.m4b"}, {RelPath: "Author/X/Book.m4b"}}},
+		{LibraryID: lib, RelPath: "Author/Y", IsFolder: true, Title: "Y", Files: []BookFile{{RelPath: "Author/Y/Y.m4b"}}},
+	} {
+		if _, err := f.c.UpsertBook(f.ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	matchedTo := func(path string) AudibleTitleInput {
+		x := avail("B000000001", "")
+		x.Match = &AudibleMatch{LibraryID: lib, Path: path, How: "fuzzy"}
+		return x
+	}
+	f.poll(t, "p2", matchedTo("Author/X"))
+	params, _ := json.Marshal(bridge.AudibleImportParams{Account: "acct0001", ASIN: "B000000001", LibraryID: lib})
+	j := bridge.Job{ID: 5, Kind: bridge.KindAudibleImport, State: bridge.StateDone, LibraryID: &lib, Params: params,
+		Result: json.RawMessage(fmt.Sprintf(`{"library_id":%d,"path":"Author/X","files":[{"path":"Author/X/Book.m4b","size":1}]}`, lib))}
+	if err := f.c.FoldAudibleImport(f.ctx, j); !errors.Is(err, ErrImportNotOwn) {
+		t.Fatalf("joined X: %v, want ErrImportNotOwn", err)
+	}
+	f.tick(time.Second)
+	f.poll(t, "p3", matchedTo("Author/X"))
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000001", AudibleTitlePatch{Rejected: new(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if x := f.title(t, "B000000001"); x.FoldRefusalReason != AudibleFoldNotOwnBook || x.FoldRefusedAt == nil {
+		t.Fatalf("after writes that kept the match: %+v", x)
+	}
+	f.poll(t, "p4", matchedTo("Author/Y"))
+	if x := f.title(t, "B000000001"); x.FoldRefusalReason != "" || x.FoldRefusedAt != nil {
+		t.Fatalf("after a new match: %+v", x)
+	}
+}
+
 // Back up's refusals, and Back up everything's set and estimate.
 func TestAudibleBackupRequests(t *testing.T) {
 	t.Parallel()
