@@ -427,13 +427,13 @@ func TestAdminMergeSpellingsAndUndo(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != want {
 		t.Fatalf("merge = %d %s, want %s", resp.StatusCode, body, want)
 	}
-	if resp, body := e.do(t, "POST", path, admin, request); resp.StatusCode != 200 || strings.TrimSpace(body) != `{"books":[]}` {
-		t.Fatalf("repeat merge = %d %s", resp.StatusCode, body)
-	}
-
+	// The first merge's reply drives the Undo below.
 	var result struct{ Books []catalog.MergedBook }
 	if err := json.Unmarshal([]byte(body), &result); err != nil {
 		t.Fatal(err)
+	}
+	if again, againBody := e.do(t, "POST", path, admin, request); again.StatusCode != 200 || strings.TrimSpace(againBody) != `{"books":[]}` {
+		t.Fatalf("repeat merge = %d %s", again.StatusCode, againBody)
 	}
 	for _, book := range result.Books {
 		b, err := e.cat.GetBookByPath(ctx, book.LibraryID, book.Path)
