@@ -462,14 +462,31 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // leaves the titles where they were (the next poll matches them afresh). A
 // left-behind row a move's carry did not change (its person never played the
 // moved book, or the row was the newer and won the merge) is another book's
-// place: its offer is taken back (keepLeftOffers, server#359).
+// place: its offer is taken back (keepLeftOffers, server#359). A moved title
+// keeps its book, so it keeps a backup's refusal (fold_refusal_reason, 0093),
+// which the 0093 trigger clears on any change of the match: put back after.
 func moveAudibleTitles(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
+	type refusal struct{ account, asin, reason, at string }
+	kept, err := queryRows(ctx, tx, func(rows *sql.Rows, r *refusal) error {
+		return rows.Scan(&r.account, &r.asin, &r.reason, &r.at)
+	}, `SELECT account, asin, fold_refusal_reason, fold_refused_at FROM audible_titles
+	     WHERE match_library_id = ? AND match_path = ? AND fold_refused_at IS NOT NULL`, libraryID, from)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE audible_titles SET match_path = ? WHERE match_library_id = ? AND match_path = ?`,
 		into, libraryID, from); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx,
+	for _, r := range kept {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE audible_titles SET fold_refusal_reason = ?, fold_refused_at = ? WHERE account = ? AND asin = ?`,
+			r.reason, r.at, r.account, r.asin); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx,
 		`UPDATE audible_titles SET contest_path = ? WHERE contest_library_id = ? AND contest_path = ?`,
 		into, libraryID, from)
 	return err

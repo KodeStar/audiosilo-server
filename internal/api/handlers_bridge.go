@@ -54,9 +54,13 @@ func (a *API) SetBridge(b *bridge.Service) {
 			}
 		}
 		if job.Kind == bridge.KindAudibleImport {
-			// A done backup becomes its title's match.
+			// A done backup becomes its title's match, or the title records why not.
 			if err := a.cat.FoldAudibleImport(ctx, job); err != nil {
-				a.log.Warn("audible: recording a backup failed", "job", job.ID, "err", err)
+				if reason := catalog.AudibleFoldRefusal(err); reason != "" {
+					a.log.Warn("audible: a backup could not become its title's match", "job", job.ID, "reason", reason, "err", err)
+				} else {
+					a.log.Warn("audible: recording a backup failed", "job", job.ID, "err", err)
+				}
 			}
 		}
 		if job.Kind == bridge.KindLibrivoxFetch {

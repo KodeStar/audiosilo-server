@@ -16,6 +16,7 @@ import { CardEmpty } from '@/features/settings/card-empty';
 import {
   accountName,
   chosenAccount,
+  foldReasonKey,
   importStatus,
   lookList,
   onServer,
@@ -268,6 +269,7 @@ function TitleRow({
         <span className="font-mono text-[12px] text-muted-foreground">{details.join(' · ')}</span>
         <PlannedNote title={x} template={template} />
         <ReasonNote title={x} />
+        <FoldNote title={x} />
         {backup?.code ? (
           <span className="text-[12.5px] text-muted-foreground">{t(backup.code)}</span>
         ) : null}
@@ -359,6 +361,18 @@ function PlannedNote({ title: x, template }: { title: AudibleTitle; template?: s
         <span className="text-muted-foreground">{t('audible.planned.staleTemplate')}</span>
       ) : null}
     </span>
+  );
+}
+
+/** Why the server could not match the title's completed backup, when it recorded why. */
+function FoldNote({ title: x }: { title: AudibleTitle }) {
+  const { t } = useTranslation();
+  const key = foldReasonKey(x);
+  if (!key) return null;
+  return (
+    <StatusText tone="warn" colored className="text-[12.5px]">
+      {t(key)}
+    </StatusText>
   );
 }
 
