@@ -387,12 +387,12 @@ func cancelAudibleJobs(ctx context.Context, tx *sql.Tx, account string, now time
 }
 
 // CancelOrphanAudibleJobs recovers open jobs left after their account went.
-// Only the open-job index is walked. The common empty pass needs no writer.
+// Only the open-job index's audible.* key range is walked. The common empty pass needs no writer.
 func (c *Catalog) CancelOrphanAudibleJobs(ctx context.Context) (int, error) {
 	accountSQL := bridge.ParamSQL("params", "$.account")
 	gone, err := queryRows(ctx, c.db, func(rows *sql.Rows, account *string) error { return rows.Scan(account) },
 		`SELECT DISTINCT `+accountSQL+` FROM bridge_jobs INDEXED BY idx_bridge_jobs_open
-		 WHERE kind IN (?, ?, ?) AND state IN `+bridge.OpenStatesSQL+` AND cancel_requested = 0
+		 WHERE dedupe_key >= 'audible.' AND dedupe_key < 'audible/' AND kind IN (?, ?, ?) AND state IN `+bridge.OpenStatesSQL+` AND cancel_requested = 0
 		   AND `+accountSQL+` IS NOT NULL AND `+accountSQL+` NOT IN (SELECT account FROM audible_accounts)`,
 		bridge.KindAudiblePoll, bridge.KindAudibleImport, bridge.KindAudibleSync)
 	if err != nil {

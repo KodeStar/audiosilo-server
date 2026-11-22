@@ -116,10 +116,12 @@ func CancelAudiblePolls(ctx context.Context, tx *sql.Tx, account, reason string,
 // poll: at once when queued or parked, else at the Bridge's next report.
 func CancelAudibleImports(ctx context.Context, tx *sql.Tx, account, reason string, now time.Time) error {
 	// A backup keeps the library it was queued in even if the account is
-	// remapped. Seek its open key prefix in each library. '}' immediately
-	// follows the '|' between the account id and the ASIN in the key.
+	// remapped. Seek its open key prefix in each library: the kind, the
+	// library, the empty path, then the account. '}' immediately follows the
+	// '|' between the account id and the ASIN in the key.
+	part := "|" + audibleImportAccountKey(account)
 	keys, err := queryColumn[string](ctx, tx, openAudibleImportsSQL,
-		KindAudibleImport+"|", "||"+account+"|", "||"+account+"}", account)
+		KindAudibleImport+"|", part, strings.TrimSuffix(part, "|")+"}", account)
 	if err != nil {
 		return err
 	}
@@ -377,7 +379,17 @@ func audibleImportParams(raw json.RawMessage) (json.RawMessage, error) {
 func audibleImportSuffix(j NewJob) string {
 	var p AudibleImportParams
 	_ = json.Unmarshal(j.Params, &p)
-	return "|" + p.Account + "|" + p.ASIN
+	return audibleImportAccountKey(p.Account) + p.ASIN
+}
+
+// audibleImportAccountKey is the account's part of an audible.import key.
+func audibleImportAccountKey(account string) string { return "|" + account + "|" }
+
+// AudibleImportKeyRange bounds the dedupe keys of library's audible.import
+// jobs, for a seek on idx_bridge_jobs_open: lo <= key < hi.
+func AudibleImportKeyRange(library int64) (lo, hi string) {
+	lo = DedupeKey(KindAudibleImport, &library, nil)
+	return lo, strings.TrimSuffix(lo, "|") + "}"
 }
 
 // AudibleImport is the NewJob that backs up p's title into p's library.

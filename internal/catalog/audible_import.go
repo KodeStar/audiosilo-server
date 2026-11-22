@@ -296,11 +296,16 @@ func checkDestOwnFolder(ctx context.Context, tx *sql.Tx, library int64, dest, te
 	case err != nil:
 		return err
 	case override:
-		return fmt.Errorf("%w (%s). Choose a separate folder for the backup", ErrAudibleBookOverride, book)
+		return discConflict(ErrAudibleBookOverride, book)
 	case indexed:
-		return fmt.Errorf("%w (%s). Choose a separate folder for the backup", ErrAudibleIndexedBook, book)
+		return discConflict(ErrAudibleIndexedBook, book)
 	}
 	return nil
+}
+
+// discConflict is the refusal naming the folder that would absorb the disc.
+func discConflict(sentinel error, book string) error {
+	return fmt.Errorf("%w (%s). Choose a separate folder for the backup", sentinel, book)
 }
 
 // checkAudibleRemap checks the saved destinations in the library the Bridge
@@ -309,32 +314,42 @@ func checkAudibleRemap(ctx context.Context, tx *sql.Tx, account string, library 
 	if err := checkDestOwnFolder(ctx, tx, library, "", template); err != nil {
 		return err
 	}
-	dests, err := queryRows(ctx, tx, func(rows *sql.Rows, dest *string) error { return rows.Scan(dest) },
-		`SELECT DISTINCT dest_path FROM audible_titles WHERE account = ? AND dest_path <> ''`, account)
-	if err != nil {
+	if library == 0 {
+		return nil
+	}
+	// checkDestOwnFolder's rule over every saved destination in one statement.
+	var book string
+	var override bool
+	err := tx.QueryRowContext(ctx, `SELECT p, EXISTS(SELECT 1 FROM folder_overrides WHERE library_id = ?2 AND path = p AND mode = ?3) AS o
+		FROM (SELECT DISTINCT audible_disc_parent(dest_path, '') AS p FROM audible_titles WHERE account = ?1 AND dest_path <> '')
+		WHERE p <> '' AND (o OR EXISTS(SELECT 1 FROM books WHERE library_id = ?2 AND rel_path = p))
+		ORDER BY o DESC LIMIT 1`, account, library, OverrideBook).Scan(&book, &override)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
 		return err
+	case override:
+		return discConflict(ErrAudibleBookOverride, book)
 	}
-	for _, dest := range dests {
-		if err := checkDestOwnFolder(ctx, tx, library, dest, ""); err != nil {
-			return err
-		}
-	}
-	return nil
+	return discConflict(ErrAudibleIndexedBook, book)
 }
 
 // checkAudibleOverride checks the other order of edits. Open backups keep
 // their original placement if the account is remapped or the title is edited.
 func checkAudibleOverride(ctx context.Context, tx *sql.Tx, library int64, book string) error {
+	lo, hi := bridge.AudibleImportKeyRange(library)
 	var conflict bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM audible_accounts WHERE library_id = ?1 AND template <> '' AND audible_disc_parent('', template) = ?2
 		UNION ALL SELECT 1 FROM audible_accounts a JOIN audible_titles t ON t.account = a.account
 			WHERE a.library_id = ?1 AND t.dest_path <> '' AND audible_disc_parent(t.dest_path, '') = ?2
-		UNION ALL SELECT 1 FROM bridge_jobs j INDEXED BY idx_bridge_jobs_open WHERE library_id = ?1 AND kind = ?3 AND state IN `+bridge.OpenStatesSQL+`
+		UNION ALL SELECT 1 FROM bridge_jobs j INDEXED BY idx_bridge_jobs_open WHERE j.dedupe_key >= ?3 AND j.dedupe_key < ?4
+			AND j.state IN `+bridge.OpenStatesSQL+`
 			AND audible_disc_parent(`+bridge.ParamSQL("j.params", "$.dest_path")+`, `+bridge.ParamSQL("j.params", "$.template")+`) = ?2)`,
-		library, book, bridge.KindAudibleImport).Scan(&conflict)
+		library, book, lo, hi).Scan(&conflict)
 	if err == nil && conflict {
-		return fmt.Errorf("%w (%s). Choose a separate folder for the backup", ErrAudibleBookOverride, book)
+		return discConflict(ErrAudibleBookOverride, book)
 	}
 	return err
 }

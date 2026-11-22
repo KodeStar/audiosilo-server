@@ -55,7 +55,7 @@ func Internal(kind string) bool { return kinds[kind].internal }
 
 // podcastWork reports whether kind is one of a followed show's bound jobs
 // (poll, fetch, retain): params naming the show's identity, which an open job
-// for a replaced identity must not absorb, and terminal rows pruned per target.
+// for a replaced identity must not absorb.
 func podcastWork(kind string) bool {
 	return kind == KindPodcastPoll || kind == KindPodcastFetch || kind == KindPodcastRetain
 }
