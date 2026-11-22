@@ -96,8 +96,11 @@ func namesCheck(rev int, rel string, isFolder, severalFiles bool, format, title,
 			return true
 		}
 		if severalFiles {
+			if rev < revPartsTitle {
+				return true
+			}
 			pathTitle := metadata.PathTitle(rel, isFolder)
-			return rev < revPartsTitle || (pathTitle != "" && title != pathTitle)
+			return pathTitle != "" && title != pathTitle
 		}
 	}
 	return (rev < revTitleNotSeries && metadata.MaybeSeriesTitle(rel, isFolder, title, series)) ||

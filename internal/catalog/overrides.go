@@ -647,7 +647,7 @@ func (l *bookLayers) readScanned() (scanned, baseline, layout bookFields) {
 	}
 	layout = pathFields(metadata.FromPathLayout(l.path, l.isFolder))
 	raw := metadata.ReadPathLayout(l.path, l.isFolder)
-	if number, title := metadata.SplitSeriesIndex(raw.Title); (number != 0 || title != raw.Title) &&
+	if number, _ := metadata.SplitSeriesIndex(raw.Title); number != 0 &&
 		strings.EqualFold(strings.TrimSpace(l.scanned[FieldTitle]), raw.Title) {
 		// The tag title IS the folder's name, number and all ("13 Reasons Why"):
 		// the number is part of the title, not a volume the layout can split off.

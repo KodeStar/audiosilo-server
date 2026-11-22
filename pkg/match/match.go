@@ -981,7 +981,9 @@ var titleStopwords = map[string]bool{
 
 // TitlesShareWord reports whether two titles have a word in common beyond
 // articles and joining words. The scanner uses this to preserve an album
-// whose title is a fuller spelling of the book folder's.
+// whose title is a fuller spelling of the book folder's. Unlike tokenize it
+// keeps letters in any script, numbers and one-letter words, since a folder
+// name is weighed here, not scored against a candidate.
 func TitlesShareWord(a, b string) bool {
 	words := func(s string) []string {
 		return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {

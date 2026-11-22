@@ -6,6 +6,7 @@
 package metadata
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -815,7 +816,6 @@ func (m *Metadata) PartsTitle(pathTitle string, other *Metadata) string {
 // supplies no chapter name to weigh against the album.
 func (m *Metadata) folderOverAlbum(pathTitle string) bool {
 	return m.Series == "" && !IsAudio(m.TitleTag) && !IsGenericTitle(cleanTag(pathTitle)) && !volumeMarker(pathTitle) &&
-		!strings.EqualFold(pathTitle, "Folder") &&
 		!sameName(pathTitle, m.AlbumTag) && !match.TitlesShareWord(pathTitle, m.AlbumTag)
 }
 
@@ -1054,13 +1054,8 @@ func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 	}
 	if l, ok := LeafSeries(name); ok {
 		m.Series, m.SeriesIndex, m.SeriesIndexEnd = l.Series, l.Position, l.PositionEnd
-		if m.Author == "" {
-			m.Author = l.Author
-		}
-		m.Title = l.Title
-		if m.Title == "" {
-			m.Title = m.SeriesTitle()
-		}
+		m.Author = cmp.Or(m.Author, l.Author)
+		m.Title = cmp.Or(l.Title, m.SeriesTitle())
 	}
 	return m
 }
@@ -1075,7 +1070,7 @@ func pathSegments(relPath string, isFolder bool) []string {
 	}
 	// An individually indexed disc in a structured book folder belongs to
 	// that leaf. Use the same book segment for all path and backfill rules.
-	if isFolder && len(segs) > 1 && strings.Contains(segs[len(segs)-2], ";") && IsDiscFolder(segs[len(segs)-1]) {
+	if isFolder && len(segs) > 1 && IsDiscFolder(segs[len(segs)-1]) {
 		if _, ok := LeafSeries(segs[len(segs)-2]); ok {
 			segs = segs[:len(segs)-1]
 		}

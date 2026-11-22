@@ -120,7 +120,8 @@ func readSeriesPath(relPath string, isFolder bool, tagSeries, tagAuthor string) 
 	if l, ok := LeafSeries(leaf); ok {
 		// DeriveFromPath took the leaf's series and position over the folder
 		// holding the book, which still names a series the book is in; the
-		// title is the leaf's title part.
+		// title is the leaf's title part alone, "" with none (not DeriveFromPath's
+		// series and position).
 		p.title = l.Title
 		if len(segs) > 2 {
 			p.series = append(p.series, segs[len(segs)-2])

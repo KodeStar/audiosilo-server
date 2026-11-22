@@ -396,7 +396,7 @@ func TestPartsTitle(t *testing.T) {
 		// chapter. An unrelated album yields to the book folder.
 		{"only chapters past the album", "The Wheel of Time", "The Wheel of Time - Ravens", "The Eye of the World", "The Wheel of Time - The Peddler", "The Eye of the World"},
 		{"only a part marker shared", "Dune", "Dune: Part 1 - Chapter 1", "Book 1", "Dune: Part 1 - Chapter 9", "Dune"},
-		{"only a volume marker shared", "The Expanse", "The Expanse: Book 1 - Chapter 01", "Folder", "The Expanse: Book 1 - Chapter 30", "The Expanse"},
+		{"only a volume marker shared", "The Expanse", "The Expanse: Book 1 - Chapter 01", "Book 1", "The Expanse: Book 1 - Chapter 30", "The Expanse"},
 		{"underscore chapters", "The Diary of a Nobody", "The Diary of a Nobody_Ch00", "Diary of a Nobody", "The Diary of a Nobody_Ch24", "The Diary of a Nobody"},
 		{"underscore chapters as written", "secret_agent", "secret_agent_ch01", "Secret Agent", "secret_agent_ch13", "secret_agent"},
 	}

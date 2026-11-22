@@ -1052,10 +1052,13 @@ func (l *runLog) finish() []catalog.RunEvent {
 // pathFlushEvery is how many path readings a scan gathers before writing them.
 const pathFlushEvery = 500
 
-// readNames takes the path as its baseline and overlays the primary file's
-// tags. A leaf's position belongs to its series. PartsTitle uses the last
-// file's tags to tell chapter titles from book titles, and TitleNotSeries
-// resolves albums that name a known series.
+// readNames is book b's title, author and series: the path's reading
+// (metadata.DeriveFromPath) as the baseline, then md's tags (nil, an unread
+// file, keeps the path's), and md's narrator. A leaf's position goes only with
+// its own series: a tag naming another series and no position clears it.
+// PartsTitle uses the last file's tags (last, nil for unread) to tell chapter
+// titles from book titles, and TitleNotSeries resolves albums that name a
+// known series.
 func readNames(b *catalog.Book, md, last *metadata.Metadata) *metadata.Metadata {
 	n := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	if md == nil {
