@@ -4477,7 +4477,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the title's own (`importOwnBook`, else `ErrImportNotOwn`, logged): a book carrying the title's ASIN, or one
   holding only the files the backup placed (a single-file book is its file), so a file placed into a folder
   book already there (the scan makes it one book) never makes that book, nor another title's, the title's
-  match; and never the book the admin marked Not this book for the title. It sets the match
+  match; and never the book the admin marked Not this book for the title. On refusal, the same transaction
+  records `fold_refusal_reason` and `fold_refused_at` on the title (`0093`). The admin title includes both until
+  a later import or accepted match clears them. Settings > Audible explains an unusable report (`invalid_result`),
+  a missing book (`not_indexed`), a book the backup could not claim (`not_own_book`), or one marked
+  Not this book (`rejected_match`), even after the job is gone. Older rows keep their existing backup status.
+  A successful import sets the match
   (`match_how:"import"`), clears rejected and pending, only while `import_job_id` is still this job. A poll
   keeps an `import` match while its book is indexed and the poll names no other. A failure's code is the
   result's `code` (or a `code:` error prefix, or a park's code): `AudibleImportCodes`, shown on the title

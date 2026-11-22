@@ -408,6 +408,36 @@ func (b *bridgeEnv) finish(t *testing.T, j bridge.Job, state, result, errText st
 	}
 }
 
+func TestAudibleAdminTitleFoldRefusal(t *testing.T) {
+	t.Parallel()
+	const asin = "B000000001"
+	b := backupEnv(t, title(asin, "One", "available", 0, ""))
+	if resp, out := b.do(t, "POST", backupPath(asin), b.adminTok, ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("queue backup: %d %s", resp.StatusCode, out)
+	}
+	job := b.claim(t, bridge.KindAudibleImport)
+	b.finish(t, job, "done", fmt.Sprintf(`{"library_id":%d,"path":"Missing"}`, b.lib.ID), "")
+	// The reason belongs to the title even after the completed job is gone.
+	if _, err := b.db.ExecContext(context.Background(), `DELETE FROM bridge_jobs WHERE id = ?`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	page := adminTitles(t, b, "account="+testAccount)
+	if len(page.Titles) != 1 {
+		t.Fatalf("titles = %+v", page)
+	}
+	x := page.Titles[0]
+	if x.Import != nil || x.Match != nil || x.FoldRefusalReason != "not_indexed" || x.FoldRefusedAt == nil {
+		t.Fatalf("title after the job was removed = %+v", x)
+	}
+	if code, out := b.putTitles(t, testAccount, "p2", true, title(asin, "One", "available", b.lib.ID, mistbornBook)); code != http.StatusOK {
+		t.Fatalf("poll: %d %s", code, out)
+	}
+	x = adminTitles(t, b, "account="+testAccount).Titles[0]
+	if x.Match == nil || x.FoldRefusalReason != "" || x.FoldRefusedAt != nil {
+		t.Fatalf("title after a match = %+v", x)
+	}
+}
+
 // contestedTitle is title's unmatched title the Bridge stored with reason
 // contested (another title claimed the same book).
 func contestedTitle(asin, name string) string {

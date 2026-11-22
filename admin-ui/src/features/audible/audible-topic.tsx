@@ -268,6 +268,11 @@ function TitleRow({
         <span className="font-mono text-[12px] text-muted-foreground">{details.join(' · ')}</span>
         <PlannedNote title={x} template={template} />
         <ReasonNote title={x} />
+        {x.fold_refusal_reason ? (
+          <StatusText tone="warn" colored className="text-[12.5px]">
+            {t([`audible.fold.${x.fold_refusal_reason}`, 'audible.fold.other'])}
+          </StatusText>
+        ) : null}
         {backup?.code ? (
           <span className="text-[12.5px] text-muted-foreground">{t(backup.code)}</span>
         ) : null}

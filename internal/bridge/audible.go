@@ -395,9 +395,10 @@ type AudibleImportResult struct {
 }
 
 // AudibleImportOf reads a job's params and, when it is done, its result.
+// On a read error only fully decoded params can identify the affected title.
 func AudibleImportOf(j Job) (p AudibleImportParams, r AudibleImportResult, err error) {
 	if err = json.Unmarshal(j.Params, &p); err != nil {
-		return p, r, err
+		return AudibleImportParams{}, r, err
 	}
 	if j.State == StateDone && len(j.Result) > 0 {
 		err = json.Unmarshal(j.Result, &r)

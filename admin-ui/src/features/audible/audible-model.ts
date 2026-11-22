@@ -217,7 +217,7 @@ export function importStatus(
     case 'needs_attention':
       return { key: 'audible.import.parked', tone: 'warn', code };
     case 'done':
-      return { key: 'audible.import.done', tone: 'ok' };
+      return x.fold_refusal_reason ? null : { key: 'audible.import.done', tone: 'ok' };
     case 'failed':
       return { key: 'audible.import.failed', tone: 'bad', code };
     case 'cancelled':
