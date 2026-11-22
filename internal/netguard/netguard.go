@@ -90,18 +90,25 @@ type Timeouts struct {
 	Connect, TLS, Header time.Duration
 }
 
+// MaxHeaderBytes bounds a guarded answer's headers (net/http's default is
+// 10 MiB): the callers cap the body, and a remote host must not be able to
+// make each fetch slot hold megabytes before it.
+const MaxHeaderBytes = 64 << 10
+
 // Transport is an HTTP transport that dials only addresses allowed accepts,
 // redirects' included, through no proxy, keeping up to conns idle connections
-// (30 s) for the callers' fetch slots.
+// (30 s) for the callers' fetch slots, and reading at most MaxHeaderBytes of an
+// answer's headers.
 func Transport(allowed func(netip.AddrPort) bool, t Timeouts, conns int) *http.Transport {
 	return &http.Transport{
-		Proxy:                 nil,
-		DialContext:           Dialer(allowed, t.Connect).DialContext,
-		TLSHandshakeTimeout:   t.TLS,
-		ResponseHeaderTimeout: t.Header,
-		MaxIdleConns:          conns,
-		MaxIdleConnsPerHost:   conns,
-		IdleConnTimeout:       30 * time.Second,
+		Proxy:                  nil,
+		DialContext:            Dialer(allowed, t.Connect).DialContext,
+		TLSHandshakeTimeout:    t.TLS,
+		ResponseHeaderTimeout:  t.Header,
+		MaxResponseHeaderBytes: MaxHeaderBytes,
+		MaxIdleConns:           conns,
+		MaxIdleConnsPerHost:    conns,
+		IdleConnTimeout:        30 * time.Second,
 	}
 }
 

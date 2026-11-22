@@ -2988,10 +2988,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   an image on its own host (Audible's CDN, Open Library), which the console's CSP can't load, so
   the server fetches it (`meta.Service.FetchCover`: http(s) only, every connection's resolved
   address checked public at dial time, redirects included (`netguard.PublicAddr` through
-  `netguard.Transport`, shared with podcast discovery; no proxy), no user info in the URL or a
-  redirect's, <= 3 redirects without an https to http downgrade, a 200 only, the caller's byte cap
-  (`media.ArtFetcher`, the one remote art fetcher, shared with discovery's artwork), 15 s,
-  `maxConcurrentCoverFetches`, never holding `coverReads`).
+  `netguard.Transport`, shared with podcast discovery; no proxy, at most 64 KiB of headers), no
+  user info in the URL or a redirect's, <= 3 redirects without an https to http downgrade, a 200
+  only, the caller's byte cap (`media.ArtFetcher`, the one remote art fetcher, shared with
+  discovery's artwork), 15 s, `maxConcurrentCoverFetches`, never holding `coverReads`).
   `POST /admin/meta/covers` (`{urls, size}`, <= 12) returns thumbnails as `data:` URLs in
   order (`""` = couldn't be fetched or decoded; cached in the thumbnail cache by URL, a failed
   fetch not; each holds `communityReads` from its fetch to the end of its decode; asks for the

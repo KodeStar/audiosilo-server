@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,6 +117,29 @@ func TestTransportGuardsEveryDial(t *testing.T) {
 		t.Fatalf("allowed address = %v, %d hits", err, hits)
 	}
 	_ = resp.Body.Close()
+}
+
+// Transport reads at most MaxHeaderBytes of an answer's headers: the callers
+// cap the body, and the headers before it are capped too.
+func TestTransportCapsHeaders(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/big" {
+			w.Header().Set("X-Filler", strings.Repeat("a", 2*MaxHeaderBytes))
+		}
+	}))
+	defer srv.Close()
+	target := netip.MustParseAddrPort(srv.Listener.Addr().String())
+	client := &http.Client{Transport: Transport(func(ap netip.AddrPort) bool { return ap == target }, Timeouts{Connect: time.Second}, 2)}
+	resp, err := client.Get(srv.URL + "/small")
+	if err != nil {
+		t.Fatalf("small headers = %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp, err := client.Get(srv.URL + "/big"); err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("headers past MaxHeaderBytes were read")
+	}
 }
 
 func TestDowngrade(t *testing.T) {
