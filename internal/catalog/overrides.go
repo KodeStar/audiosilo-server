@@ -647,10 +647,12 @@ func (l *bookLayers) readScanned() (scanned, baseline, layout bookFields) {
 	}
 	layout = pathFields(metadata.FromPathLayout(l.path, l.isFolder))
 	raw := metadata.ReadPathLayout(l.path, l.isFolder)
-	if number, _ := metadata.SplitSeriesIndex(raw.Title); number != 0 &&
+	if _, leaf := metadata.LeafSeries(raw.Title); !leaf && raw.Title != "" &&
 		strings.EqualFold(strings.TrimSpace(l.scanned[FieldTitle]), raw.Title) {
 		// The tag title IS the folder's name, number and all ("13 Reasons Why"):
-		// the number is part of the title, not a volume the layout can split off.
+		// the number is part of the title, not a volume the layout can split off,
+		// and its spelling is the tag's. A leaf named "Author; Series; Book NN[;
+		// Title]" is no such title: the layout reads its parts.
 		layout[FieldTitle], layout[FieldSeriesIndex] = l.scanned[FieldTitle], raw.Position
 	}
 	scanned = maps.Clone(l.scanned)

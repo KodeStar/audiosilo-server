@@ -423,6 +423,13 @@ func TestPreferPathKeepsWhatThePathDoesNotSay(t *testing.T) {
 			},
 		},
 		{
+			// A tag title that is the folder's name in another case keeps the
+			// tag's spelling.
+			name: "folder name in lower case", path: "Andy Weir/the martian", isFolder: true,
+			title: "The Martian", author: "Andy Weir",
+			want: map[string][2]string{FieldTitle: {"The Martian", SourcePath}},
+		},
+		{
 			// The same series unnumbered by the path keeps the tag's position.
 			name: "same series", path: "James S. A. Corey/The Expanse/Abaddon's Gate", isFolder: true,
 			title: "Abaddon's Gate", author: "James S. A. Corey", series: "the expanse", idx: 3,
