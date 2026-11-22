@@ -38,7 +38,12 @@ import (
 // then be a chapter's ("End Credits"); any other book takes the title tag,
 // except a book of several files, whose lone first-file tag ("Prologue", in
 // "Indian Hill/Book 3") counts only when it carries the series' name. With
-// neither, title stays. A book whose own leaf names it as the album does
+// neither, title stays, except under a LeafSeries leaf without a title part
+// that states the album's series: the book is then named by its series and
+// position as an untagged copy is ("Dark Road 1-5", DeriveFromPath). A range
+// goes before the first-book rule (an omnibus is not the book the series is
+// named for: a title tag that counts, else the range); a single first book
+// keeps the album. A book whose own leaf names it as the album does
 // ("Frank Herbert/Dune/Dune": a series named for its first book), alone or
 // beside only its author, a year, a volume marker or the series and the number
 // 1 ("Frank Herbert/Frank Herbert - Dune.m4b", "Dune/1965 - Dune"), keeps the
@@ -47,7 +52,7 @@ func TitleNotSeries(title string, md *Metadata, relPath string, isFolder, severa
 	if md == nil || title == "" || title != md.AlbumTag {
 		return title
 	}
-	p := readSeriesPath(relPath, isFolder, md.Series, md.Author)
+	p := readSeriesPath(relPath, isFolder, md.Series, md.Author, title)
 	if !p.namedForSeries(title) {
 		return title
 	}
@@ -66,12 +71,16 @@ func TitleNotSeries(title string, md *Metadata, relPath string, isFolder, severa
 		return tag
 	case okPath && (severalFiles || !okTag || carriesName(tag, series)):
 		return path
+	case okTag && p.isRange && (!severalFiles || carriesName(tag, series)):
+		return tag // an omnibus is never the first book named for its series
+	case p.isRange:
+		return p.untitled
 	case cmp.Or(md.SeriesIndex, p.position) == 1:
 		return title
 	case okTag && (!severalFiles || carriesName(tag, series)):
 		return tag
 	}
-	return title
+	return cmp.Or(p.untitled, title)
 }
 
 // MaybeSeriesTitle reports whether a stored title and series could be a book's
@@ -83,7 +92,7 @@ func MaybeSeriesTitle(relPath string, isFolder bool, title, series string) bool 
 	if strings.TrimSpace(title) == "" {
 		return false
 	}
-	return readSeriesPath(relPath, isFolder, series, "").namedForSeries(title)
+	return readSeriesPath(relPath, isFolder, series, "", "").namedForSeries(title)
 }
 
 // PathTitle is the title TitleNotSeries reads off a book's path (the title
@@ -91,7 +100,7 @@ func MaybeSeriesTitle(relPath string, isFolder bool, title, series string) bool 
 // else DeriveFromPath's; "" for a LeafSeries leaf without one), so the book
 // page can label a title the scan took from there as the path's.
 func PathTitle(relPath string, isFolder bool) string {
-	return readSeriesPath(relPath, isFolder, "", "").title
+	return readSeriesPath(relPath, isFolder, "", "", "").title
 }
 
 // seriesPath is what a book's tags and path say of its series and title for
@@ -107,9 +116,14 @@ type seriesPath struct {
 	// position is the leaf's volume number (DeriveFromPath's: a LeafSeries
 	// leaf's included), 0 for none.
 	position float64
+	// untitled is the series and position a LeafSeries leaf without a title
+	// part names its book by, as DeriveFromPath does ("Dark Road 1-5"), when
+	// title names that series; isRange says the leaf states a range. "" else.
+	untitled string
+	isRange  bool
 }
 
-func readSeriesPath(relPath string, isFolder bool, tagSeries, tagAuthor string) seriesPath {
+func readSeriesPath(relPath string, isFolder bool, tagSeries, tagAuthor, title string) seriesPath {
 	n := DeriveFromPath(relPath, isFolder)
 	p := seriesPath{
 		series: []string{tagSeries, n.Series}, title: n.Title, position: n.SeriesIndex,
@@ -120,8 +134,12 @@ func readSeriesPath(relPath string, isFolder bool, tagSeries, tagAuthor string) 
 	if l, ok := LeafSeries(leaf); ok {
 		// DeriveFromPath took the leaf's series and position over the folder
 		// holding the book, which still names a series the book is in; the
-		// title is the leaf's title part.
+		// title is the leaf's title part alone, "" with none (not DeriveFromPath's
+		// series and position).
 		p.title = l.Title
+		if l.Title == "" && n.Title != "" && namesAny(title, []string{l.Series}) {
+			p.untitled, p.isRange = n.Title, ValidSeriesRange(l.Position, l.PositionEnd)
+		}
 		if len(segs) > 2 {
 			p.series = append(p.series, segs[len(segs)-2])
 		}
@@ -170,6 +188,8 @@ func (p seriesPath) leafNames(title string) bool {
 // Leaf is what a book's leaf named "Author; Series; Book NN[; Title]" states
 // (LeafSeries).
 type Leaf struct {
+	// Author is the first part, used when there is no author folder.
+	Author string
 	// Series is the series part ("Indian Hill").
 	Series string
 	// Title is the title part, "" with none.
@@ -202,7 +222,7 @@ func LeafSeries(leaf string) (Leaf, bool) {
 	if parts[0] == "" || parts[1] == "" || m == nil {
 		return Leaf{}, false
 	}
-	l := Leaf{Series: parts[1], Title: strings.Join(parts[3:], "; ")}
+	l := Leaf{Author: parts[0], Series: parts[1], Title: strings.Join(parts[3:], "; ")}
 	if start, end, ok := ParseSeriesRange(m[1]); ok {
 		l.Position, l.PositionEnd = start, end
 	} else {
@@ -212,8 +232,11 @@ func LeafSeries(leaf string) (Leaf, bool) {
 }
 
 // PathLeafSeries reports whether a book's own leaf (its file's name without the
-// extension, or its folder's) is one LeafSeries reads, as DeriveFromPath reads it.
+// extension, its folder, or the parent of a disc folder) is one LeafSeries reads.
 func PathLeafSeries(relPath string, isFolder bool) bool {
+	if !strings.Contains(relPath, ";") {
+		return false
+	}
 	segs := pathSegments(relPath, isFolder)
 	_, ok := LeafSeries(segs[len(segs)-1])
 	return ok
@@ -223,7 +246,7 @@ func PathLeafSeries(relPath string, isFolder bool) bool {
 // in submatch 1 and the number it leads with, if any, in submatch 2. A marker
 // is a number ("04", "01-05", "2.5") or the placeholder "XX" ("??"), never a
 // word, so "Oprah; Picks; Book Club" states no series.
-var leafVolume = regexp.MustCompile(`^(?i:book)\s+((\d+(?:\.\d+)?)\S*|(?i:x+)|\?+)$`)
+var leafVolume = regexp.MustCompile(`^(?i:books?)\s+((\d+(?:\.\d+)?)\S*|(?i:x+)|\?+)$`)
 
 // volumeMarker reports whether a name is only a volume marker, "Book 10",
 // "Vol. 2", "C02", "#3" (splitSeriesIndex's prefixes and a number): no title.
@@ -291,3 +314,7 @@ func namesAny(name string, names []string) bool {
 func sameName(a, b string) bool {
 	return match.SameSeries(canonTag(a), canonTag(b))
 }
+
+// SameName is sameName for the backfill's test of a stored title against the
+// folder's (catalog's namesCheck).
+func SameName(a, b string) bool { return sameName(a, b) }

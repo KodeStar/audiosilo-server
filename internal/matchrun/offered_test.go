@@ -234,3 +234,65 @@ func TestRefreshApplyLeavesOutNoOps(t *testing.T) {
 		}
 	}
 }
+
+// An admin who reverts a community title keeps the restored value on the next
+// fill. A fresh proposal can still fill other fields on the book.
+func TestFillRespectsRevertedTitle(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := t.Context()
+	const path, title = "A/Martian", "The Martian (Unabridged)"
+	e.book(t, path, title, "B0UK000001", nil)
+	hit := cand("the-martian", 100, "")
+	hit.Description = ""
+	e.matcher.byASIN["B0UK000001"] = []meta.MatchCandidate{hit}
+	fill := func() {
+		t.Helper()
+		run := e.start(t, catalog.MatchModeRefresh, "uk")
+		if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill, UserID: e.admin}); err != nil {
+			t.Fatal(err)
+		}
+		e.runner.Wait()
+	}
+	fill()
+	if f := e.field(t, path, catalog.FieldTitle); f.Value != "The Martian" || f.Source != catalog.SourceCommunity {
+		t.Fatalf("first fill title = %+v", f)
+	}
+	revert := func() error {
+		return e.cat.EditBook(ctx, e.lib, path, catalog.BookEdit{Revert: []string{catalog.FieldTitle}, UserID: e.admin})
+	}
+	if err := revert(); err != nil {
+		t.Fatal(err)
+	}
+	hit.Description = "New description"
+	e.matcher.byASIN["B0UK000001"] = []meta.MatchCandidate{hit}
+	fill()
+	if f := e.field(t, path, catalog.FieldTitle); f.Value != title || f.Source != catalog.SourceEdited || !f.Locked {
+		t.Errorf("title after revert and fill = %+v", f)
+	}
+	if f := e.field(t, path, catalog.FieldDescription); f.Value != hit.Description {
+		t.Errorf("description after second fill = %+v", f)
+	}
+
+	// A fill that already planned the tidy must respect a revert committed
+	// between its last read and the write transaction too.
+	if err := e.cat.EditBook(ctx, e.lib, path, catalog.BookEdit{Set: map[string]string{
+		catalog.FieldTitle: title + " Audiobook",
+	}, Source: catalog.SourceCommunity}); err != nil {
+		t.Fatal(err)
+	}
+	reverted := make(chan error, 1)
+	e.runner.beforeEdit = func(*catalog.MatchRunItem) { reverted <- revert() }
+	fill()
+	select {
+	case err := <-reverted:
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("expected a fill that planned a title write")
+	}
+	if f := e.field(t, path, catalog.FieldTitle); f.Value != title || f.Source != catalog.SourceEdited {
+		t.Errorf("fill racing the revert wrote %+v", f)
+	}
+}
