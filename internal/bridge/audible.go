@@ -79,8 +79,8 @@ func AudiblePoll(account, template string, priority int) NewJob {
 	return NewJob{Kind: KindAudiblePoll, Params: raw, Priority: priority}
 }
 
-// pruneAudibleEnded keeps only the newest ended poll (or sync, kind) of the
-// account a new one is queued for (its dedupe key), inside Enqueue's
+// pruneAudibleEnded keeps only the newest ended job of j's kind (a poll or a
+// sync) for the account a new one is queued for (its dedupe key), inside Enqueue's
 // transaction: a poll every few hours, or a sync every 15 minutes, would
 // otherwise pile up in the job list.
 func pruneAudibleEnded(ctx context.Context, tx *sql.Tx, j NewJob, key string) error {
