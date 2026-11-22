@@ -201,6 +201,12 @@ func writeErrorReason(w http.ResponseWriter, status int, code, reason, msg strin
 	writeJSON(w, status, map[string]string{"error": msg, "code": code, "reason": reason})
 }
 
+// requestGaveUp reports whether the client cancelled r (it left the page, a
+// type-ahead moved on): a read that failed for that is no failure to log.
+func requestGaveUp(r *http.Request) bool {
+	return errors.Is(r.Context().Err(), context.Canceled)
+}
+
 // writeCatalogError maps a catalog/library error to an HTTP response. The
 // cross-cutting domain sentinels that don't need a handler-specific message get
 // a clean, leak-free 4xx; anything else is treated as an unexpected internal

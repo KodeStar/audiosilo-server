@@ -118,8 +118,10 @@ func (a *API) gatedScopes(w http.ResponseWriter, r *http.Request, msg string) (s
 	return scopes, keep, true
 }
 
+// writeScopeError answers a failed scope read with a 500, logged unless the
+// request gave up.
 func (a *API) writeScopeError(w http.ResponseWriter, r *http.Request, err error, msg string) {
-	if !errors.Is(r.Context().Err(), context.Canceled) {
+	if !requestGaveUp(r) {
 		a.log.Warn("load user scopes failed", "user", userFrom(r.Context()).ID, "err", err)
 	}
 	writeError(w, http.StatusInternalServerError, msg)
@@ -761,7 +763,7 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// The player aborts a type-ahead search on the next keystroke: a
 		// request that gave up is no failure, so no log line.
-		if errors.Is(r.Context().Err(), context.Canceled) {
+		if requestGaveUp(r) {
 			writeError(w, http.StatusInternalServerError, "search failed")
 			return
 		}
