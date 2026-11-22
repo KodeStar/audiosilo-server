@@ -209,13 +209,15 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 		}
 	}
 	err := c.db.WithUserStateTx(ctx, "PatchAudibleTitle", func(tx *sql.Tx) error {
-		var ok bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audible_titles WHERE account = ? AND asin = ?)`,
-			account, asin).Scan(&ok); err != nil {
-			return err
-		}
-		if !ok {
+		var library int64
+		var template string
+		err := tx.QueryRowContext(ctx, `SELECT COALESCE(a.library_id, 0), a.template FROM audible_titles t
+			JOIN audible_accounts a ON a.account = t.account WHERE t.account = ? AND t.asin = ?`, account, asin).Scan(&library, &template)
+		if errors.Is(err, sql.ErrNoRows) {
 			return ErrUnknownTitle
+		}
+		if err != nil {
+			return err
 		}
 		now := c.ts()
 		if p.Rejected != nil {
@@ -226,7 +228,7 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 			}
 		}
 		if p.DestPath != nil {
-			if err := checkDestOwnFolder(ctx, tx, account, *p.DestPath); err != nil {
+			if err := checkDestOwnFolder(ctx, tx, library, *p.DestPath, template); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE audible_titles SET dest_path = ?, updated_at = ? WHERE account = ? AND asin = ?`,
@@ -248,37 +250,93 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 	return c.AudibleTitle(ctx, account, asin)
 }
 
-// checkDestOwnFolder refuses (a bridge.ErrAudibleDestPath) a destination whose
-// folder is a disc folder (metadata.IsDiscFolder: "CD 3") directly inside a
-// folder of account's library that is an indexed book, or that holds a `book`
-// folder override (one disc there on its own, "Book/CD 1", is its own book
-// until a second makes the disc set the override joins): the scan joins the
-// disc into that book, so the backup's fold would refuse it (ErrImportNotOwn)
-// only after the whole download and its placement in the other book's folder
-// (bridge#46). Without an override, discs stay books of their own and the
-// destination is allowed. The destination's folder is its last segment, or the
-// one above a file name with an audio extension, as the Bridge reads it. A
-// paused account (no library) has no book to check.
-func checkDestOwnFolder(ctx context.Context, tx *sql.Tx, account, dest string) error {
-	folder := dest
-	if metadata.IsAudio(dest) {
-		folder = path.Dir(dest)
+// The parent of the disc destination is already indexed as a book, or the
+// admin explicitly set it to join its discs. The former alone does not prove
+// the next scan would join the backup.
+var (
+	ErrAudibleIndexedBook  = fmt.Errorf("%w: the disc folder is inside an indexed book", bridge.ErrAudibleDestPath)
+	ErrAudibleBookOverride = fmt.Errorf("%w: the Audible disc destination conflicts with the one-book folder setting", bridge.ErrAudibleDestPath)
+)
+
+// audibleDiscParent is the folder that could absorb the backup's disc, or ""
+// when there is none. The Bridge renders templates. We can check a literal
+// disc folder even if the file name uses a title variable. For a folder that
+// depends on a variable, importOwnBook checks the actual placement.
+func audibleDiscParent(dest, template string) string {
+	folder := strings.TrimSpace(dest)
+	fromTemplate := folder == ""
+	var templateFile bool
+	if fromTemplate {
+		folder = strings.TrimSpace(template)
+		name := path.Base(folder)
+		templateFile = name == "{OriginalFilename}" || (name != "{Ext}" && strings.HasSuffix(name, "{Ext}"))
 	}
-	book := path.Dir(folder)
-	if dest == "" || book == "." || !metadata.IsDiscFolder(path.Base(folder)) {
+	if templateFile || metadata.IsAudio(folder) {
+		folder = path.Dir(folder)
+	}
+	if !metadata.IsDiscFolder(path.Base(folder)) {
+		return ""
+	}
+	parent := path.Dir(folder)
+	if parent == "." || (fromTemplate && strings.ContainsAny(parent, "{}\\")) {
+		return ""
+	}
+	return parent
+}
+
+func checkDestOwnFolder(ctx context.Context, tx *sql.Tx, library int64, dest, template string) error {
+	book := audibleDiscParent(dest, template)
+	if book == "" || library == 0 {
 		return nil
 	}
-	var joins bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audible_accounts a JOIN books b ON b.library_id = a.library_id
-		  WHERE a.account = ?1 AND b.rel_path = ?2) OR EXISTS(SELECT 1 FROM audible_accounts a JOIN folder_overrides o ON o.library_id = a.library_id
-		  WHERE a.account = ?1 AND o.path = ?2 AND o.mode = ?3)`, account, book, OverrideBook).Scan(&joins)
+	var override, indexed bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM folder_overrides WHERE library_id = ?1 AND path = ?2 AND mode = ?3),
+		EXISTS(SELECT 1 FROM books WHERE library_id = ?1 AND rel_path = ?2)`, library, book, OverrideBook).Scan(&override, &indexed)
+	switch {
+	case err != nil:
+		return err
+	case override:
+		return fmt.Errorf("%w (%s). Choose a separate folder for the backup", ErrAudibleBookOverride, book)
+	case indexed:
+		return fmt.Errorf("%w (%s). Choose a separate folder for the backup", ErrAudibleIndexedBook, book)
+	}
+	return nil
+}
+
+// checkAudibleRemap checks the saved destinations in the library the Bridge
+// proposes for this account, including when a paused account resumes.
+func checkAudibleRemap(ctx context.Context, tx *sql.Tx, account string, library int64, template string) error {
+	if err := checkDestOwnFolder(ctx, tx, library, "", template); err != nil {
+		return err
+	}
+	dests, err := queryRows(ctx, tx, func(rows *sql.Rows, dest *string) error { return rows.Scan(dest) },
+		`SELECT DISTINCT dest_path FROM audible_titles WHERE account = ? AND dest_path <> ''`, account)
 	if err != nil {
 		return err
 	}
-	if joins {
-		return fmt.Errorf("%w: %s is a disc folder of the book %s, which the backup would join; pick a folder of its own", bridge.ErrAudibleDestPath, folder, book)
+	for _, dest := range dests {
+		if err := checkDestOwnFolder(ctx, tx, library, dest, ""); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// checkAudibleOverride checks the other order of edits. Open backups keep
+// their original placement if the account is remapped or the title is edited.
+func checkAudibleOverride(ctx context.Context, tx *sql.Tx, library int64, book string) error {
+	var conflict bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM audible_accounts WHERE library_id = ?1 AND template <> '' AND audible_disc_parent('', template) = ?2
+		UNION ALL SELECT 1 FROM audible_accounts a JOIN audible_titles t ON t.account = a.account
+			WHERE a.library_id = ?1 AND t.dest_path <> '' AND audible_disc_parent(t.dest_path, '') = ?2
+		UNION ALL SELECT 1 FROM bridge_jobs j INDEXED BY idx_bridge_jobs_open WHERE library_id = ?1 AND kind = ?3 AND state IN `+bridge.OpenStatesSQL+`
+			AND audible_disc_parent(`+bridge.ParamSQL("j.params", "$.dest_path")+`, `+bridge.ParamSQL("j.params", "$.template")+`) = ?2)`,
+		library, book, bridge.KindAudibleImport).Scan(&conflict)
+	if err == nil && conflict {
+		return fmt.Errorf("%w (%s). Choose a separate folder for the backup", ErrAudibleBookOverride, book)
+	}
+	return err
 }
 
 // AudibleAccountPatch is the console's change to an account: its policy, its
@@ -306,7 +364,8 @@ func (c *Catalog) PatchAudibleAccount(ctx context.Context, id string, p AudibleA
 	}
 	err := c.db.WithTx(ctx, "PatchAudibleAccount", func(tx *sql.Tx) error {
 		var policy string
-		err := tx.QueryRowContext(ctx, `SELECT policy FROM audible_accounts WHERE account = ?`, id).Scan(&policy)
+		var library int64
+		err := tx.QueryRowContext(ctx, `SELECT policy, COALESCE(library_id, 0) FROM audible_accounts WHERE account = ?`, id).Scan(&policy, &library)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrUnknownAccount
 		}
@@ -322,6 +381,9 @@ func (c *Catalog) PatchAudibleAccount(ctx context.Context, id string, p AudibleA
 			}
 		}
 		if p.Template != nil {
+			if err := checkDestOwnFolder(ctx, tx, library, "", *p.Template); err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, `UPDATE audible_accounts SET template = ?, updated_at = ? WHERE account = ?`,
 				*p.Template, now, id); err != nil {
 				return err
@@ -739,7 +801,7 @@ func (c *Catalog) FoldAudibleImport(ctx context.Context, j bridge.Job) error {
 // is indexed in a books library (else ErrImportNotIndexed) and is the title's
 // own (else ErrImportNotOwn): it carries the title's ASIN (the Bridge's
 // enrichment set it, or the book had it), or it holds only the files the
-// backup placed (a book the backup made). A file the Bridge placed into a
+// backup placed. A joined disc set must pass the file check even with the ASIN. A file the Bridge placed into a
 // folder book already there (the scan makes a folder one book) joins that
 // book, which stays its own title's. Never the book the admin marked "Not
 // this book" for the title. A refusal is a *foldRefusal.
@@ -763,12 +825,19 @@ func importOwnBook(ctx context.Context, tx *sql.Tx, p bridge.AudibleImportParams
 		return err
 	case rejected:
 		return &foldRefusal{AudibleFoldRejectedMatch, ErrImportNotOwn}
-	case strings.EqualFold(asin, p.ASIN):
-		return nil
 	}
+	// A newly joined disc set can carry the ASIN the Bridge just wrote.
+	// In that case require the indexed files to belong to this backup.
+	joinedDisc := folder && audibleDiscParent(p.DestPath, p.Template) == r.Path
 	placed := make(map[string]bool, len(r.Files))
 	for _, f := range r.Files {
 		placed[f.Path] = true
+		if folder && audibleDiscParent(f.Path, "") == r.Path {
+			joinedDisc = true
+		}
+	}
+	if strings.EqualFold(asin, p.ASIN) && !joinedDisc {
+		return nil
 	}
 	files := []string{r.Path} // a single-file book is its file
 	if folder {

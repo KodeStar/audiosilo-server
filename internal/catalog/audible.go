@@ -309,9 +309,16 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 			return ErrNotBookLibrary
 		}
 		var was int64
-		err = tx.QueryRowContext(ctx, `SELECT user_id FROM audible_accounts WHERE account = ?`, id).Scan(&was)
+		var oldLibrary sql.NullInt64
+		var template string
+		err = tx.QueryRowContext(ctx, `SELECT user_id, library_id, template FROM audible_accounts WHERE account = ?`, id).Scan(&was, &oldLibrary, &template)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		if err == nil && in.LibraryID != oldLibrary.Int64 {
+			if err := checkAudibleRemap(ctx, tx, id, in.LibraryID, template); err != nil {
+				return err
+			}
 		}
 		remapped := err == nil && was != in.UserID
 		now := c.ts()
@@ -379,36 +386,46 @@ func cancelAudibleJobs(ctx context.Context, tx *sql.Tx, account string, now time
 	return bridge.CancelAudibleSyncs(ctx, tx, account, bridge.CancelAudibleRemoved, now)
 }
 
-// CancelOrphanAudibleJobs cancels the open Audible jobs (poll, backups, sync)
-// of every account that is no longer there: deleting a person drops their
-// accounts by the schema's cascade (auth.DeleteUser, which can't reach the job
-// queue), and their jobs would otherwise stay open, a backup downloading for
-// nobody. It returns how many accounts it found with a job not yet asked to
-// stop; none is no change, so it is safe to call again.
+// CancelOrphanAudibleJobs recovers open jobs left after their account went.
+// Only the open-job index is walked. The common empty pass needs no writer.
 func (c *Catalog) CancelOrphanAudibleJobs(ctx context.Context) (int, error) {
-	var gone []string
-	// A job whose params name no account (a damaged row reads as NULL) is
-	// passed by: NULL NOT IN an empty audible_accounts is true, and a NULL
-	// account would fail the scan, the whole sweep with it.
 	accountSQL := bridge.ParamSQL("params", "$.account")
-	err := c.db.WithTx(ctx, "CancelOrphanAudibleJobs", func(tx *sql.Tx) error {
-		var err error
-		gone, err = queryRows(ctx, tx, func(rows *sql.Rows, account *string) error { return rows.Scan(account) },
-			`SELECT DISTINCT `+accountSQL+` FROM bridge_jobs
-			  WHERE kind IN (?, ?, ?) AND state IN `+bridge.OpenStatesSQL+` AND cancel_requested = 0
-			    AND `+accountSQL+` IS NOT NULL AND `+accountSQL+` NOT IN (SELECT account FROM audible_accounts)`,
-			bridge.KindAudiblePoll, bridge.KindAudibleImport, bridge.KindAudibleSync)
-		if err != nil {
-			return err
-		}
+	gone, err := queryRows(ctx, c.db, func(rows *sql.Rows, account *string) error { return rows.Scan(account) },
+		`SELECT DISTINCT `+accountSQL+` FROM bridge_jobs INDEXED BY idx_bridge_jobs_open
+		 WHERE kind IN (?, ?, ?) AND state IN `+bridge.OpenStatesSQL+` AND cancel_requested = 0
+		   AND `+accountSQL+` IS NOT NULL AND `+accountSQL+` NOT IN (SELECT account FROM audible_accounts)`,
+		bridge.KindAudiblePoll, bridge.KindAudibleImport, bridge.KindAudibleSync)
+	if err != nil {
+		return 0, err
+	}
+	return c.CancelRemovedAudibleJobs(ctx, gone)
+}
+
+// CancelRemovedAudibleJobs cancels jobs for the listed accounts that are still
+// absent. A fresh mapping between a delete (or the scheduler read) and this
+// transaction keeps its jobs.
+func (c *Catalog) CancelRemovedAudibleJobs(ctx context.Context, gone []string) (int, error) {
+	if len(gone) == 0 {
+		return 0, nil
+	}
+	n := 0
+	err := c.db.WithTx(ctx, "CancelRemovedAudibleJobs", func(tx *sql.Tx) error {
 		for _, account := range gone {
-			if err := cancelAudibleJobs(ctx, tx, account, c.now()); err != nil {
+			// The Bridge may have mapped the account again since the read.
+			var exists bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audible_accounts WHERE account = ?)`, account).Scan(&exists); err != nil {
 				return err
+			}
+			if !exists {
+				if err := cancelAudibleJobs(ctx, tx, account, c.now()); err != nil {
+					return err
+				}
+				n++
 			}
 		}
 		return nil
 	})
-	return len(gone), err
+	return n, err
 }
 
 // AudibleAccount returns account id, ErrUnknownAccount when there is none.

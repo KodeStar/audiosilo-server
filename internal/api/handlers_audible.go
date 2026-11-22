@@ -71,6 +71,14 @@ func positiveLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return n, true
 }
 
+// The deletion already committed. A later scheduler pass retries a failed
+// cancellation, including one interrupted by a server restart.
+func (a *API) cancelRemovedAudibleJobs(r *http.Request, accounts []string) {
+	if _, err := a.cat.CancelRemovedAudibleJobs(context.WithoutCancel(r.Context()), accounts); err != nil {
+		a.log.Warn("cancel a deleted person's audible jobs failed", "err", err)
+	}
+}
+
 // writeAudibleError answers an Audible catalog error.
 func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 	switch {
@@ -90,8 +98,6 @@ func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 		writeErrorCode(w, http.StatusNotFound, "unknown_account", "no such Audible account")
 	case errors.Is(err, catalog.ErrUnknownTitle):
 		writeErrorCode(w, http.StatusNotFound, "unknown_title", "no such Audible title")
-	case errors.Is(err, bridge.ErrAudibleDestPath):
-		writeErrorCode(w, http.StatusBadRequest, "invalid_dest_path", err.Error())
 	case errors.Is(err, bridge.ErrAudibleTemplate):
 		writeErrorCode(w, http.StatusBadRequest, "invalid_template", err.Error())
 	case errors.Is(err, catalog.ErrASINSet):

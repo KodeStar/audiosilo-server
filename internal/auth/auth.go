@@ -1681,6 +1681,10 @@ func (s *Service) deleteUser(ctx context.Context, id int64, keep, del []int64, l
 				return err
 			}
 		}
+		out.AudibleAccounts, err = deletedAudibleAccounts(ctx, tx, id)
+		if err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE managed_by = ?`, id)
 		if err != nil {
 			return err
@@ -1756,11 +1760,33 @@ func (s *Service) keepMembers(ctx context.Context, tx *sql.Tx, owner int64, list
 	return kept, rows.Err()
 }
 
-// DeletedUser is what DeleteUser did with the person's household members: how
-// many it deleted and the usernames of those it kept ([] for none).
+// deletedAudibleAccounts captures the account ids before their owners' rows
+// cascade. Kept members have already been detached. The job queue uses these
+// ids after commit, even when the account was mapped to another library.
+func deletedAudibleAccounts(ctx context.Context, tx *sql.Tx, id int64) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT account FROM audible_accounts
+		WHERE user_id IN (SELECT ?1 UNION ALL SELECT id FROM users WHERE managed_by = ?1)`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var accounts []string
+	for rows.Next() {
+		var account string
+		if err := rows.Scan(&account); err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+	return accounts, rows.Err()
+}
+
+// DeletedUser lists the Audible accounts that cascaded, the number of members
+// deleted and the usernames of those kept ([] for none).
 type DeletedUser struct {
-	MembersDeleted int
-	MembersKept    []string
+	AudibleAccounts []string
+	MembersDeleted  int
+	MembersKept     []string
 }
 
 // SetPassword sets (or clears) an account's password. A non-empty password is

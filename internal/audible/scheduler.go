@@ -44,7 +44,8 @@ func RunScheduler(ctx context.Context, d modules.Deps) {
 	}
 }
 
-// SchedulerTick is one pass at now: when an online Bridge runs audible.poll,
+// SchedulerTick first cancels orphan jobs, even with the Bridge offline.
+// When an online Bridge runs audible.poll,
 // each due account's poll is queued (and when it runs audible.sync, each due
 // account's sync: queueSyncs) (catalog.DueAudiblePolls: mapped to a
 // library and not queued within its poll_hours), deduped per account by the
@@ -52,14 +53,12 @@ func RunScheduler(ctx context.Context, d modules.Deps) {
 // recorded. With no Bridge online, or one without Audible, nothing is queued:
 // the polls fall due again once it is back.
 func SchedulerTick(ctx context.Context, d modules.Deps, now time.Time) error {
+	_, sweepErr := d.Catalog.CancelOrphanAudibleJobs(ctx)
 	h, err := d.Bridge.Online(ctx)
-	if err != nil {
-		return err
+	if err != nil || h == nil {
+		return errors.Join(sweepErr, err)
 	}
-	if h == nil {
-		return nil
-	}
-	var errs []error
+	errs := []error{sweepErr}
 	if h.Offers(bridge.KindAudiblePoll) {
 		errs = append(errs, queuePolls(ctx, d, now))
 	}

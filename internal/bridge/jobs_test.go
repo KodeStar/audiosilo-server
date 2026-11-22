@@ -91,6 +91,56 @@ func (q *testQueue) verify(t *testing.T, path string, priority int) *Job {
 	return job
 }
 
+// Polls have their own history tests. Fetch and retain keep every unfolded
+// result, sync keeps the newest ended job, and verify keeps its full history.
+func TestEnqueuePrunesKindHistory(t *testing.T) {
+	t.Parallel()
+	q := fetchQueue(t)
+	ctx := t.Context()
+	if err := q.SaveHeartbeat(ctx, q.token, Status{Version: "0.9.0", Kinds: []string{KindPodcastFetch, KindPodcastRetain, KindAudibleSync, KindVerify},
+		Libraries: []LibraryStatus{{LibraryID: q.lib, MountPath: "/podcasts", Mapped: true, Writable: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range []NewJob{
+		{Kind: KindPodcastFetch, LibraryID: &q.lib, Path: ptr("Show/episode.mp3"), Params: json.RawMessage(`{"show_id":"0123456789abcdef","episode_id":"fedcba9876543210"}`)},
+		{Kind: KindPodcastRetain, LibraryID: &q.lib, Path: ptr("Show"), Params: json.RawMessage(`{"show_id":"0123456789abcdef"}`)},
+		AudibleSync("acct0001", 0), {Kind: KindVerify, LibraryID: &q.lib},
+	} {
+		t.Run(job.Kind, func(t *testing.T) {
+			var ids []int64
+			for i := range 4 {
+				j, created, err := q.Enqueue(ctx, job)
+				if err != nil || !created {
+					t.Fatalf("enqueue: created %t, %v", created, err)
+				}
+				ids = append(ids, j.ID)
+				if i < 3 {
+					if _, err := q.Cancel(ctx, j.ID); err != nil {
+						t.Fatal(err)
+					}
+					// Only the middle result has been folded.
+					if i == 1 && IsPodcast(job.Kind) {
+						if _, err := q.db.ExecContext(ctx, `INSERT INTO podcast_folded(job_id, at) VALUES(?, 't')`, j.ID); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+			want := ids
+			switch job.Kind {
+			case KindPodcastFetch, KindPodcastRetain:
+				want = []int64{ids[0], ids[2], ids[3]}
+			case KindAudibleSync:
+				want = ids[2:]
+			}
+			got, err := queryColumn[int64](ctx, q.db, `SELECT id FROM bridge_jobs WHERE kind = ? ORDER BY id`, job.Kind)
+			if err != nil || !slices.Equal(got, want) {
+				t.Fatalf("history = %v, %v, want %v", got, err, want)
+			}
+		})
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
 
 // damageParams stores params that are not JSON on job id, as a damaged row has.

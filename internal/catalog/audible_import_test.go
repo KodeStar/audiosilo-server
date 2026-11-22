@@ -573,6 +573,26 @@ func TestFoldAudibleImportOwnBook(t *testing.T) {
 		}
 		return tt
 	}
+	// A reclassified disc set may have just received the title's ASIN from the
+	// Bridge. Its other tape proves that the placed disc isn't the whole book.
+	const tapes = "Other Tapes"
+	const placed = tapes + "/CD2/One.m4b"
+	joined := &Book{LibraryID: lib, RelPath: tapes, Title: tapes, IsFolder: true, ASIN: "B000000004",
+		Files: []BookFile{{RelPath: tapes + "/CD1/Tape.m4b"}, {RelPath: placed, Seq: 1}}}
+	if _, err := f.c.UpsertBook(f.ctx, joined); err != nil {
+		t.Fatal(err)
+	}
+	discJob := done(4, "B000000004", tapes, placed)
+	if err := f.c.FoldAudibleImport(f.ctx, discJob); !errors.Is(err, ErrImportNotOwn) || match("B000000004").Match != nil {
+		t.Fatalf("disc joined another tape carrying the backup's ASIN: %v", err)
+	}
+	joined.Files = []BookFile{{RelPath: placed}}
+	if _, err := f.c.UpsertBook(f.ctx, joined); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.FoldAudibleImport(f.ctx, discJob); err != nil {
+		t.Fatalf("disc set holds only the backup's own file: %v", err)
+	}
 	// One's file joined Other's folder book: not One's.
 	if err := f.c.FoldAudibleImport(f.ctx, done(1, "B000000001", "Author/Other", "Author/Other/One.m4b")); !errors.Is(err, ErrImportNotOwn) {
 		t.Fatalf("joined another title's book: %v, want ErrImportNotOwn", err)
@@ -967,14 +987,21 @@ func TestAudibleIgnoredAndNoSyncBackups(t *testing.T) {
 func TestCancelOrphanAudibleJobsPassesDamagedParams(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
-	for i, params := range []string{`{`, `{"account":"acct0009"}`} {
+	for key, params := range map[string]string{"audible.sync|||damaged1": `{`, "audible.sync|||acct0009": `{"account":"acct0009"}`} {
 		if _, err := c.db.ExecContext(ctx, `INSERT INTO bridge_jobs(kind, params, dedupe_key, created_at, updated_at)
-			VALUES(?, ?, ?, 't', 't')`, bridge.KindAudibleSync, params, fmt.Sprintf("orphan%d", i)); err != nil {
+			VALUES(?, ?, ?, 't', 't')`, bridge.KindAudibleSync, params, key); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if n, err := c.CancelOrphanAudibleJobs(ctx); err != nil || n != 1 {
 		t.Fatalf("sweep = %d, %v; want the one orphaned account, no error", n, err)
+	}
+	before, _ := c.ContentGeneration()
+	if n, err := c.CancelOrphanAudibleJobs(ctx); err != nil || n != 0 {
+		t.Fatalf("idle sweep = %d, %v", n, err)
+	}
+	if after, _ := c.ContentGeneration(); after != before {
+		t.Fatalf("idle sweep took the writer: generation %d became %d", before, after)
 	}
 }
 

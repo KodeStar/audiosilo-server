@@ -4033,6 +4033,8 @@
   "errors.invalidDestPath": "That isn't a place inside the library. Use folders and a file name such as Author/Series/Title.m4b, with no hidden folders, backslashes or \"..\".",
   "errors.invalidTemplate": "That template doesn't work. Use the variables in braces, such as {Author}/{Series}/{Title}, and keep it under 500 characters.",
   "errors.invalid_template.account": "This account's placement template no longer works. Fix it in Account settings and back up again.",
+  "errors.invalid_dest_path.indexed_book": "This disc folder is inside an indexed book. Choose a separate folder for the Audible backup.",
+  "errors.invalid_dest_path.book_override": "This Audible backup uses a disc folder that the folder setting would join into one book. Choose a separate folder for the backup.",
   "errors.invalid_dest_path.title": "This title's destination is no longer valid. Set it again with Destination and back up again.",
   "librivox.title": "LibriVox",
   "librivox.description": "Find a free public-domain audiobook on LibriVox and add it to a library. Your Bridge downloads it, places it and matches it to its recording.",

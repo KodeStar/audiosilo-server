@@ -2,15 +2,19 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/audible"
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/modules"
 )
 
 // Bridge Phase 4b: backing up Audible titles (audible.import).
@@ -263,8 +267,13 @@ func TestAudibleDestPathRefusesDiscFolderOfABook(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, dest := range []string{mistbornBook + "/CD 3", mistbornBook + "/Disc2/One.m4b", cradleBook + "/cd1", "Lone/Saga/CD 2", "Lone/Saga/CD 1/One.m4b"} {
-		if code, out := patch(dest); code != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" {
-			t.Errorf("dest %q: %d %s, want 400 invalid_dest_path", dest, code, out)
+		reason, message := "indexed_book", "inside an indexed book"
+		if strings.HasPrefix(dest, "Lone/") {
+			reason, message = "book_override", "one-book folder setting"
+		}
+		if code, out := patch(dest); code != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" ||
+			reasonOf(out) != reason || !strings.Contains(out, message) {
+			t.Errorf("dest %q: %d %s, want 400 invalid_dest_path, %s", dest, code, out, reason)
 		}
 		if x := b.audibleTitle(t, "B000000001"); x.DestPath != "" {
 			t.Fatalf("a refused destination was stored: %q", x.DestPath)
@@ -274,6 +283,95 @@ func TestAudibleDestPathRefusesDiscFolderOfABook(t *testing.T) {
 		if code, out := patch(dest); code != http.StatusOK {
 			t.Errorf("dest %q: %d %s, want 200", dest, code, out)
 		}
+	}
+}
+
+// F1: CD1 is still its own indexed book when the destination is saved.
+func TestAudibleDestinationBeforeBookOverride(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t, title("B000000001", "One", "available", 0, ""))
+	ctx := t.Context()
+	const parent = "Other Tapes"
+	if _, err := b.cat.UpsertBook(ctx, &catalog.Book{LibraryID: b.lib.ID, RelPath: parent + "/CD1", Title: "Unrelated tape", IsFolder: true}); err != nil {
+		t.Fatal(err)
+	}
+	setDest := func(dest string) {
+		t.Helper()
+		resp, out := b.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001", b.adminTok, fmt.Sprintf(`{"dest_path":%q}`, dest))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("set destination %q: %d %s", dest, resp.StatusCode, out)
+		}
+	}
+	override := fmt.Sprintf("/api/v1/admin/libraries/%d/folder-override?path=%s", b.lib.ID, url.QueryEscape(parent))
+	refused := func() {
+		t.Helper()
+		resp, out := b.do(t, "PUT", override, b.adminTok, `{"mode":"book"}`)
+		if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" || reasonOf(out) != "book_override" {
+			t.Fatalf("book override: %d %s", resp.StatusCode, out)
+		}
+		if modes, err := b.cat.FolderOverrides(ctx, b.lib.ID); err != nil || modes[parent] == catalog.OverrideBook {
+			t.Fatalf("override after refusal: %v, %v", modes, err)
+		}
+	}
+	setDest(parent + "/CD2")
+	refused()
+	// A job snapshots the old destination. Changing the title while it waits
+	// still cannot allow a conflicting override for that running backup.
+	resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001/backup", b.adminTok, "")
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("queue backup: %d %s", resp.StatusCode, out)
+	}
+	setDest("Own folder")
+	refused()
+	var queued struct {
+		ID int64 `json:"job_id"`
+	}
+	decodeInto(t, out, &queued)
+	if _, err := b.api.bridge.Cancel(ctx, queued.ID); err != nil {
+		t.Fatal(err)
+	}
+	if resp, out := b.do(t, "PUT", override, b.adminTok, `{"mode":"book"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("override after changing destination and cancelling job: %d %s", resp.StatusCode, out)
+	}
+}
+
+// An account carries its destinations when mapped to a different library.
+func TestAudibleDiscDestinationOnRemapAndTemplate(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t, title("B000000001", "One", "available", 0, ""))
+	lib, err := b.cat.CreateLibrary(t.Context(), catalog.Library{Name: "Second", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.SetFolderOverride(t.Context(), lib.ID, "Tapes", catalog.OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	titleURL := "/api/v1/admin/audible/titles/" + testAccount + "/B000000001"
+	if resp, out := b.do(t, "PATCH", titleURL, b.adminTok, `{"dest_path":"Tapes/CD2/One.m4b"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("destination in original library: %d %s", resp.StatusCode, out)
+	}
+	if code, out := b.putAccount(t, testAccount, b.adminID, lib.ID); code != http.StatusBadRequest || reasonOf(out) != "book_override" {
+		t.Fatalf("remap: %d %s", code, out)
+	}
+	acct, err := b.cat.AudibleAccount(t.Context(), testAccount)
+	if err != nil || *acct.LibraryID != b.lib.ID {
+		t.Fatalf("mapping after refusal: %+v, %v", acct, err)
+	}
+	if resp, out := b.do(t, "PATCH", titleURL, b.adminTok, `{"dest_path":""}`); resp.StatusCode != http.StatusOK {
+		t.Fatal(out)
+	}
+	if code, out := b.putAccount(t, testAccount, b.adminID, lib.ID); code != http.StatusOK {
+		t.Fatalf("remap after clearing destination: %d %s", code, out)
+	}
+	accountURL := "/api/v1/admin/audible/accounts/" + testAccount
+	if resp, out := b.do(t, "PATCH", accountURL, b.adminTok, `{"template":"Tapes/CD2/{OriginalFilename}"}`); resp.StatusCode != http.StatusBadRequest || reasonOf(out) != "book_override" {
+		t.Fatalf("conflicting template: %d %s", resp.StatusCode, out)
+	}
+	if resp, out := b.do(t, "PATCH", accountURL, b.adminTok, `{"template":"Backups/CD2/{Title}.m4b"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("separate template: %d %s", resp.StatusCode, out)
+	}
+	if err := b.cat.SetFolderOverride(t.Context(), lib.ID, "Backups", catalog.OverrideBook); !errors.Is(err, catalog.ErrAudibleBookOverride) {
+		t.Fatalf("override after template: %v", err)
 	}
 }
 
@@ -303,7 +401,13 @@ func TestAudibleDeletePersonCancelsTheirJobs(t *testing.T) {
 		}
 		return queued.JobID
 	}
-	for account, user := range map[string]int64{"acct0002": alex, "acct0003": alex, "acct0004": blair} {
+	member, _ := newUserWithSession(t, b.testEnv, "member", false)
+	for _, id := range []int64{member, blair} {
+		if _, err := b.db.ExecContext(ctx, `UPDATE users SET managed_by=?, member_kind='grownup', member_access='all' WHERE id=?`, alex, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for account, user := range map[string]int64{"acct0002": alex, "acct0003": alex, "acct0004": blair, "acct0005": member, "acct0006": blair} {
 		if code, out := b.putAccount(t, account, user, b.lib.ID); code != http.StatusOK {
 			t.Fatalf("put %s: %d %s", account, code, out)
 		}
@@ -313,7 +417,19 @@ func TestAudibleDeletePersonCancelsTheirJobs(t *testing.T) {
 		t.Fatalf("claimed %d, want %d", j.ID, running)
 	}
 	queued, others, admins := backup("acct0003"), backup("acct0004"), backup(testAccount)
-	if resp, out := b.do(t, "DELETE", fmt.Sprintf("/api/v1/admin/users/%d", alex), b.adminTok, ""); resp.StatusCode != http.StatusNoContent {
+	// The queued backup still belongs to Alex after an account changes libraries.
+	remap, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Remapped", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out := b.putAccount(t, "acct0003", alex, remap.ID); code != http.StatusOK {
+		t.Fatalf("remap queued backup: %d %s", code, out)
+	}
+	members, orphan := backup("acct0005"), backup("acct0006")
+	if _, err := b.db.ExecContext(ctx, `DELETE FROM audible_accounts WHERE account = 'acct0006'`); err != nil {
+		t.Fatal(err)
+	}
+	if resp, out := b.do(t, "DELETE", fmt.Sprintf("/api/v1/admin/users/%d?keep_members=%d", alex, blair), b.adminTok, ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete alex: %d %s", resp.StatusCode, out)
 	}
 	job := func(id int64) *bridge.Job {
@@ -330,10 +446,26 @@ func TestAudibleDeletePersonCancelsTheirJobs(t *testing.T) {
 	if j := job(running); j.State != bridge.StateClaimed || !j.CancelRequested || j.Error != bridge.CancelAudibleRemoved {
 		t.Errorf("alex's running backup: %s cancel %t %q, want asked to stop", j.State, j.CancelRequested, j.Error)
 	}
-	for name, id := range map[string]int64{"blair's": others, "the admin's": admins} {
+	if j := job(members); j.State != bridge.StateCancelled {
+		t.Errorf("deleted member's job stayed %s", j.State)
+	}
+	for name, id := range map[string]int64{"kept member's": others, "the admin's": admins, "unrelated orphan's": orphan} {
 		if j := job(id); j.State != bridge.StateQueued || j.CancelRequested {
 			t.Errorf("%s backup: %s cancel %t, want queued", name, j.State, j.CancelRequested)
 		}
+	}
+	// The scheduler recovers the unrelated orphan even with the Bridge offline.
+	if _, err := b.db.ExecContext(ctx, `UPDATE bridge_status SET heartbeat_at = NULL`); err != nil {
+		t.Fatal(err)
+	}
+	if err := audible.SchedulerTick(ctx, modules.Deps{Catalog: b.cat, Bridge: b.api.bridge}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if j := job(orphan); j.State != bridge.StateCancelled || j.Error != bridge.CancelAudibleRemoved {
+		t.Fatalf("orphan after scheduler pass: %+v", j)
+	}
+	if j := job(others); j.State != bridge.StateQueued {
+		t.Fatalf("kept member's backup after scheduler pass: %s", j.State)
 	}
 	// Again: nothing left to cancel.
 	if n, err := b.cat.CancelOrphanAudibleJobs(ctx); n != 0 || err != nil {

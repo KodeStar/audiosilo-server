@@ -498,11 +498,7 @@ func (a *API) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
 		a.writeMemberError(w, err, "delete member failed", "could not delete the member", "member", id)
 		return
 	}
-	// The member is deleted whatever this says; a failure leaves the jobs to
-	// fail at the Bridge (unknown_account), as on handleDeleteUser.
-	if _, err := a.cat.CancelOrphanAudibleJobs(context.WithoutCancel(r.Context())); err != nil {
-		a.log.Warn("cancel a deleted member's audible jobs failed", "member", id, "err", err)
-	}
+	a.cancelRemovedAudibleJobs(r, m.AudibleAccounts)
 	a.audit(r, "member.delete", m.Username, map[string]any{"member": m.Username})
 	w.WriteHeader(http.StatusNoContent)
 }

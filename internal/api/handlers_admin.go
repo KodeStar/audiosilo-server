@@ -442,13 +442,7 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		a.writeUserError(w, err, "could not delete user")
 		return
 	}
-	// Their Audible accounts went with them (and their deleted members'): end
-	// those accounts' open jobs too (bridge#46). The person is deleted
-	// whatever this says; a failure leaves the jobs to fail at the Bridge
-	// (unknown_account). Committed, it runs even if the console hung up.
-	if _, err := a.cat.CancelOrphanAudibleJobs(context.WithoutCancel(r.Context())); err != nil {
-		a.log.Warn("cancel a deleted person's audible jobs failed", "user", id, "err", err)
-	}
+	a.cancelRemovedAudibleJobs(r, done.AudibleAccounts)
 	// The household facts only for someone who had members (no "0 deleted,
 	// none kept" on every other deletion).
 	var details map[string]any
