@@ -1,9 +1,7 @@
 package catalog
 
 import (
-	"cmp"
 	"database/sql/driver"
-	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -11,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
@@ -20,21 +19,10 @@ import (
 // in a migration, view, index or generated column, or a database could no longer
 // be opened by a plain sqlite3 shell (or an older AudioSilo build).
 func init() {
-	// split_parent is set only for disc folders. Compare their numbers without
-	// an integer conversion (a disc number may have leading zeros or be huge).
+	// disc_before(a, b): whether disc folder a comes before b in the order the
+	// scanner joins a split book's discs (metadata.DiscOrder: CD2 before CD10).
 	store.RegisterFunction("disc_before", 2, func(args []driver.Value) (driver.Value, error) {
-		a, b := sqlText(args[0]), sqlText(args[1])
-		number := func(p string) string {
-			digits := strings.Map(func(r rune) rune {
-				if r >= '0' && r <= '9' {
-					return r
-				}
-				return -1
-			}, path.Base(p))
-			return strings.TrimLeft(digits, "0")
-		}
-		x, y := number(a), number(b)
-		if cmp.Or(cmp.Compare(len(x), len(y)), strings.Compare(x, y), strings.Compare(a, b)) < 0 {
+		if metadata.DiscOrder(sqlText(args[0]), sqlText(args[1])) < 0 {
 			return int64(1), nil
 		}
 		return int64(0), nil
