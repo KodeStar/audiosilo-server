@@ -130,8 +130,7 @@ func TestSlotsAcquire(t *testing.T) {
 func TestRateLimiterEviction(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	r := PerSecond(20, 40, nil)
-	r.now = func() time.Time { return now }
+	r := PerSecond(20, 40, func() time.Time { return now })
 	for i := 0; i < 100; i++ {
 		r.Allow(fmt.Sprintf("10.0.0.%d", i))
 	}

@@ -158,10 +158,10 @@ func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cac
 		var gz []byte
 		if err := json.NewEncoder(&buf).Encode(v); err == nil {
 			// Only an answer the cache can keep: one too big for it is
-			// compressed by the middleware, and only for a client that takes it.
+			// compressed by compressJSON, and only for a client that takes it.
 			if n := buf.Len(); n >= gzipMinSize && n <= listCacheMaxEntry {
 				// nil when it saves nothing: such an answer goes out through
-				// the middleware, like one too big for the cache
+				// compressJSON, like one too big for the cache
 				gz = spa.Gzip(buf.Bytes(), gzipLevel)
 			}
 			a.lists.put(gen, key, buf.Bytes(), gz)
@@ -172,7 +172,7 @@ func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cac
 }
 
 // writeCachedJSON writes a cached 200 answer: gz, its gzip, when there is one
-// and the client takes it (the compress middleware then passes it through as
+// and the client takes it (compressJSON then passes it through as
 // already encoded), else body as writeJSON would have.
 func writeCachedJSON(w http.ResponseWriter, r *http.Request, body, gz []byte) {
 	if gz == nil || !gzipAccepted(r) {
@@ -182,5 +182,5 @@ func writeCachedJSON(w http.ResponseWriter, r *http.Request, body, gz []byte) {
 	h := w.Header()
 	h.Set("Content-Encoding", "gzip")
 	h.Set("Content-Length", strconv.Itoa(len(gz)))
-	writeJSONBytes(w, gz) // the middleware adds Vary, as for every JSON answer
+	writeJSONBytes(w, gz) // compressJSON adds Vary, as for every JSON answer
 }

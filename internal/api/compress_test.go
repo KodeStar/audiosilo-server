@@ -188,12 +188,13 @@ func TestCompressLeavesOtherAnswers(t *testing.T) {
 	}
 }
 
-// TestCompressExclusions: the request half of the rule. Only a GET (or its
-// HEAD) under /api/v1/ is compressed; never a POST or other write (every
-// credential is minted by one), a Range request, the media (stream, cover, ebook,
-// /meta/cover, a backup's download, the Upcoming covers and the calendar feed
-// below /me/upcoming/), /api/v1/auth/* (credentials) or the Bridge's routes (the
-// long-poll claim), however large the JSON.
+// TestCompressExclusions: the request half of the rule. Only a route registered
+// with compressJSON is compressed, and only its GET (or HEAD) without a Range:
+// never a write (every credential is minted by one), a credential read
+// (/auth/tokens), the media (stream, cover, ebook, /meta/cover, a backup's
+// download, the Upcoming covers and the calendar feed), the Bridge's routes (the
+// long-poll claim) or a path no route opted in for (an unknown one's 404 too),
+// however large the JSON.
 func TestCompressExclusions(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
@@ -264,8 +265,8 @@ func TestCompressExclusions(t *testing.T) {
 	}
 }
 
-// A new route gets identity even if it returns large JSON. A stream or
-// upgrade also keeps its writer when its response happens to be a JSON error.
+// A new route gets identity even if it returns large JSON. On an opted-in route
+// a Range request or an upgrade keeps the original writer.
 func TestCompressionRequiresRouteOptIn(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
@@ -273,8 +274,6 @@ func TestCompressionRequiresRouteOptIn(t *testing.T) {
 	h := jsonHandler(http.StatusOK, bigJSON)
 	mux.HandleFunc("GET /api/v1/books", compressJSON(h))
 	mux.HandleFunc("GET /api/v1/new", h)
-	mux.HandleFunc("GET /api/v1/events", h)
-	mux.HandleFunc("GET /api/v1/socket", h)
 	handler := e.api.middleware(mux)
 	for _, tc := range []struct {
 		path, header, value string
@@ -282,8 +281,6 @@ func TestCompressionRequiresRouteOptIn(t *testing.T) {
 	}{
 		{"books", "", "", true},
 		{"new", "", "", false},
-		{"events", "Accept", "text/event-stream", false},
-		{"socket", "Upgrade", "websocket", false},
 		{"books", "Range", "bytes=0-20", false},
 		{"books", "Upgrade", "websocket", false},
 	} {

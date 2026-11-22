@@ -15,8 +15,9 @@ const (
 	gzipLevel   = gzip.BestSpeed
 )
 
-// gzipAccepted reports whether the compress middleware found r compressible
-// and its client accepting gzip: the list cache's cue to send its stored gzip.
+// gzipAccepted reports whether r's route opted in with compressJSON and its
+// client takes gzip: the list cache's and read-along's cue to send gzip. A route
+// registered without compressJSON always reads false.
 func gzipAccepted(r *http.Request) bool {
 	ok, _ := r.Context().Value(gzipKey).(bool)
 	return ok
