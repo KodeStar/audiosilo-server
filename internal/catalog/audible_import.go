@@ -312,6 +312,10 @@ func templateFolders(template string) string {
 	return strings.Join(segs, "/")
 }
 
+// checkDestOwnFolder refuses, through tx, a destination (or, dest empty, the
+// template) whose disc folder library already joins into another book: its
+// parent holds a `book` override (ErrAudibleBookOverride) or is an indexed
+// book (ErrAudibleIndexedBook). A paused account (library 0) has none.
 func checkDestOwnFolder(ctx context.Context, tx *sql.Tx, library int64, dest, template string) error {
 	book := audibleDiscParent(dest, template)
 	if book == "" || library == 0 {
