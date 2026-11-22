@@ -1005,6 +1005,36 @@ func TestCancelOrphanAudibleJobsPassesDamagedParams(t *testing.T) {
 	}
 }
 
+// The folder a disc destination would join: a template's segments as the
+// Bridge renders its literal ones (empty dropped, spaces and dots trimmed, a
+// colon made " -"), and no guess where a variable or escape makes the parent.
+func TestAudibleDiscParent(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ dest, template, want string }{
+		{"Author/Book/CD 1", "", "Author/Book"},
+		{"Author/Book/CD 1/One.m4b", "", "Author/Book"},
+		{"Author/Book/One.m4b", "", ""},
+		{"CD 1", "", ""},
+		{"", "Audible/CD 1", "Audible"},
+		{"", "Audible/CD 1/", "Audible"},
+		{"", "Audible//CD 1/{Title}.m4b", "Audible"},
+		{"", " Audible / CD 1 /{OriginalFilename}", "Audible"},
+		{"", "Audible/CD 1/{Title}{Ext}", "Audible"},
+		{"", "Audible/CD 1/{OriginalFilename:lower}", "Audible"},
+		{"", "Audible/CD 1/{Title}{Ext:upper}", "Audible"},
+		{"", "Audible/CD 1/{Ext}", ""},
+		{"", "{Author}/CD 1", ""},
+		{"", "Books: Audible/CD 1", "Books - Audible"},
+		{"", "My  Audible/CD 1", "My  Audible"},
+		{"", "Audible?/CD 1", "Audible?"},
+		{"", "Audible/{Title}", ""},
+	} {
+		if got := audibleDiscParent(c.dest, c.template); got != c.want {
+			t.Errorf("audibleDiscParent(%q, %q) = %q, want %q", c.dest, c.template, got, c.want)
+		}
+	}
+}
+
 // can_backup is the console's Back up allowed: exactly the titles
 // RequestAudibleBackup takes (its account's pause aside).
 func TestAudibleCanBackup(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -197,8 +198,9 @@ type AudibleTitlePatch struct {
 
 // PatchAudibleTitle applies the console's change to a title and returns it:
 // ErrUnknownTitle for none, a bridge.ErrAudibleDestPath for a destination
-// bridge.CheckAudibleDestPath refuses or one into a disc folder of an indexed
-// book (checkDestOwnFolder). "Not this book" drops a pending
+// bridge.CheckAudibleDestPath refuses, ErrAudibleIndexedBook or
+// ErrAudibleBookOverride for one (or, cleared, the account's template) into a
+// disc folder another book would absorb (checkDestOwnFolder). "Not this book" drops a pending
 // request: such a title is never backed up by a policy or "Back up
 // everything", and its match is not this title's (a backup may still be asked
 // for one by one). A user-state write.
@@ -267,9 +269,9 @@ func audibleDiscParent(dest, template string) string {
 	fromTemplate := folder == ""
 	var templateFile bool
 	if fromTemplate {
-		folder = strings.TrimSpace(template)
-		name := path.Base(folder)
-		templateFile = name == "{OriginalFilename}" || (name != "{Ext}" && strings.HasSuffix(name, "{Ext}"))
+		folder = templateFolders(template)
+		m := templateFileEnd.FindStringSubmatchIndex(path.Base(folder))
+		templateFile = m != nil && (m[0] > 0 || path.Base(folder)[m[2]:m[3]] == "OriginalFilename")
 	}
 	if templateFile || metadata.IsAudio(folder) {
 		folder = path.Dir(folder)
@@ -278,10 +280,36 @@ func audibleDiscParent(dest, template string) string {
 		return ""
 	}
 	parent := path.Dir(folder)
+	// A brace or escape is a variable, a group or an escaped character, so
+	// the folder the Bridge renders can't be read from the template.
 	if parent == "." || (fromTemplate && strings.ContainsAny(parent, "{}\\")) {
 		return ""
 	}
 	return parent
+}
+
+// templateFileEnd is a template's last segment the Bridge renders as the
+// file's name: one ending in {OriginalFilename} or {Ext} (modifiers allowed),
+// whose extension is the backup's. {Ext} alone is a folder (".m4b" sanitized
+// to "m4b").
+var templateFileEnd = regexp.MustCompile(`\{(OriginalFilename|Ext)(?::[^{}]*)?\}$`)
+
+// templateFolders is template's segments as the Bridge's placement.Render
+// leaves its literal ones (its sanitize: white space trimmed, a colon made
+// " -", leading and trailing spaces and dots trimmed) with the empty ones
+// dropped, so "Audible/CD 1/" places in Audible/CD 1, a disc of Audible. A
+// segment with a token keeps its colons (a modifier's).
+func templateFolders(template string) string {
+	var segs []string
+	for seg := range strings.SplitSeq(template, "/") {
+		if seg = strings.TrimSpace(seg); !strings.ContainsAny(seg, "{}\\") {
+			seg = strings.ReplaceAll(seg, ":", " -")
+		}
+		if seg = strings.Trim(seg, " ."); seg != "" {
+			segs = append(segs, seg)
+		}
+	}
+	return strings.Join(segs, "/")
 }
 
 func checkDestOwnFolder(ctx context.Context, tx *sql.Tx, library int64, dest, template string) error {
@@ -313,9 +341,6 @@ func discConflict(sentinel error, book string) error {
 func checkAudibleRemap(ctx context.Context, tx *sql.Tx, account string, library int64, template string) error {
 	if err := checkDestOwnFolder(ctx, tx, library, "", template); err != nil {
 		return err
-	}
-	if library == 0 {
-		return nil
 	}
 	// checkDestOwnFolder's rule over every saved destination in one statement.
 	var book string
@@ -365,7 +390,9 @@ type AudibleAccountPatch struct {
 
 // PatchAudibleAccount applies the console's change to account id and returns
 // it: ErrUnknownAccount for none, ErrAudiblePolicy for an unknown policy, a
-// bridge.ErrAudibleTemplate for a template bridge.CheckAudibleTemplate refuses.
+// bridge.ErrAudibleTemplate for a template bridge.CheckAudibleTemplate refuses,
+// ErrAudibleIndexedBook or ErrAudibleBookOverride for one placing in a disc
+// folder another book would absorb (checkDestOwnFolder).
 // A policy changed to an automatic one (all, series) starts acting now
 // (policy_since): only titles first seen after it are backed up by it.
 func (c *Catalog) PatchAudibleAccount(ctx context.Context, id string, p AudibleAccountPatch) (*AudibleAccount, error) {
