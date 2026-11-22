@@ -658,6 +658,14 @@ func TestFoldRefusalKeptByUnchangedMatch(t *testing.T) {
 	if x := f.title(t, "B000000001"); x.FoldRefusalReason != AudibleFoldNotOwnBook || x.FoldRefusedAt == nil {
 		t.Fatalf("after writes that kept the match: %+v", x)
 	}
+	// The book moving keeps the title's book, and so the refusal.
+	if err := f.c.MoveDurableState(f.ctx, lib, "Author/X", "Author/X2"); err != nil {
+		t.Fatal(err)
+	}
+	if x := f.title(t, "B000000001"); x.Match == nil || x.Match.Path != "Author/X2" ||
+		x.FoldRefusalReason != AudibleFoldNotOwnBook || x.FoldRefusedAt == nil {
+		t.Fatalf("after the book moved: %+v", x)
+	}
 	f.poll(t, "p4", matchedTo("Author/Y"))
 	if x := f.title(t, "B000000001"); x.FoldRefusalReason != "" || x.FoldRefusedAt != nil {
 		t.Fatalf("after a new match: %+v", x)
