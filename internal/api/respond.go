@@ -30,7 +30,7 @@ const (
 	credentialKey
 	ipKey
 	addressChargedKey // rateLimit spent this request from its address's bucket
-	gzipKey           // compress: the answer may be gzipped and the client takes it
+	gzipKey           // compressJSON: the route opted in and the client takes gzip
 )
 
 // userFrom returns the authenticated user from the request context.

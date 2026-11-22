@@ -776,15 +776,15 @@ func (a *API) Handler() http.Handler {
 
 	// Admin.
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(compressJSON(a.handleStats)))
-	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleGetSettings)))
+	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(compressJSON(a.handleGetSettings)))
 	mux.Handle("PATCH /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleUpdateSettings)))
 	mux.Handle("GET /api/v1/admin/system", a.requireAdmin(compressJSON(a.handleSystem)))
 	mux.Handle("GET /api/v1/admin/update", a.requireAdmin(compressJSON(a.handleUpdateStatus)))
 	mux.Handle("POST /api/v1/admin/update/check", a.requireAdmin(http.HandlerFunc(a.handleUpdateCheck)))
 	mux.Handle("GET /api/v1/admin/meta/mirror", a.requireAdmin(compressJSON(a.handleMetaMirror)))
 	mux.Handle("POST /api/v1/admin/meta/mirror/check", a.requireAdmin(http.HandlerFunc(a.handleMetaMirrorCheck)))
-	mux.Handle("GET /api/v1/admin/logs", a.requireAdmin(http.HandlerFunc(a.handleLogs)))
-	mux.Handle("GET /api/v1/admin/audit", a.requireAdmin(http.HandlerFunc(a.handleAudit)))
+	mux.Handle("GET /api/v1/admin/logs", a.requireAdmin(compressJSON(a.handleLogs)))
+	mux.Handle("GET /api/v1/admin/audit", a.requireAdmin(compressJSON(a.handleAudit)))
 	mux.Handle("GET /api/v1/admin/events", a.requireAdmin(compressJSON(a.handleServerEvents)))
 	// The Overview's support card: whether it shows, and an admin's answer (server-wide).
 	mux.Handle("GET /api/v1/admin/support", a.requireAdmin(compressJSON(a.handleSupport)))
@@ -836,7 +836,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteLibrary)))
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/folder-override", a.requireAdmin(http.HandlerFunc(a.handleSetFolderOverride)))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}/folder-override", a.requireAdmin(http.HandlerFunc(a.handleDeleteFolderOverride)))
-	mux.Handle("GET /api/v1/admin/libraries/{id}/export", a.requireAdmin(http.HandlerFunc(a.handleExportLibrary)))
+	mux.Handle("GET /api/v1/admin/libraries/{id}/export", a.requireAdmin(compressJSON(a.handleExportLibrary)))
 	mux.Handle("POST /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanLibrary)))
 	mux.Handle("GET /api/v1/admin/libraries/{id}/scan", a.requireAdmin(compressJSON(a.handleScanStatus)))
 	mux.Handle("POST /api/v1/admin/scan", a.requireAdmin(http.HandlerFunc(a.handleScanAll)))

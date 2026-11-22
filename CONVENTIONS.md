@@ -960,8 +960,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the GET's `Vary` and `Content-Encoding`) without a Range or Upgrade header. Opt in only a
   reviewed JSON read: never a route that returns a credential (BREACH: every credential is minted
   by a POST, and `GET /auth/tokens`, the Bridge's routes and the Upcoming calendar link stay out),
-  and never a stream (media, a download, a long poll, anything that flushes): `gzipWriter` has no
-  Flush and holds the first 1 KiB back. A route that stays out has a `TestCompressExclusions` row
+  and never a stream (media, a file download, a long poll, anything that flushes; the library
+  export is JSON and opts in): `gzipWriter` has no Flush and holds the first 1 KiB back. A route
+  that stays out has a `TestCompressExclusions` row
   (GET and HEAD) proving it is answered identity. The answer is gzipped (BestSpeed) when it is
   `application/json`, at least 1 KiB, not a 204, 206 or 304, has no Content-Range, Content-Encoding
   or ETag of its own and the client takes gzip; every JSON answer on an opted-in route carries
