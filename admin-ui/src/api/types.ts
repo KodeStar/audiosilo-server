@@ -1844,6 +1844,13 @@ export interface MergedBook extends BookRef {
   source?: 'edited' | 'community';
 }
 
+/** POST /admin/books/merge/undo: how many books went back, and the books left as
+ * they are (gone from the index, or their field edited since the merge). */
+export interface MergeUndone {
+  restored: number;
+  skipped: (BookRef & { reason: 'not_found' | 'changed' })[];
+}
+
 /** Either people aggregate as the console reads it (api.people; not a wire shape). */
 export interface PeopleResponse {
   people: PersonCount[];

@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -119,5 +121,106 @@ func TestMergeSpellingsLargeLibrary(t *testing.T) {
 	var updated int
 	if err := c.db.QueryRowContext(ctx, `SELECT count(*) FROM books WHERE author='Andy Weir'`).Scan(&updated); err != nil || updated != count {
 		t.Fatalf("updated %d/%d effective credits, %v", updated, count, err)
+	}
+}
+
+// A merge names an existing books library, and stops before writing anything
+// past MaxMergeBooks books.
+func TestMergeSpellingsBounds(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Main", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pods, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for scope, want := range map[int64]error{lib.ID + pods.ID + 1: ErrNotFound, pods.ID: ErrNotBookLibrary} {
+		if _, err := c.MergeSpellings(ctx, scope, FieldAuthor, []string{"Weir, Andy"}, "Andy Weir", 0); !errors.Is(err, want) {
+			t.Fatalf("merge in library %d = %v, want %v", scope, err, want)
+		}
+	}
+	if _, err := c.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS
+		(SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < ?)
+		INSERT INTO books(library_id, rel_path, title, author, indexed_at)
+		SELECT ?, 'A/' || i, 'Book ' || i, 'Weir, Andy', '2024-01-01T00:00:00Z' FROM n`, MaxMergeBooks+1, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if books, err := c.MergeSpellings(ctx, lib.ID, FieldAuthor, []string{"Weir, Andy"}, "Andy Weir", 0); !errors.Is(err, ErrMergeTooLarge) || books != nil {
+		t.Fatalf("oversized merge = %d books, %v", len(books), err)
+	}
+	var overrides int
+	if err := c.db.QueryRowContext(ctx, `SELECT count(*) FROM book_overrides`).Scan(&overrides); err != nil || overrides != 0 {
+		t.Fatalf("overrides after a refused merge = %d, %v", overrides, err)
+	}
+}
+
+// Undo puts back every book still carrying the merge, each with its own
+// previous override and source, and leaves (and names) a book gone or edited
+// since.
+func TestUndoMerge(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Main", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"Tags", "Community", "Edited", "Gone"} {
+		if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, path)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "Community", BookEdit{Set: map[string]string{FieldAuthor: "T. Author"}, Source: SourceCommunity}); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := c.MergeSpellings(ctx, lib.ID, FieldAuthor, []string{"Tag Author", "T. Author"}, "New Author", 0)
+	if err != nil || len(merged) != 4 {
+		t.Fatalf("merge = %+v, %v", merged, err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "Edited", BookEdit{Set: map[string]string{FieldAuthor: "Hand Edit"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM books WHERE library_id = ? AND rel_path = 'Gone'`, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	changes := 0
+	c.OnBookChange(func() { changes++ })
+	done, err := c.UndoMerge(ctx, FieldAuthor, " New Author ", append(merged, merged[0]), 0)
+	want := UndoneMerge{Restored: 2, Skipped: []UndoneSkip{
+		{Ref{lib.ID, "Edited"}, UndoChanged}, {Ref{lib.ID, "Gone"}, UndoGone},
+	}}
+	if err != nil || !reflect.DeepEqual(done, want) || changes != 1 {
+		t.Fatalf("undo = %+v, %v (%d notifications), want %+v", done, err, changes, want)
+	}
+	for path, author := range map[string]string{"Tags": "Tag Author", "Community": "T. Author", "Edited": "Hand Edit"} {
+		if got := mustBook(t, c, ctx, lib.ID, path).Author; got != author {
+			t.Fatalf("author at %s after undo = %q, want %q", path, got, author)
+		}
+	}
+	if o, err := queryOverrides(ctx, c.db, lib.ID, "Tags"); err != nil || len(o) != 0 {
+		t.Fatalf("overrides at Tags after undo = %v, %v", o, err)
+	}
+	if o, err := queryOverrides(ctx, c.db, lib.ID, "Community"); err != nil || o[FieldAuthor].Source != SourceCommunity {
+		t.Fatalf("overrides at Community after undo = %+v, %v", o, err)
+	}
+
+	// A book that refuses its edit undoes nothing at all, not even the book put
+	// back before it.
+	if again, err := c.MergeSpellings(ctx, lib.ID, FieldAuthor, []string{"Tag Author", "T. Author"}, "New Author", 0); err != nil || len(again) != 2 {
+		t.Fatalf("second merge = %+v, %v", again, err)
+	}
+	if _, err := c.db.ExecContext(ctx, `CREATE TRIGGER refuse_undo BEFORE DELETE ON book_overrides
+		WHEN OLD.path = 'Tags' BEGIN SELECT RAISE(ABORT, 'undo refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UndoMerge(ctx, FieldAuthor, "New Author", merged, 0); err == nil || !strings.Contains(err.Error(), "undo refused") {
+		t.Fatalf("refused undo = %v", err)
+	}
+	for _, path := range []string{"Community", "Tags"} {
+		if got := mustBook(t, c, ctx, lib.ID, path).Author; got != "New Author" {
+			t.Fatalf("author at %s after a refused undo = %q", path, got)
+		}
 	}
 }

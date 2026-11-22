@@ -2553,8 +2553,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   own filter, the unfiltered yes/no ones in one pass);
   `POST /admin/books/bulk` (one edit over <= 1000 books, all or nothing);
   `POST /admin/books/merge` (`{field, sources, target, library_id?}`) selects exact whole credits
-  or main series spellings and edits all matching books in one writer transaction. Its `books`
-  reply identifies each changed path and its prior override value and source for bulk Undo.
+  or main series spellings and edits all matching books in one writer transaction (at most
+  `catalog.MaxMergeBooks`, else 400 `too_large`; an unknown `library_id` 404, a podcast one 409). Its
+  `books` reply identifies each changed path and its prior override value and source; Undo posts it
+  back with `field` and `target` to `POST /admin/books/merge/undo` (`catalog.UndoMerge`, one
+  transaction): a book still carrying `target` as its override goes back, one gone (`not_found`) or
+  edited since (`changed`) is left and listed in `skipped`, beside `restored`;
   `GET /admin/authors|narrators` (each person a credit names, `catalog.creditNames`
   over `names.Split`, so a co-credit counts for both; `merge_suggestions` stay over
   WHOLE credits, from `personKey`, keyed by `match.Fold`, which keeps every script's

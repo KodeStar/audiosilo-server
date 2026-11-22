@@ -62,6 +62,8 @@ func TestAdminCatalogEndpointsRequireAdmin(t *testing.T) {
 		{"GET", "/api/v1/admin/books/facets", "", 200},
 		{"POST", "/api/v1/admin/books/bulk", bulk, 200},
 		{"POST", "/api/v1/admin/books/merge", `{"field":"author","sources":["Weir, Andy"],"target":"Andy Weir"}`, 200},
+		{"POST", "/api/v1/admin/books/merge/undo", `{"field":"author","target":"Andy Weir","books":[{"library_id":` +
+			strconv.FormatInt(libID, 10) + `,"path":"Andy Weir/Artemis","previous":null}]}`, 200},
 		{"POST", "/api/v1/admin/books/works", `{"books":[{"library_id":` + strconv.FormatInt(libID, 10) + `,"path":"Andy Weir/Artemis"}]}`, 200},
 		{"GET", "/api/v1/admin/authors", "", 200},
 		{"GET", "/api/v1/admin/narrators", "", 200},
@@ -440,17 +442,21 @@ func TestAdminMergeSpellingsAndUndo(t *testing.T) {
 		if err != nil || b.Author != "Andy Weir" {
 			t.Fatalf("merged book at %s = %+v, %v", book.Path, b, err)
 		}
-		// Use the merge reply just as the console does, through the bulk endpoint.
-		undo := map[string]any{"books": []catalog.Ref{book.Ref}}
-		if book.Previous == nil {
-			undo["revert"] = []string{"author"}
-		} else {
-			undo["set"] = map[string]string{"author": *book.Previous}
-			undo["source"] = book.Source
-		}
-		if resp, body := e.do(t, "POST", "/api/v1/admin/books/bulk", admin, mustJSON(t, undo)); resp.StatusCode != 200 {
-			t.Fatalf("undo at %s = %d %s", book.Path, resp.StatusCode, body)
-		}
+	}
+	// The merge reply posted back as the console does, with a book a scan has
+	// removed since: the others still go back, and the gone one is named.
+	gone := catalog.MergedBook{Ref: catalog.Ref{LibraryID: lib, Path: "Andy Weir/Gone"}}
+	undo := mustJSON(t, map[string]any{"field": "author", "target": "Andy Weir", "books": append(result.Books, gone)})
+	resp, body = e.do(t, "POST", path+"/undo", admin, undo)
+	want = fmt.Sprintf(`{"restored":2,"skipped":[{"library_id":%d,"path":"Andy Weir/Gone","reason":"not_found"}]}`, lib)
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != want {
+		t.Fatalf("undo = %d %s, want %s", resp.StatusCode, body, want)
+	}
+	// Undone already: nothing carries the merge's spelling any more.
+	resp, body = e.do(t, "POST", path+"/undo", admin, undo)
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(strings.TrimSpace(body), `{"restored":0,`) ||
+		strings.Count(body, `"changed"`) != 2 {
+		t.Fatalf("repeat undo = %d %s", resp.StatusCode, body)
 	}
 	for p, want := range map[string]string{martian: "A. Weir", artemis: "Weir, Andy"} {
 		if b, err := e.cat.GetBookByPath(ctx, lib, p); err != nil || b.Author != want {
@@ -483,6 +489,32 @@ func TestAdminMergeSpellingsAndUndo(t *testing.T) {
 	many := `{"field":"author","sources":[` + strings.Repeat(`"x",`, maxBulkBooks) + `"x"],"target":"y"}`
 	if resp, body := e.do(t, "POST", path, admin, many); resp.StatusCode != 400 || !strings.Contains(body, `"code":"too_large"`) {
 		t.Errorf("too many source spellings = %d %s", resp.StatusCode, body)
+	}
+	pods, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Pods", Root: t.TempDir(), Kind: catalog.KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for scope, status := range map[int64]int{9999: http.StatusNotFound, pods.ID: http.StatusConflict} {
+		scoped := fmt.Sprintf(`{"field":"author","library_id":%d,"sources":["x"],"target":"y"}`, scope)
+		if resp, body := e.do(t, "POST", path, admin, scoped); resp.StatusCode != status {
+			t.Errorf("merge in library %d = %d %s, want %d", scope, resp.StatusCode, body, status)
+		}
+	}
+	for _, bad := range []string{
+		`{"field":"title","target":"y","books":[{"library_id":1,"path":"p","previous":null}]}`,
+		`{"field":"author","target":" ","books":[{"library_id":1,"path":"p","previous":null}]}`,
+		`{"field":"author","target":"y","books":[]}`,
+		`{"field":"author","target":"y","books":[{"library_id":1,"path":"p","previous":"z","source":"tags"}]}`,
+		`{"field":"author","target":"y","books":[{"library_id":1,"path":"p","id":7}]}`,
+	} {
+		if resp, body := e.do(t, "POST", path+"/undo", admin, bad); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("invalid undo %s = %d %s", bad, resp.StatusCode, body)
+		}
+	}
+	manyBooks := `{"field":"author","target":"y","books":[` +
+		strings.Repeat(`{"library_id":1,"path":"p","previous":null},`, catalog.MaxMergeBooks) + `{"library_id":1,"path":"p","previous":null}]}`
+	if resp, body := e.do(t, "POST", path+"/undo", admin, manyBooks); resp.StatusCode != 400 || !strings.Contains(body, `"code":"too_large"`) {
+		t.Errorf("too many books to undo = %d %s", resp.StatusCode, body)
 	}
 }
 

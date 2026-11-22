@@ -70,6 +70,7 @@ import type {
   PeopleResponse,
   MergedBook,
   MergeField,
+  MergeUndone,
   PersonField,
   SeriesCount,
   AdminLibrary,
@@ -846,6 +847,9 @@ export const api = {
       target,
       library_id: libraryId,
     }),
+  /** Puts a merge's books back (its reply sent back) in one transaction. */
+  undoMerge: (field: MergeField, target: string, books: MergedBook[]) =>
+    request<MergeUndone>('POST', '/admin/books/merge/undo', { field, target, books }),
   /** GET /admin/authors or /admin/narrators, as one shape. */
   people: async (field: PersonField, libraryId?: number): Promise<PeopleResponse> => {
     const query = bookQuery({ library_id: libraryId });

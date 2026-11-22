@@ -1,11 +1,5 @@
 import { authors } from '@/test/library-fixtures';
-import {
-  filterPeople,
-  otherSpellings,
-  sortByBooks,
-  sortByDuration,
-  undoSteps,
-} from './people-model';
+import { filterPeople, otherSpellings, sortByBooks, sortByDuration } from './people-model';
 
 const people = [
   { name: 'Charlotte Brontë', books: 3, duration: 7200 },
@@ -40,27 +34,5 @@ describe('merge suggestions', () => {
 
   it('rewrites every spelling but the suggested one', () => {
     expect(otherSpellings(s)).toEqual(['Sanderson, Brandon']);
-  });
-});
-
-describe('merge Undo', () => {
-  it('chunks returned paths at the bulk limit', () => {
-    const books = Array.from({ length: 2001 }, (_, i) => ({
-      library_id: 1,
-      path: String(i),
-      previous: null,
-    }));
-    expect(undoSteps(books, 'author').map((s) => s.books.length)).toEqual([1000, 1000, 1]);
-  });
-
-  it('restores identical values with different sources separately', () => {
-    const previous = 'Sanderson, Brandon';
-    const a = { library_id: 1, path: 'a', previous, source: 'community' } as const;
-    const b = { library_id: 2, path: 'a', previous, source: 'edited' } as const;
-    const c = { library_id: 1, path: 'c', previous, source: 'community' } as const;
-    expect(undoSteps([a, b, c], 'author')).toEqual([
-      { books: [a, c], edit: { set: { author: previous }, source: 'community' } },
-      { books: [b], edit: { set: { author: previous }, source: 'edited' } },
-    ]);
   });
 });

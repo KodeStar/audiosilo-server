@@ -136,7 +136,7 @@ describe('authors', () => {
             },
           };
         },
-        'POST /admin/books/bulk': { body: { updated: 1 } },
+        'POST /admin/books/merge/undo': { body: { restored: 2, skipped: [] } },
       }),
     );
     renderApp('/library/authors');
@@ -164,18 +164,29 @@ describe('authors', () => {
       calls.filter((c) => c.path === '/admin/books' || c.path === '/admin/books/bulk'),
     ).toEqual([]);
 
-    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    const undo = screen.getByRole('button', { name: 'Undo' });
+    await user.click(undo);
     expect(await screen.findByText('Merge undone')).toBeInTheDocument();
-    expect(calls.filter((c) => c.path === '/admin/books/bulk').map((c) => c.body)).toEqual([
-      { books: [fresh], revert: ['author'] },
-      { books: [edited], set: { author: 'Sanderson, Brandon' }, source: 'community' },
+    expect(screen.getByText('2 books have their old spelling again.')).toBeInTheDocument();
+    // One request carries the merge's reply back; a second click sends nothing.
+    await user.click(undo);
+    expect(calls.filter((c) => c.path === '/admin/books/merge/undo').map((c) => c.body)).toEqual([
+      {
+        field: 'author',
+        target: 'Brandon Sanderson',
+        books: [
+          { ...fresh, previous: null },
+          { ...edited, previous: 'Sanderson, Brandon', source: 'community' },
+        ],
+      },
     ]);
+    expect(calls.filter((c) => c.path === '/admin/books/bulk')).toEqual([]);
   });
 
-  it('keeps undoing past a failed step and offers Undo again for its books', async () => {
+  it('offers a failed Undo again, and names the books a partial Undo left', async () => {
     const fresh = { library_id: 1, path: 'Sanderson/Elantris' };
     const edited = { library_id: 1, path: 'Sanderson/Warbreaker' };
-    let bulkCalls = 0;
+    let undoCalls = 0;
     const calls = mockFetch(
       routes({
         'POST /admin/books/merge': {
@@ -186,10 +197,10 @@ describe('authors', () => {
             ],
           },
         },
-        'POST /admin/books/bulk': () =>
-          ++bulkCalls === 1
-            ? { status: 500, body: { error: 'could not save the edit' } }
-            : { body: { updated: 1 } },
+        'POST /admin/books/merge/undo': () =>
+          ++undoCalls === 1
+            ? { status: 500, body: { error: 'could not undo the merge' } }
+            : { body: { restored: 1, skipped: [{ ...edited, reason: 'changed' }] } },
       }),
     );
     renderApp('/library/authors');
@@ -201,16 +212,16 @@ describe('authors', () => {
     const failed = (await screen.findByText("Couldn't undo the merge")).closest(
       '[data-slot="toast"]',
     ) as HTMLElement;
-    const bulk = () => calls.filter((c) => c.path === '/admin/books/bulk').map((c) => c.body);
-    // The failed first step didn't stop the second.
-    expect(bulk()).toEqual([
-      { books: [fresh], revert: ['author'] },
-      { books: [edited], set: { author: 'Sanderson, Brandon' }, source: 'edited' },
-    ]);
     await user.click(within(failed).getByRole('button', { name: 'Undo' }));
-    expect(await screen.findByText('Merge undone')).toBeInTheDocument();
-    expect(screen.getByText('1 book has its old spelling again.')).toBeInTheDocument();
-    expect(bulk().slice(2)).toEqual([{ books: [fresh], revert: ['author'] }]);
+    expect(await screen.findByText('Merge partly undone')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '1 book was left as it is, moved or edited since the merge: Sanderson/Warbreaker',
+      ),
+    ).toBeInTheDocument();
+    const undos = calls.filter((c) => c.path === '/admin/books/merge/undo').map((c) => c.body);
+    expect(undos).toHaveLength(2);
+    expect(undos[1]).toEqual(undos[0]);
   });
 
   it.each([

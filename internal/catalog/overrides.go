@@ -971,14 +971,21 @@ func (c *Catalog) EditBooks(ctx context.Context, refs []Ref, edit BookEdit) erro
 func (c *Catalog) editRefsTx(ctx context.Context, tx *sql.Tx, refs []Ref, edit BookEdit) error {
 	now := c.ts()
 	for _, ref := range refs {
-		if err := c.editTx(ctx, tx, ref, edit, now); err != nil {
-			if oe, ok := errors.AsType[*OverrideError](err); ok {
-				return invalid(oe.Field, oe.Reason+" ("+CleanRelPath(ref.Path)+")")
-			}
+		if err := c.editRefTx(ctx, tx, ref, edit, now); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// editRefTx is editTx for one of many books: an edit the book refuses names
+// its path.
+func (c *Catalog) editRefTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit, now string) error {
+	err := c.editTx(ctx, tx, ref, edit, now)
+	if oe, ok := errors.AsType[*OverrideError](err); ok {
+		return invalid(oe.Field, oe.Reason+" ("+CleanRelPath(ref.Path)+")")
+	}
+	return err
 }
 
 // editTx writes one book's share of a normalized edit and rebuilds its row.
