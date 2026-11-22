@@ -1073,7 +1073,7 @@ func readNames(b *catalog.Book, md, last *metadata.Metadata) *metadata.Metadata 
 		n.Author = md.Author
 	}
 	if strings.TrimSpace(md.Series) != "" {
-		if md.SeriesIndex == 0 && n.SeriesIndex != 0 && !match.SameSeries(n.Series, md.Series) && metadata.PathLeafSeries(b.RelPath, b.IsFolder) {
+		if md.SeriesIndex == 0 && n.SeriesIndex != 0 && !leafTagSeries(n.Series, md.Series) && metadata.PathLeafSeries(b.RelPath, b.IsFolder) {
 			n.SeriesIndex, n.SeriesIndexEnd = 0, 0
 		}
 		n.Series = md.Series
@@ -1084,6 +1084,19 @@ func readNames(b *catalog.Book, md, last *metadata.Metadata) *metadata.Metadata 
 	n.Title = metadata.TitleNotSeries(n.Title, md, b.RelPath, b.IsFolder, len(b.Files) > 1)
 	n.Narrator = md.Narrator
 	return n
+}
+
+// leafTagSeries reports whether a leaf's series and a series tag name one
+// series, the way the matcher reads a series name: by match.SameSeries, or with
+// a leading article or a trailing " Series" aside (match.NormalizeSeries: "The
+// Expanse" and "Expanse"), so a tag spelling the leaf's series its own way
+// keeps the leaf's position.
+func leafTagSeries(leaf, tag string) bool {
+	if match.SameSeries(leaf, tag) {
+		return true
+	}
+	n := match.NormalizeSeries(leaf)
+	return n != "" && n == match.NormalizeSeries(tag)
 }
 
 // partNamed reports whether book b's title turns on the tags of another of its

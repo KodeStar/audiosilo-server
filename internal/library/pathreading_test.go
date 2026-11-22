@@ -652,12 +652,15 @@ func TestScanLeafNamesRevisionSix(t *testing.T) {
 		leaf  = "Bea Writer; The Crossing; Books 01-03; Homecoming"
 		same  = "Shelf/Bea Writer; The Crossing; Book 01-03; The Ferryman"
 		other = "Shelf/Bea Writer; The Crossing; Book 01-03; Far Bank"
-		disc  = "Bea Writer/Bea Writer; The Crossing; Book 04; Low Water/CD1"
-		plain = "Plain Name.mp3"
+		// The tag spells the leaf's series without its article: the same series.
+		spelled = "Shelf/Bea Writer; The Crossing; Book 05; Second Light"
+		disc    = "Bea Writer/Bea Writer; The Crossing; Book 04; Low Water/CD1"
+		plain   = "Plain Name.mp3"
 	)
 	silence(t, root, leaf+"/01.mp3", 1)
 	silence(t, root, same+"/01.mp3", 1, "series=THE CROSSING")
 	silence(t, root, other+"/01.mp3", 1, "series=River Stories")
+	silence(t, root, spelled+"/01.mp3", 1, "series=Crossing")
 	silence(t, root, disc+"/01.mp3", 1)
 	silence(t, root, plain, 1)
 	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
@@ -670,11 +673,12 @@ func TestScanLeafNamesRevisionSix(t *testing.T) {
 		start, end            float64
 	}
 	want := map[string]names{
-		leaf:  {"Homecoming", "Bea Writer", "The Crossing", 1, 3},
-		same:  {"The Ferryman", "Shelf", "THE CROSSING", 1, 3},
-		other: {"Far Bank", "Shelf", "River Stories", 0, 0},
-		disc:  {"Low Water", "Bea Writer", "The Crossing", 4, 0},
-		plain: {"Plain Name", "", "", 0, 0},
+		leaf:    {"Homecoming", "Bea Writer", "The Crossing", 1, 3},
+		same:    {"The Ferryman", "Shelf", "THE CROSSING", 1, 3},
+		other:   {"Far Bank", "Shelf", "River Stories", 0, 0},
+		spelled: {"Second Light", "Shelf", "Crossing", 5, 0},
+		disc:    {"Low Water", "Bea Writer", "The Crossing", 4, 0},
+		plain:   {"Plain Name", "", "", 0, 0},
 	}
 	scan := func() {
 		t.Helper()
