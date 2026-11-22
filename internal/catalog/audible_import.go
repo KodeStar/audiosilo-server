@@ -622,9 +622,13 @@ func (o *seriesOwner) any(ctx context.Context, series []AudibleSeries) (bool, er
 
 // SetAudibleImportTx records job as the backup of account's title asin (a
 // pending request is now queued), in tx: the transaction that queued the job
-// (bridge.EnqueueAll), so a job and its title's record commit together.
+// (bridge.EnqueueAll), so a job and its title's record commit together. An
+// earlier backup's refusal (fold_refusal_reason, 0093) goes: the title's
+// status is this backup's now, so a stored refusal is always its import
+// job's.
 func (c *Catalog) SetAudibleImportTx(ctx context.Context, tx *sql.Tx, account, asin string, job int64) error {
-	_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET import_job_id = ?, import_pending = 0, updated_at = ?
+	_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET import_job_id = ?, import_pending = 0,
+		    fold_refusal_reason = '', fold_refused_at = NULL, updated_at = ?
 		  WHERE account = ? AND asin = ?`, job, c.ts(), account, asin)
 	return err
 }

@@ -217,6 +217,7 @@ export function importStatus(
     case 'needs_attention':
       return { key: 'audible.import.parked', tone: 'warn', code };
     case 'done':
+      // A stored refusal is always this job's: queueing a backup clears it.
       return x.fold_refusal_reason ? null : { key: 'audible.import.done', tone: 'ok' };
     case 'failed':
       return { key: 'audible.import.failed', tone: 'bad', code };

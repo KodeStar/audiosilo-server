@@ -4479,7 +4479,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book already there (the scan makes it one book) never makes that book, nor another title's, the title's
   match; and never the book the admin marked Not this book for the title. On refusal, the same transaction
   records `fold_refusal_reason` and `fold_refused_at` on the title (`0093`). The admin title includes both until
-  a later import clears them, or a newly accepted match does (a poll naming another book, Not this book undone:
+  the title's next backup is queued (`SetAudibleImportTx`: the status is that backup's now, so a refusal is
+  always the title's import job's), or a newly accepted match clears them (a poll naming another book, Not this book undone:
   the `0093` trigger compares old and new, so a poll repeating the match keeps them; a book's move or join
   keeps the title's book, so `moveAudibleTitles` puts them back), or deleting the library the backup went
   into does (`DeleteLibrary`). Settings > Audible explains an unusable report (`invalid_result`),

@@ -749,7 +749,7 @@ describe('settings > audible', () => {
 });
 
 describe('audible backups', () => {
-  it("shows the title's stored reason even after the job is gone or another backup starts", async () => {
+  it("shows the title's stored reason in place of Backed up, even after the job is gone", async () => {
     const done = { job_id: 4, state: 'done', code: '' } as const;
     const reasons = ['invalid_result', 'not_indexed', 'not_own_book', 'rejected_match', 'new_code'];
     const titles = reasons.map((reason, i) =>
@@ -758,7 +758,7 @@ describe('audible backups', () => {
         match: null,
         fold_refusal_reason: reason,
         fold_refused_at: '2026-11-01T09:00:00Z',
-        import: i === 0 ? null : i === 1 ? { ...done, state: 'queued' } : done,
+        import: i === 0 ? null : done,
       }),
     );
     titles.push(title({ asin: 'B000000009', match: null, import: done }));
@@ -776,7 +776,6 @@ describe('audible backups', () => {
     messages.forEach((message, i) =>
       expect(within(rows[i]).getByText(message)).toBeInTheDocument(),
     );
-    expect(within(rows[1]).getByText(en['audible.import.queued'])).toBeInTheDocument();
     expect(within(list).getAllByText('Backed up')).toHaveLength(1);
     expect(within(rows[5]).getByText('Backed up')).toBeInTheDocument();
   });

@@ -492,7 +492,10 @@ func TestFoldAudibleImport(t *testing.T) {
 	if err := f.setImport("acct0001", "B000000001", 7); err != nil {
 		t.Fatal(err)
 	}
-	checkRefusal(AudibleFoldInvalidResult, f.c.ts())
+	// A newer backup takes the title's status: the older refusal goes.
+	if x := f.title(t, "B000000001"); x.FoldRefusalReason != "" || x.FoldRefusedAt != nil {
+		t.Fatalf("a newer backup kept the older refusal: %+v", x)
+	}
 	if err := f.c.FoldAudibleImport(f.ctx, job(7, lib, "Author/Book")); err != nil {
 		t.Fatal(err)
 	}
