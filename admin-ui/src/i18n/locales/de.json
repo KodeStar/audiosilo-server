@@ -2699,6 +2699,7 @@
   "audit.detail.paths": "Ordner und Bücher",
   "audit.detail.share": "Freigabe",
   "audit.detail.library": "Bibliothek",
+  "audit.detail.merged": "Zusammengeführte Schreibweisen",
   "audit.detail.device": "Gerät",
   "audit.detail.kind": "Art",
   "audit.detail.book": "Buch",

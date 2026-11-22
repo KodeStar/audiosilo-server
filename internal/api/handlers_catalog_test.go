@@ -511,6 +511,20 @@ func TestAdminMergeSpellingsAndUndo(t *testing.T) {
 			t.Errorf("invalid undo %s = %d %s", bad, resp.StatusCode, body)
 		}
 	}
+	// The audit log names the spellings folded in, and the library of a scoped merge.
+	scoped := fmt.Sprintf(`{"field":"author","library_id":%d,"sources":["Weir, Andy"],"target":"Andy Weir"}`, lib)
+	if resp, body := e.do(t, "POST", path, admin, scoped); resp.StatusCode != http.StatusOK || !strings.Contains(body, artemis) {
+		t.Fatalf("scoped merge = %d %s", resp.StatusCode, body)
+	}
+	var first, last string
+	if err := e.db.QueryRowContext(ctx, `SELECT details FROM audit_events WHERE action = 'book.bulk_edit' AND details LIKE '%"merged"%' ORDER BY id LIMIT 1`).Scan(&first); err != nil ||
+		!strings.Contains(first, `"merged":["A. Weir","Weir, Andy","Weir, Andy","Andy Weir"]`) || strings.Contains(first, `"library"`) {
+		t.Errorf("first merge's audit details = %s, %v", first, err)
+	}
+	if err := e.db.QueryRowContext(ctx, `SELECT details FROM audit_events WHERE action = 'book.bulk_edit' ORDER BY id DESC LIMIT 1`).Scan(&last); err != nil ||
+		!strings.Contains(last, `"merged":["Weir, Andy"]`) || !strings.Contains(last, `"library":"Main"`) {
+		t.Errorf("scoped merge's audit details = %s, %v", last, err)
+	}
 	manyBooks := `{"field":"author","target":"y","books":[` +
 		strings.Repeat(`{"library_id":1,"path":"p","previous":null},`, catalog.MaxMergeBooks) + `{"library_id":1,"path":"p","previous":null}]}`
 	if resp, body := e.do(t, "POST", path+"/undo", admin, manyBooks); resp.StatusCode != 400 || !strings.Contains(body, `"code":"too_large"`) {

@@ -2876,6 +2876,7 @@
   "audit.detail.paths": "Pastas e livros",
   "audit.detail.share": "Partilha",
   "audit.detail.library": "Biblioteca",
+  "audit.detail.merged": "Grafias fundidas",
   "audit.detail.device": "Dispositivo",
   "audit.detail.kind": "Tipo",
   "audit.detail.book": "Livro",

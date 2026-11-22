@@ -2876,6 +2876,7 @@
   "audit.detail.paths": "Dossiers et livres",
   "audit.detail.share": "Partage",
   "audit.detail.library": "Bibliothèque",
+  "audit.detail.merged": "Orthographes fusionnées",
   "audit.detail.device": "Appareil",
   "audit.detail.kind": "Type",
   "audit.detail.book": "Livre",

@@ -2876,6 +2876,7 @@
   "audit.detail.paths": "Carpetas y libros",
   "audit.detail.share": "Colección compartida",
   "audit.detail.library": "Biblioteca",
+  "audit.detail.merged": "Grafías fusionadas",
   "audit.detail.device": "Dispositivo",
   "audit.detail.kind": "Tipo",
   "audit.detail.book": "Libro",

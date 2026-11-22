@@ -765,6 +765,10 @@ func (a *API) handleAdminMergeSpellings(w http.ResponseWriter, r *http.Request) 
 	if len(books) > 0 {
 		details := (editRequest{Set: editFieldValues{req.Field: req.Target}}).details()
 		details["books"] = len(books)
+		details["merged"] = auditNames(req.Sources)
+		if req.LibraryID != 0 {
+			details["library"] = a.libraryName(r, req.LibraryID)
+		}
 		a.audit(r, "book.bulk_edit", "", details)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"books": books})
@@ -830,6 +834,19 @@ func writeMergeError(a *API, w http.ResponseWriter, err error, op, genericMsg st
 	default:
 		a.writeCatalogError(w, err, op, genericMsg)
 	}
+}
+
+// auditNames is a list of names for an audit entry: the first 20, each cut
+// as the edit's values are (editRequest.details).
+func auditNames(names []string) []string {
+	out := make([]string, 0, min(len(names), 20))
+	for _, name := range names[:min(len(names), 20)] {
+		if r := []rune(name); len(r) > 120 {
+			name = string(r[:119]) + "…"
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 // handleAdminMatch serves GET /admin/libraries/{id}/book/match?path=: community

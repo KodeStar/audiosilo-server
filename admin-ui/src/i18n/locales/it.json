@@ -2876,6 +2876,7 @@
   "audit.detail.paths": "Cartelle e libri",
   "audit.detail.share": "Condivisione",
   "audit.detail.library": "Libreria",
+  "audit.detail.merged": "Grafie unite",
   "audit.detail.device": "Dispositivo",
   "audit.detail.kind": "Tipo",
   "audit.detail.book": "Libro",

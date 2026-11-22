@@ -2699,6 +2699,7 @@
   "audit.detail.paths": "Folders and books",
   "audit.detail.share": "Share",
   "audit.detail.library": "Library",
+  "audit.detail.merged": "Merged spellings",
   "audit.detail.device": "Device",
   "audit.detail.kind": "Kind",
   "audit.detail.book": "Book",
