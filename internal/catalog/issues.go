@@ -318,9 +318,10 @@ type dupRow struct {
 	legacyIgnore string
 }
 
-// quality is the row as the Book betterQuality and identitySignals read.
+// ref is the row's book as a decision names it.
 func (r *dupRow) ref() Ref { return Ref{r.libraryID, r.path} }
 
+// quality is the row as the Book betterQuality and identitySignals read.
 func (r *dupRow) quality() Book {
 	return Book{Title: r.title, Author: r.author, Narrator: r.narrator, ASIN: r.asin, ISBN: r.isbn,
 		ContentHash: r.hash, Format: r.format, Duration: r.duration, Size: r.size}

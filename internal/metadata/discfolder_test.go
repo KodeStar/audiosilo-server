@@ -19,6 +19,8 @@ func TestIsDiscFolder(t *testing.T) {
 	}
 }
 
+// Disc folders join in natural order, ties broken by path, so folders whose names
+// read alike never interleave their files.
 func TestDiscOrder(t *testing.T) {
 	t.Parallel()
 	want := []string{

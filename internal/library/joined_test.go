@@ -20,8 +20,6 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
-// Disc folders join in natural order, ties broken by path, so folders whose names
-// read alike never interleave their files.
 func TestJoinedPartTitle(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ book, file, want string }{

@@ -1678,7 +1678,7 @@
   "health.dup.path": "Percorso",
   "health.dup.library": "Libreria",
   "health.dup.across": "Includi le altre librerie",
-  "health.dup.acrossHint": "Confronta a coppie le copie di biblioteche diverse. Ignorare una coppia nasconde solo quel confronto.",
+  "health.dup.acrossHint": "Confronta a coppie le copie di librerie diverse. Ignorare una coppia nasconde solo quel confronto.",
   "health.dup.format": "Formato",
   "health.dup.length": "Durata",
   "health.dup.unknown": "Sconosciuta",
