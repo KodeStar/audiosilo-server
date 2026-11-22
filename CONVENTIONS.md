@@ -4533,7 +4533,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `invalid_dest_path`, also for a disc folder ("CD 3") directly inside an indexed book (reason `indexed_book`)
   or a folder set to one book (`book_override`). Setting the `book` override checks saved destinations and open
   imports in the same library. Changing an account's library or a placement template checks disc folders
-  the server can identify before placement (`checkDestOwnFolder`, `audibleDiscParent`). An actual joined
+  the server can identify before placement (`checkDestOwnFolder`, `audibleDiscParent`; a remap skips the
+  destinations of titles already on this server, which are never backed up again: `checkAudibleRemap`). An actual joined
   placement is checked at fold time too) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
   `invalid_policy` / `invalid_template` / `invalid_dest_path`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
   when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`

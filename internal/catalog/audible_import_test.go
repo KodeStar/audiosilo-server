@@ -1035,6 +1035,51 @@ func TestAudibleDiscParent(t *testing.T) {
 	}
 }
 
+// A remap checks the destinations of the titles that may still be backed up:
+// one already on this server isn't backed up again, so its saved disc folder
+// (where its backup sits, in the old library) refuses nothing in the new one;
+// marked "Not this book", it may be, and refuses.
+func TestAudibleRemapSkipsMatchedTitles(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	f.poll(t, "p1", avail("B000000001", ""))
+	dest := "Tapes/CD2"
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000001", AudibleTitlePatch{DestPath: &dest}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := f.c.CreateLibrary(f.ctx, Library{Name: "Other", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.SetFolderOverride(f.ctx, other.ID, "Tapes", OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	mapTo := func(lib int64) error {
+		_, err := f.c.PutAudibleAccount(f.ctx, "acct0001", AudibleAccountInput{Label: "x", Marketplace: "us",
+			UserID: f.user, LibraryID: lib, Policy: "manual", Sync: true})
+		return err
+	}
+	if err := mapTo(other.ID); !errors.Is(err, ErrAudibleBookOverride) {
+		t.Fatalf("unmatched title's disc destination: %v, want ErrAudibleBookOverride", err)
+	}
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET match_library_id = ?, match_path = ? WHERE asin = 'B000000001'`,
+		f.lib.ID, dest); err != nil {
+		t.Fatal(err)
+	}
+	if err := mapTo(other.ID); err != nil {
+		t.Fatalf("matched title's destination refused the remap: %v", err)
+	}
+	if err := mapTo(f.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET rejected = 1 WHERE asin = 'B000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mapTo(other.ID); !errors.Is(err, ErrAudibleBookOverride) {
+		t.Fatalf("title marked Not this book: %v, want ErrAudibleBookOverride", err)
+	}
+}
+
 // can_backup is the console's Back up allowed: exactly the titles
 // RequestAudibleBackup takes (its account's pause aside).
 func TestAudibleCanBackup(t *testing.T) {

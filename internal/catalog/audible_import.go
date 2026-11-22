@@ -337,7 +337,10 @@ func discConflict(sentinel error, book string) error {
 }
 
 // checkAudibleRemap checks the saved destinations in the library the Bridge
-// proposes for this account, including when a paused account resumes.
+// proposes for this account, including when a paused account resumes. A title
+// already on this server (matched, not marked "Not this book") is never backed
+// up again, so its destination, where an earlier backup may sit in the old
+// library, refuses nothing in the new one.
 func checkAudibleRemap(ctx context.Context, tx *sql.Tx, account string, library int64, template string) error {
 	if err := checkDestOwnFolder(ctx, tx, library, "", template); err != nil {
 		return err
@@ -346,7 +349,8 @@ func checkAudibleRemap(ctx context.Context, tx *sql.Tx, account string, library 
 	var book string
 	var override bool
 	err := tx.QueryRowContext(ctx, `SELECT p, EXISTS(SELECT 1 FROM folder_overrides WHERE library_id = ?2 AND path = p AND mode = ?3) AS o
-		FROM (SELECT DISTINCT audible_disc_parent(dest_path, '') AS p FROM audible_titles WHERE account = ?1 AND dest_path <> '')
+		FROM (SELECT DISTINCT audible_disc_parent(dest_path, '') AS p FROM audible_titles
+		       WHERE account = ?1 AND dest_path <> '' AND (match_path IS NULL OR rejected = 1))
 		WHERE p <> '' AND (o OR EXISTS(SELECT 1 FROM books WHERE library_id = ?2 AND rel_path = p))
 		ORDER BY o DESC LIMIT 1`, account, library, OverrideBook).Scan(&book, &override)
 	switch {
