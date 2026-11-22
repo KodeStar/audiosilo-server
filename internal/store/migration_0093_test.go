@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"slices"
 	"testing"
 )
 
@@ -19,11 +20,9 @@ func TestMigration0093KeepsExistingAudibleTitle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	var oldTitle bool
-	err = db.QueryRowContext(ctx, `SELECT reason = 'contested' AND import_job_id = 42 AND updated_at = 'u'
-		    AND fold_refusal_reason = '' AND fold_refused_at IS NULL
-		  FROM audible_titles WHERE account = 'acct0001' AND asin = 'B000000001'`).Scan(&oldTitle)
-	if err != nil || !oldTitle {
-		t.Fatalf("legacy title after migration: %t, %v", oldTitle, err)
+	got := lines(t, db, `SELECT reason || ' ' || import_job_id || ' ' || updated_at || ' [' || fold_refusal_reason || '] ' ||
+		    COALESCE(fold_refused_at, 'null') FROM audible_titles WHERE account = 'acct0001' AND asin = 'B000000001'`)
+	if want := []string{"contested 42 u [] null"}; !slices.Equal(got, want) {
+		t.Fatalf("legacy title after migration = %q, want %q", got, want)
 	}
 }

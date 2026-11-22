@@ -426,7 +426,7 @@ func TestAudibleAdminTitleFoldRefusal(t *testing.T) {
 		t.Fatalf("titles = %+v", page)
 	}
 	x := page.Titles[0]
-	if x.Import != nil || x.Match != nil || x.FoldRefusalReason != "not_indexed" || x.FoldRefusedAt == nil {
+	if x.Import != nil || x.Match != nil || x.FoldRefusalReason != catalog.AudibleFoldNotIndexed || x.FoldRefusedAt == nil {
 		t.Fatalf("title after the job was removed = %+v", x)
 	}
 	if code, out := b.putTitles(t, testAccount, "p2", true, title(asin, "One", "available", b.lib.ID, mistbornBook)); code != http.StatusOK {

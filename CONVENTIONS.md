@@ -4481,7 +4481,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   records `fold_refusal_reason` and `fold_refused_at` on the title (`0093`). The admin title includes both until
   a later import or accepted match clears them. Settings > Audible explains an unusable report (`invalid_result`),
   a missing book (`not_indexed`), a book the backup could not claim (`not_own_book`), or one marked
-  Not this book (`rejected_match`), even after the job is gone. Older rows keep their existing backup status.
+  Not this book (`rejected_match`) (`AudibleFold*`, the console's `FOLD_REASONS`), even after the job is gone. Older rows keep their existing backup status.
   A successful import sets the match
   (`match_how:"import"`), clears rejected and pending, only while `import_job_id` is still this job. A poll
   keeps an `import` match while its book is indexed and the poll names no other. A failure's code is the

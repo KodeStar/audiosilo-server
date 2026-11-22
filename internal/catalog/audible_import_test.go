@@ -448,11 +448,7 @@ func TestFoldAudibleImport(t *testing.T) {
 	}
 	checkRefusal := func(reason, at string) {
 		t.Helper()
-		x, err := f.c.AudibleTitle(f.ctx, "acct0001", "B000000001")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if x.FoldRefusalReason != reason || x.FoldRefusedAt == nil || *x.FoldRefusedAt != at {
+		if x := f.title(t, "B000000001"); x.FoldRefusalReason != reason || x.FoldRefusedAt == nil || *x.FoldRefusedAt != at {
 			t.Fatalf("want refusal %q at %s, got %+v", reason, at, x)
 		}
 	}
@@ -462,7 +458,7 @@ func TestFoldAudibleImport(t *testing.T) {
 		t.Fatal("accepted unreadable backup result")
 	}
 	invalidAt := f.c.ts()
-	checkRefusal("invalid_result", invalidAt)
+	checkRefusal(AudibleFoldInvalidResult, invalidAt)
 	f.tick(time.Second)
 	// A bad params field can leave the account and ASIN partially decoded.
 	// Such a job cannot identify a title on which to record a refusal.
@@ -470,13 +466,13 @@ func TestFoldAudibleImport(t *testing.T) {
 	if err := f.c.FoldAudibleImport(f.ctx, bad); err == nil {
 		t.Fatal("accepted unreadable backup params")
 	}
-	checkRefusal("invalid_result", invalidAt)
+	checkRefusal(AudibleFoldInvalidResult, invalidAt)
 	if err := f.c.FoldAudibleImport(f.ctx, job(5, lib, "Author/Book")); !errors.Is(err, ErrImportNotIndexed) {
 		t.Fatalf("no book there: %v", err)
 	}
 	refusedAt := f.c.ts()
 	f.poll(t, "unmatched", avail("B000000001", ""))
-	checkRefusal("not_indexed", refusedAt)
+	checkRefusal(AudibleFoldNotIndexed, refusedAt)
 	// The book the backup made: its one file is the placed one.
 	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: lib, RelPath: "Author/Book", IsFolder: true, Title: "Book",
 		Files: []BookFile{{RelPath: "Author/Book/Book.m4b"}}}); err != nil {
@@ -485,7 +481,7 @@ func TestFoldAudibleImport(t *testing.T) {
 	if err := f.c.FoldAudibleImport(f.ctx, job(5, lib+1, "Author/Book")); !errors.Is(err, ErrImportNotIndexed) {
 		t.Fatalf("another library: %v", err)
 	}
-	checkRefusal("invalid_result", f.c.ts())
+	checkRefusal(AudibleFoldInvalidResult, f.c.ts())
 	// Another backup's job leaves the title alone.
 	if err := f.c.FoldAudibleImport(f.ctx, job(6, lib, "Author/Book")); err != nil {
 		t.Fatal(err)
@@ -496,7 +492,7 @@ func TestFoldAudibleImport(t *testing.T) {
 	if err := f.setImport("acct0001", "B000000001", 7); err != nil {
 		t.Fatal(err)
 	}
-	checkRefusal("invalid_result", f.c.ts())
+	checkRefusal(AudibleFoldInvalidResult, f.c.ts())
 	if err := f.c.FoldAudibleImport(f.ctx, job(7, lib, "Author/Book")); err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +574,7 @@ func TestFoldAudibleImportOwnBook(t *testing.T) {
 	if err := f.c.FoldAudibleImport(f.ctx, done(1, "B000000001", "Author/Other", "Author/Other/One.m4b")); !errors.Is(err, ErrImportNotOwn) {
 		t.Fatalf("joined another title's book: %v, want ErrImportNotOwn", err)
 	}
-	if x := match("B000000001"); x.Match != nil || x.FoldRefusalReason != "not_own_book" || x.FoldRefusedAt == nil {
+	if x := match("B000000001"); x.Match != nil || x.FoldRefusalReason != AudibleFoldNotOwnBook || x.FoldRefusedAt == nil {
 		t.Fatalf("One after joining another book: %+v", x)
 	}
 	if x := match("B000000002"); x.Match == nil || x.Match.Path != "Author/Other" || x.Match.How != "fuzzy" {
@@ -602,7 +598,7 @@ func TestFoldAudibleImportOwnBook(t *testing.T) {
 	refusedAt := f.c.ts()
 	f.poll(t, "p2", wrong)
 	if x := match("B000000003"); !x.Rejected || x.Match == nil || x.Match.How != "fuzzy" ||
-		x.FoldRefusalReason != "rejected_match" || x.FoldRefusedAt == nil || *x.FoldRefusedAt != refusedAt {
+		x.FoldRefusalReason != AudibleFoldRejectedMatch || x.FoldRefusedAt == nil || *x.FoldRefusedAt != refusedAt {
 		t.Fatalf("poll reporting the rejected match: %+v", x)
 	}
 	if x, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", wrong.ASIN, AudibleTitlePatch{Rejected: new(false)}); err != nil ||
