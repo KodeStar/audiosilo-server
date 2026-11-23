@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -267,6 +268,9 @@ type API struct {
 	// coverWork counts the batch's thumbnails being made, which may outlive
 	// its answer (WaitMediaCaches waits for them).
 	coverWork sync.WaitGroup
+	// readalongRead reads a book's read-along map (library.ReadReadalongMap;
+	// a test counts the reads).
+	readalongRead func(lib catalog.Library, bookPath string, folder bool) ([]byte, fs.FileInfo, error)
 
 	// bridge is the Bridge's status and job queue (SetBridge, before Handler).
 	bridge *bridge.Service
@@ -355,6 +359,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		colorWriteWait: coverColorWriteTimeout,
 		fileWait:       fileWaitTimeout,
 		coverBatchWait: coverBatchTimeout,
+		readalongRead:  library.ReadReadalongMap,
 		streamWait:     streamOpenTimeout,
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 		communityReads: make(chan struct{}, maxCommunityCoverReads),
