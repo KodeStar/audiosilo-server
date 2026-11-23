@@ -125,8 +125,12 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 	// and the answer waits at most coverBatchWait for them: a cover on a share
 	// slow to answer is "pending" rather than holding every other (server#225).
 	// A request that ends before its answer goes (a page scrolled past) stops
-	// its covers: no one asks again for them.
-	work, stop := context.WithCancel(context.WithoutCancel(ctx))
+	// its covers: no one asks again for them. They run on the server's lifetime
+	// (baseCtx: a stop ends them rather than waiting them out in
+	// WaitMediaCaches) and within the request timeout from now, the bound the
+	// request's own context gave them, so covers queued behind maxCoverReads on
+	// a slow share are not left waiting with no end.
+	work, stop := context.WithTimeout(a.baseCtx, a.timeoutDur)
 	var (
 		mu       sync.Mutex
 		answered bool

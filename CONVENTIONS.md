@@ -3122,7 +3122,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing), from
   one `catalog.CoverSources` query per library for the whole batch. The answer waits at most
   `coverBatchWait` (2 s) for its covers: one still being read then is `"pending": true` with `data` `""`,
-  its read finishing into the thumbnail cache (`API.coverWork`, which `WaitMediaCaches` waits for), and
+  its read finishing into the thumbnail cache (`API.coverWork`, which `WaitMediaCaches` waits for; on
+  `baseCtx`, so a stop ends it, and within the request timeout, the bound the request gave it), and
   an ask for a cover whose read is under way waits on that read (`sharedThumbnail`, `libraryThumbs`),
   never starts a second; the console asks again for the pending ones only, up to `MAX_COVER_ASKS` times
   in all (`cover-batch.ts`), so a cover on a slow share holds none of the others (server#225). Admin book rows carry
