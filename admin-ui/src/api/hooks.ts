@@ -113,6 +113,7 @@ export const keys = {
   /** Every listing of one library's folders (a prefix: a scan changes them). */
   browseLibrary: (libraryId: number) => ['fs', libraryId] as const,
   browse: (libraryId: number, path: string) => ['fs', libraryId, path] as const,
+  /** A folder's first page with its own entry (`?detail=1`): the Folders screen's listings. */
   folderDetail: (libraryId: number, path: string) => ['fs', libraryId, path, 'detail'] as const,
   /** The selected folder's pages after its first, from `offset`, for its totals. */
   folderRest: (libraryId: number, path: string, offset: number) =>

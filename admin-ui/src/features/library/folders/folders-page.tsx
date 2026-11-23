@@ -155,18 +155,14 @@ function FolderExplorer({
     { path: p, offset: 0 },
     ...(pages.get(p) ?? []).map((offset) => ({ path: p, offset })),
   ]);
+  // Every first page carries its folder's own entry (?detail=1), so selecting a
+  // folder never moves a listing the tree shows to another cache entry: its rows
+  // would drop to a loading row, and a focused one with them.
   const results = useQueries({
-    queries: asked.map(({ path: p, offset }) => {
-      const detail = p === folder && offset === 0;
-      return {
-        queryKey: detail
-          ? keys.folderDetail(library.id, p)
-          : offset
-            ? keys.browsePage(library.id, p, offset)
-            : keys.browse(library.id, p),
-        queryFn: () => api.browse(library.id, p, offset, detail),
-      };
-    }),
+    queries: asked.map(({ path: p, offset }) => ({
+      queryKey: offset ? keys.browsePage(library.id, p, offset) : keys.folderDetail(library.id, p),
+      queryFn: () => api.browse(library.id, p, offset, offset === 0 && p !== ''),
+    })),
   });
   const byPath = new Map<string, (typeof results)[number][]>();
   asked.forEach(({ path: p }, i) => byPath.set(p, [...(byPath.get(p) ?? []), results[i]]));

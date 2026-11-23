@@ -211,6 +211,23 @@ describe('folders', () => {
     }
   });
 
+  it('keeps a folder listed, and the focus on its child, when the child is selected', async () => {
+    const calls = mockFetch(routes());
+    const { router } = renderApp('/library/folders');
+    const tree = await screen.findByRole('tree', { name: 'Folders in Fiction' });
+    const user = userEvent.setup();
+    await user.click(within(tree).getByRole('treeitem', { name: 'A' }));
+    const b = await within(tree).findByRole('treeitem', { name: /^B/ });
+    b.focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ folder: 'A/B' }));
+    // A's listing stays the one the tree read (no loading row in its place), so
+    // the focused row is the same element.
+    expect(within(tree).getByRole('treeitem', { name: /^B/ })).toBe(b);
+    expect(b).toHaveFocus();
+    expect(calls.filter((c) => c.query.get('path') === 'A')).toHaveLength(1);
+  });
+
   it('joins a folder whose audio is only in its disc folders', async () => {
     let override: FolderMode | undefined;
     const calls = mockFetch(
