@@ -113,6 +113,33 @@ func TestAudiblePlanned(t *testing.T) {
 	}
 }
 
+func TestRejectedMatchKeepsBackupPlan(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	ti := avail("B000000001", "Wrong edition")
+	book := AudibleMatch{LibraryID: f.lib.ID, Path: "Existing edition", How: "fuzzy"}
+	ti.Match = &book
+	f.poll(t, "p1", ti)
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	ti.Match, ti.Planned = nil, planned(f, "Own edition/Book.m4b")
+	other := contested("B000000002", "")
+	other.ContestedPath = book.Path
+	f.poll(t, "p2", ti, other)
+	if got := f.title(t, ti.ASIN); !got.Rejected || got.Match == nil || *got.Match != book ||
+		got.Planned == nil || *got.Planned != *ti.Planned || !got.CanBackup {
+		t.Fatalf("after the poll: %+v", got)
+	}
+	if got := f.title(t, other.ASIN); got.Contested == nil || len(got.Contested.With) != 0 {
+		t.Fatalf("rejected title still in contest: %+v", got.Contested)
+	}
+	got, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(false)})
+	if err != nil || got.Rejected || got.Match == nil || *got.Match != book || got.Planned != nil || got.CanBackup {
+		t.Fatalf("after Undo: %+v, %v", got, err)
+	}
+}
+
 // A planned destination and a contested book are checked strictly: a
 // Bridge's mistake fails the call, never stores half a plan.
 func TestAudiblePlannedChecked(t *testing.T) {

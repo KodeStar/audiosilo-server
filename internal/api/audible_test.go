@@ -87,6 +87,7 @@ func TestAudibleBridgeRoutesRefuseOtherCredentials(t *testing.T) {
 		{"PUT", "/api/v1/bridge/audible/accounts/" + testAccount,
 			fmt.Sprintf(`{"label":"x","marketplace":"us","user_id":%d,"library_id":%d,"policy":"manual","sync":true}`, b.adminID, b.lib.ID)},
 		{"PUT", "/api/v1/bridge/audible/accounts/" + testAccount + "/titles", `{"poll_id":"p1","final":false,"titles":[]}`},
+		{"GET", "/api/v1/bridge/audible/accounts/" + testAccount + "/titles", ""},
 		{"GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/books", b.lib.ID), ""},
 		{"PUT", fmt.Sprintf("/api/v1/bridge/libraries/%d/enrichment?path=%s", b.lib.ID, url.QueryEscape(mistbornBook)), `{"asin":"B000000001"}`},
 		{"DELETE", "/api/v1/bridge/audible/accounts/" + testAccount, ""},
@@ -479,6 +480,55 @@ func TestAudibleAccountPut(t *testing.T) {
 	// A refusal changed nothing; a re-map keeps created_at.
 	if code, out := b.putAccount(t, testAccount, b.adminID, b.lib.ID); code != http.StatusOK || !strings.Contains(out, a.CreatedAt) {
 		t.Fatalf("re-map: %d %s", code, out)
+	}
+}
+
+func TestBridgeAudibleTitleDecisions(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	setAudible(t, b.testEnv, b.adminTok, true)
+	const route = "/api/v1/bridge/audible/accounts/"
+	if resp, out := b.do(t, "GET", route+testAccount+"/titles", b.bridgeTok, ""); resp.StatusCode != http.StatusNotFound || codeOf(out) != "unknown_account" {
+		t.Fatalf("before mapping: %d %s", resp.StatusCode, out)
+	}
+	for _, account := range []string{testAccount, "acct0002"} {
+		if code, out := b.putAccount(t, account, b.adminID, b.lib.ID); code != http.StatusOK {
+			t.Fatalf("account: %d %s", code, out)
+		}
+		if code, out := b.putTitles(t, account, "p1", false,
+			title("B000000001", "One", "available", b.lib.ID, mistbornBook),
+			title("B000000002", "Two", "available", 0, ""),
+			title("B000000003", "Three", "available", 0, "")); code != http.StatusOK {
+			t.Fatalf("titles: %d %s", code, out)
+		}
+	}
+	for _, asin := range []string{"B000000001", "B000000003"} {
+		resp, out := b.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/"+asin, b.adminTok, `{"rejected":true}`)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatal(out)
+		}
+	}
+	for _, tc := range []struct{ account, query, asin, next string }{
+		{testAccount, "?limit=1", "B000000001", "B000000001"},
+		{testAccount, "?limit=1&after=B000000001", "B000000003", ""},
+		{"acct0002", "", "", ""},
+	} {
+		resp, out := b.do(t, "GET", route+tc.account+"/titles"+tc.query, b.bridgeTok, "")
+		var page struct {
+			Titles []catalog.AudibleTitleDecision
+			Next   string
+		}
+		decodeInto(t, out, &page)
+		if resp.StatusCode != http.StatusOK || page.Next != tc.next || page.Titles == nil {
+			t.Fatalf("page: %d %s", resp.StatusCode, out)
+		}
+		if tc.asin == "" {
+			if len(page.Titles) != 0 {
+				t.Fatalf("another account's decisions: %s", out)
+			}
+		} else if len(page.Titles) != 1 || page.Titles[0].ASIN != tc.asin || !page.Titles[0].Rejected {
+			t.Fatalf("want only %s marked rejected: %s", tc.asin, out)
+		}
 	}
 }
 

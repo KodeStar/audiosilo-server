@@ -505,6 +505,35 @@ type AudibleMatch struct {
 	How       string `json:"how"`
 }
 
+// AudibleTitleDecision is the console's decision about a title, read before a poll matches it.
+type AudibleTitleDecision struct {
+	ASIN     string `json:"asin"`
+	Rejected bool   `json:"rejected"`
+}
+
+// BridgeAudibleTitleDecisions pages only the marked titles. An unmarked title
+// (including a new purchase) needs no row. A mark belongs to its account even
+// when the title has no match or several accounts use the same library.
+func (c *Catalog) BridgeAudibleTitleDecisions(ctx context.Context, account, after string, limit int) ([]AudibleTitleDecision, string, error) {
+	if after != "" && !ValidASIN(after) {
+		return nil, "", ErrInvalidCursor
+	}
+	if _, err := c.AudibleAccount(ctx, account); err != nil {
+		return nil, "", err
+	}
+	if limit <= 0 || limit > MaxAudibleTitles {
+		limit = MaxAudibleTitles
+	}
+	titles, err := queryRows(ctx, c.db, func(row *sql.Rows, t *AudibleTitleDecision) error {
+		return row.Scan(&t.ASIN, &t.Rejected)
+	}, `SELECT asin, rejected FROM audible_titles WHERE account = ? AND rejected = 1 AND asin > ?
+		ORDER BY asin LIMIT ?`, account, after, limit+1)
+	if err != nil || len(titles) <= limit {
+		return titles, "", err
+	}
+	return titles[:limit], titles[limit-1].ASIN, nil
+}
+
 // AudibleTitleInput is one title of a poll, as the Bridge reports it.
 type AudibleTitleInput struct {
 	ASIN        string          `json:"asin"`
@@ -739,8 +768,8 @@ func bridgeBookPath(p string) bool {
 
 // PutAudibleTitles stores titles (at most MaxAudibleTitles) of one poll of
 // account (pollID, the Bridge's), each replacing what an earlier poll said of
-// it (its planned destination and contested book too, both dropped when a
-// match is stored) but keeping the console's and an import's columns
+// it (its planned destination and contested book too, both dropped for an
+// accepted match) but keeping the console's and an import's columns
 // (rejected, ignored, no_sync, dest_path, import_job_id, first_seen). A match to a library that is gone or
 // not a books library is stored as none. A backup's match (how "import",
 // FoldAudibleImport) stays while its book is indexed and the poll names no
@@ -782,6 +811,8 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 		if err != nil {
 			return err
 		}
+		// A rejected match still identifies the book the import fold must refuse.
+		// Preserve it for that check and for Undo while storing the separate plan.
 		upsert, err := tx.PrepareContext(ctx,
 			`INSERT INTO audible_titles(account, asin, title, authors, series, release_date, runtime_s, state, reason,
 			     match_library_id, match_path, match_how, first_seen, updated_at, poll_id, planned,
@@ -789,8 +820,10 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(account, asin) DO UPDATE SET title = excluded.title, authors = excluded.authors,
 			     series = excluded.series, release_date = excluded.release_date, runtime_s = excluded.runtime_s,
-			     state = excluded.state, reason = excluded.reason, match_library_id = excluded.match_library_id,
-			     match_path = excluded.match_path, match_how = excluded.match_how,
+			     state = excluded.state, reason = excluded.reason,
+			     match_library_id = CASE WHEN rejected THEN match_library_id ELSE excluded.match_library_id END,
+			     match_path = CASE WHEN rejected THEN match_path ELSE excluded.match_path END,
+			     match_how = CASE WHEN rejected THEN match_how ELSE excluded.match_how END,
 			     updated_at = excluded.updated_at, poll_id = excluded.poll_id,
 			     planned = excluded.planned, contest_library_id = excluded.contest_library_id,
 			     contest_path = excluded.contest_path`)
@@ -870,7 +903,7 @@ func importMatches(ctx context.Context, tx *sql.Tx, account string) (map[string]
 	}) error {
 		return rows.Scan(&m.asin, &m.LibraryID, &m.Path)
 	}, `SELECT t.asin, t.match_library_id, t.match_path FROM audible_titles t
-		  WHERE t.account = ? AND t.match_how = ? AND t.match_path IS NOT NULL
+		  WHERE t.account = ? AND t.match_how = ? AND t.match_path IS NOT NULL AND t.rejected = 0
 		    AND EXISTS(SELECT 1 FROM books b WHERE b.library_id = t.match_library_id AND b.rel_path = t.match_path)`,
 		account, AudibleMatchImport)
 	out := make(map[string]AudibleMatch, len(rows))
@@ -1042,7 +1075,7 @@ func (c *Catalog) fillContests(ctx context.Context, titles []AudibleTitle) error
 	}, `SELECT o.account, COALESCE(o.contest_library_id, 0), o.contest_path,
 		    COALESCE(o.match_library_id, 0), COALESCE(o.match_path, ''), o.asin, o.title
 		  FROM audible_titles o
-		 WHERE o.state <> 'gone' AND (`+strings.Join(terms, ` OR `)+`)
+		 WHERE o.state <> 'gone' AND o.rejected = 0 AND (`+strings.Join(terms, ` OR `)+`)
 		 ORDER BY o.title COLLATE NOCASE, o.asin`, args...)
 	if err != nil {
 		return err
@@ -1105,8 +1138,8 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 	}
 	// The plan and the contest are in the account's library: a paused account
 	// (its library deleted) or one mapped to another library since shows
-	// neither until its next poll. (A stored match clears both.)
-	if planned != "" && acctLib.Valid {
+	// neither until its next poll. Undo can accept a match before the next poll.
+	if planned != "" && acctLib.Valid && (t.Match == nil || t.Rejected) {
 		var p AudiblePlan
 		if json.Unmarshal([]byte(planned), &p) == nil && p.LibraryID == acctLib.Int64 {
 			t.Planned = &p

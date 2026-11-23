@@ -940,6 +940,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/bridge/audible/accounts/{account}", a.requireBridge(a.handleBridgeAudibleAccount))
 	mux.Handle("DELETE /api/v1/bridge/audible/accounts/{account}", a.requireBridge(a.handleBridgeAudibleAccountDelete))
 	mux.Handle("PUT /api/v1/bridge/audible/accounts/{account}/titles", a.requireBridge(a.handleBridgeAudibleTitles))
+	mux.Handle("GET /api/v1/bridge/audible/accounts/{account}/titles", a.requireBridge(a.handleBridgeAudibleTitleDecisions))
 	mux.Handle("GET /api/v1/bridge/libraries/{id}/books", a.requireBridge(a.handleBridgeBooks))
 	mux.Handle("PUT /api/v1/bridge/libraries/{id}/enrichment", a.requireBridge(a.handleBridgeEnrichment))
 	// Position sync (Phase 4c, handlers_audible_sync.go): an account's places

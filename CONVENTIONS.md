@@ -4436,7 +4436,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   "owns nothing"; free text cleaned and bounded, not refused: a title's authors and series past the first 20
   and 10 are dropped, and past the first 100 (`maxAudibleNamesRead`) are skipped unread; a match path is clean, or `.` for a `book` override on the library root, as the books
   list gives it; a match naming a missing or non-books library is stored as none; `final` marks every title
-  this `poll_id` did not send `gone` and sets `last_poll_at`); `GET /bridge/libraries/{id}/books`
+  this `poll_id` did not send `gone` and sets `last_poll_at`). `GET .../titles?after=&limit=`
+  lists only this account's titles marked Not this book, in ASIN order, up to 500 per page.
+  It returns `{titles:[{asin, rejected}], next}` with the last ASIN as the next cursor and `""` at the end.
+  The Bridge reads the marks before matching. `GET /bridge/libraries/{id}/books`
   (`{books:[{path, title, authors, narrators, series, asin, isbn, duration}], next}`, path cursor, up to
   500; a main series with no position takes the one the code leading the book's folder name gives,
   `metadata.FolderCodePosition`: "DH06 - ..." is Dragon Heart 6, "LAM05-06" the range "5-6" (an omnibus
@@ -4581,7 +4584,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge left unmatched. `0065` adds `audible_titles.planned` (JSON, `''` none) and `contest_library_id` + `contest_path`
   (NULL and `''` none; the library is the account's at the PUT, and no contest is stored when the title's plan names
   another library: the account was mapped elsewhere while the poll ran), all the poll's: each titles PUT writes them and
-  a stored match (the poll's, a kept `import` match, `FoldAudibleImport`) clears them; a title the final call marks
+  an accepted match (the poll's, a kept `import` match, `FoldAudibleImport`) clears them. A rejected
+  title can keep a plan alongside the rejected match. The match identifies the book for Undo and for
+  refusing a backup that landed there. A title the final call marks
   `gone` loses its plan. **Planned**: each title of the PUT may carry `planned {library_id, path, file, kind, siblings, state,
   conflict, template}` (the Bridge plans the backup's place during `audible.poll`; placement rules and the disk check
   are its own, the server never previews one), checked strictly by `checkAudiblePlan`: library > 0, `path` a clean
@@ -4594,7 +4599,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   shows none until its next poll). **Contested**: `contested_path` (input only, omitempty: a clean book path or `.`, `bridgeBookPath`) is the
   book a title tied for; `GET /admin/audible/titles` (and a single title, the PATCH answer) shows `contested
   {library_id, path, with:[{asin, title}]}` or null: shown only while the account is still mapped to the contest's
-  library, `with` the account's other titles (not `gone`) contested over that book or matched to it, by title, at most
+  library, `with` the account's other titles still present and unmarked that contested or matched that book, by title, at most
   10 (`fillContests`, one query a page). A move or a join carries `contest_path` like a match's path, and a library's
   delete clears its contests (`DeleteLibrary`). **Poll params**: `audible.poll` carries the account's `template` (omitempty;
   `AudiblePoll(account, template, prio)`, from `DueAudiblePolls` and Check now), bounded, never parsed: a template

@@ -262,6 +262,25 @@ func (a *API) handleBridgeAudibleTitles(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// handleBridgeAudibleTitleDecisions lists the account's titles marked "Not this book".
+func (a *API) handleBridgeAudibleTitleDecisions(w http.ResponseWriter, r *http.Request) {
+	id, ok := audibleAccountID(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := positiveLimit(w, r)
+	if !ok {
+		return
+	}
+	titles, next, err := a.cat.BridgeAudibleTitleDecisions(r.Context(), id, r.URL.Query().Get("after"), limit)
+	if err != nil {
+		a.writeAudibleError(w, err, "read audible title decisions failed")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"titles": titles, "next": next})
+}
+
 // bridgeListBook is one book of GET /bridge/libraries/{id}/books: what the
 // Bridge's matcher reads.
 type bridgeListBook struct {
