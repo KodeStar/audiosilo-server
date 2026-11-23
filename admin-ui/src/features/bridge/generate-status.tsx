@@ -23,7 +23,6 @@ import {
   KIND_DETECT,
   KIND_GENERATE,
   KIND_READALONG,
-  oneStop,
   parkHint,
   parkKey,
   READALONG_ALIGNING,
@@ -146,7 +145,7 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
           <p className="text-[12.5px] text-muted-foreground">
             {/* Once the time has passed the Bridge is retrying: never "tries again ... ago". */}
             {Date.parse(park.retryAt) > Date.now()
-              ? oneStop(t('bridge.generate.retryAt', { when: formatRelative(park.retryAt, lang) }))
+              ? t('bridge.generate.retryAt', { when: formatRelative(park.retryAt, lang) })
               : t('bridge.generate.retrying')}
           </p>
         ) : null}

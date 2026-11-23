@@ -828,7 +828,7 @@ func TestMoveJobs(t *testing.T) {
 		t.Fatalf("the key didn't move: %+v %v %v", again, created, err)
 	}
 	move("New", "Taken")
-	if j, _ := q.Job(ctx, old.ID); j.State != StateCancelled || *j.Path != "Taken" {
+	if j, _ := q.Job(ctx, old.ID); j.State != StateCancelled || *j.Path != "Taken" || j.ErrorCode != "server_cancelled" {
 		t.Fatalf("the colliding job = %+v, want cancelled and moved", j)
 	}
 	if j, _ := q.Job(ctx, clash.ID); j.State != StateQueued {
@@ -1041,10 +1041,10 @@ func TestServerCancelReasonOutlivesReports(t *testing.T) {
 	if _, created, err := q.sidecars("", book); err != nil || !created {
 		t.Fatalf("generate = %v, %v", created, err)
 	}
-	if j, _ := q.Job(ctx, desc.ID); !j.CancelRequested || j.Error != reason || j.State != StateRunning {
+	if j, _ := q.Job(ctx, desc.ID); !j.CancelRequested || j.Error != reason || j.ErrorCode != "server_cancelled" || j.State != StateRunning {
 		t.Fatalf("asked to stop = %+v, want the reason recorded on the working job", j)
 	}
-	if j := stop(desc.ID, desc.Attempts); j.Error != reason {
+	if j := stop(desc.ID, desc.Attempts); j.Error != reason || j.ErrorCode != "server_cancelled" {
 		t.Fatalf("server cancel ended with %q, want %q", j.Error, reason)
 	}
 
@@ -1057,7 +1057,7 @@ func TestServerCancelReasonOutlivesReports(t *testing.T) {
 	if _, err := q.Cancel(ctx, admin.ID); err != nil {
 		t.Fatal(err)
 	}
-	if j := stop(admin.ID, admin.Attempts); j.Error != "supervisor: stopped" || !j.CancelRequested {
+	if j := stop(admin.ID, admin.Attempts); j.Error != "supervisor: stopped" || j.ErrorCode != "" || !j.CancelRequested {
 		t.Fatalf("admin cancel ended with %+v", j)
 	}
 
@@ -1101,6 +1101,24 @@ func TestServerCancelReasonOutlivesReports(t *testing.T) {
 		if err != nil || j.State != end.wantState || j.Error != end.want {
 			t.Fatalf("%s after the server's cancel = %+v, %v; want %s with error %q", end.state, j, err, end.wantState, end.want)
 		}
+	}
+
+	// A row an older server stored as failed once asked to stop, keeping the
+	// reason, reads as the server's cancel on the single and the list read.
+	if _, _, err := q.describe("", ptr("Author/Old")); err != nil {
+		t.Fatal(err)
+	}
+	old := q.work(t, KindDescribe, "")
+	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET state = 'failed', cancel_requested = 1, error = ?,
+	        lease_until = NULL, finished_at = updated_at WHERE id = ?`, reason, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := q.Job(ctx, old.ID); err != nil || j.ErrorCode != ErrorServerCancelled {
+		t.Fatalf("old failed row = %+v, %v; want error_code %s", j, err, ErrorServerCancelled)
+	}
+	list, _, err := q.List(ctx, Filter{State: StateFailed})
+	if err != nil || len(list) != 1 || list[0].ID != old.ID || list[0].ErrorCode != ErrorServerCancelled {
+		t.Fatalf("listed failed jobs = %+v, %v; want the old row with error_code %s", list, err, ErrorServerCancelled)
 	}
 }
 

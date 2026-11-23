@@ -29,6 +29,9 @@ type BookProposal struct {
 	// a new match for a book with no ASIN or ISBN of its own: another work beside
 	// the book's own identifier leaves its recorded match as it is.
 	MatchAlone bool `json:"match_alone"`
+	// RecordsOffered: with no fields ticked, the recorded work and recording
+	// would gain or change an offered identifier.
+	RecordsOffered bool `json:"records_offered,omitempty"`
 	// Position and other series if the admin changes the main series checkbox.
 	AlternateSeries *ProposalFields `json:"alternate_series,omitempty"`
 }
@@ -48,6 +51,11 @@ func Preview(st *catalog.MatchState, c *meta.MatchCandidate, rec *meta.MatchReco
 	result := BookProposal{ProposalFields: ProposalFields{Values: p.Values, Set: w.Set, Revert: w.Revert},
 		WorkID: p.WorkID, RecordingID: p.RecordingID, CoverURL: p.CoverURL, Cover: w.Cover, Match: w.Anchor != nil}
 	result.MatchAlone = result.Match && st.Fields[catalog.FieldASIN].Value == "" && st.Fields[catalog.FieldISBN].Value == ""
+	if !result.Match && st.Anchor.WorkID != "" {
+		asin := st.Fields[catalog.FieldASIN].OfferedIdentifier(catalog.FieldASIN, p.Values[catalog.FieldASIN])
+		isbn := st.Fields[catalog.FieldISBN].OfferedIdentifier(catalog.FieldISBN, p.Values[catalog.FieldISBN])
+		result.RecordsOffered = (asin != "" && asin != st.Anchor.OfferedASIN) || (isbn != "" && isbn != st.Anchor.OfferedISBN)
+	}
 	result.offer(catalog.FieldSeries, series.name)
 	result.offer(catalog.FieldSeriesIndex, series.position)
 	result.offer(catalog.FieldMoreSeries, series.more)

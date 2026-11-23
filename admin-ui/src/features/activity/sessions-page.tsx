@@ -10,6 +10,7 @@ import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { PlaybackStatus } from '@/components/playback-status';
 import { QueryError } from '@/components/query-error';
+import { StatusText } from '@/components/status-text';
 import { Button } from '@/components/ui/button';
 import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
@@ -20,6 +21,7 @@ import {
   formatRelative,
   progressFraction,
 } from '@/lib/format';
+import { watchDownload } from './activity-model';
 import { useClientName } from './use-client-name';
 
 interface SessionsSearch {
@@ -236,6 +238,8 @@ export function SessionTable({
                 <td className="px-4 py-2.5">
                   {s.backfilled ? (
                     <span className="text-muted-foreground">-</span>
+                  ) : watchDownload(s) ? (
+                    <StatusText className="whitespace-nowrap">{t('live.watchDownload')}</StatusText>
                   ) : (
                     <PlaybackStatus direct={!s.transcoded} />
                   )}

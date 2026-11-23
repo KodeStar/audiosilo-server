@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
@@ -211,16 +211,25 @@ function CommunityCard({
 
   // Shown whenever a match is recorded, metadata on or off: an Unlink works
   // either way, and is the way out of a match left behind (server#350).
+  const unlinkHintId = useId();
   const unlinkButton = work ? (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={() => setConfirmUnlink(true)}
-      disabled={matchBlocked}
-    >
-      <Unlink aria-hidden="true" />
-      {t('book.community.unlink')}
-    </Button>
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => setConfirmUnlink(true)}
+        disabled={matchBlocked}
+        aria-describedby={matchBlocked ? unlinkHintId : undefined}
+      >
+        <Unlink aria-hidden="true" />
+        {t('book.community.unlink')}
+      </Button>
+      {matchBlocked && (
+        <p id={unlinkHintId} className="basis-full text-[12.5px] text-muted-foreground">
+          {t('book.community.unlinkBlocked')}
+        </p>
+      )}
+    </>
   ) : null;
   // Outside any matched branch: the unlink's answer turns the card unmatched
   // while the dialog is still closing.

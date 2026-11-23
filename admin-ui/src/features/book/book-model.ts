@@ -1,3 +1,4 @@
+import { ASIN, ISBN } from '@/lib/book-identifiers';
 import {
   FITTED_STATUSES,
   OVERRIDE_FIELDS,
@@ -54,9 +55,6 @@ export interface FieldCheck {
 const MAX_DESCRIPTION = 20000;
 const MAX_LANGUAGE = 64;
 const PUBLISHED = /^\d{4}(-\d{2}(-\d{2})?)?$/;
-const ASIN = /^[A-Z0-9]{10}$/;
-/** An ISBN-10 or ISBN-13, upper case, without hyphens or spaces. */
-export const ISBN = /^(\d{9}[\dX]|\d{13})$/;
 
 /** A string's length in characters (code points), as the server counts it (utf8.RuneCountInString). */
 export const runes = (s: string) => [...s].length;

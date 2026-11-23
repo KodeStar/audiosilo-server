@@ -106,7 +106,11 @@ export function formatUsd(usd: number, lang: string): string {
 
 const BYTE_UNITS = ['byte', 'kilobyte', 'megabyte', 'gigabyte', 'terabyte'] as const;
 
-/** "1.3 GB": decimal units, one decimal under 10. */
+/**
+ * "1.3 GB": decimal units, one decimal under 10. Plain bytes take the long unit
+ * ("895 bytes", "1 byte"): CLDR's short form is not plural-aware ("895 byte" in
+ * English, "1 bytes" in Portuguese).
+ */
 export function formatBytes(bytes: number, lang: string): string {
   let v = Math.max(0, bytes);
   let i = 0;
@@ -117,7 +121,7 @@ export function formatBytes(bytes: number, lang: string): string {
   return numberFormat(lang, {
     style: 'unit',
     unit: BYTE_UNITS[i],
-    unitDisplay: 'short',
+    unitDisplay: i === 0 ? 'long' : 'short',
     maximumFractionDigits: v < 10 && i > 0 ? 1 : 0,
   }).format(v);
 }

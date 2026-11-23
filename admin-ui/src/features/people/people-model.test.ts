@@ -303,6 +303,12 @@ describe('inviteReach', () => {
     expect(inviteReach('http://192.168.1.20:8080/connect', false).certificate).toBe(false);
     expect(inviteReach('https://127.0.0.1:8443/connect', false).certificate).toBe(false);
   });
+  it('drops only the self-signed reason behind external HTTPS (server#392)', () => {
+    expect(inviteReach('https://books.example.com/connect', true, true).certificate).toBe(false);
+    // A proxy reached at an IP address rarely has a certificate browsers trust.
+    expect(inviteReach('https://203.0.113.7/connect', true, true).certificate).toBe('address');
+    expect(inviteReach('https://192.168.1.20/connect', false, true).certificate).toBe('address');
+  });
   it('reads the running TLS mode from the settings, unknown while a change waits for a restart', () => {
     const saved = (tls_mode: 'off' | 'selfsigned' | 'autocert', restart_pending: string[] = []) =>
       ({ network: { tls_mode }, restart_pending }) as Parameters<typeof runsSelfSigned>[0];

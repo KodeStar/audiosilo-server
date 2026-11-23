@@ -650,6 +650,7 @@ describe('bridge page', () => {
                 id: 9,
                 kind: 'podcast.subscribe',
                 params: { feed_host: 'feeds.example.com', show_path: 'Hardcore History' },
+                priority: 10,
                 state: 'done',
               }),
             ],

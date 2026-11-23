@@ -20,6 +20,7 @@ var notAudited = map[string]string{
 	"handleCancelJob":              "a cancelled scan is recorded in scan_runs",
 	"handleUpdateCheck":            "asks GitHub; changes nothing",
 	"handleMetaMirrorCheck":        "asks GitHub for a newer metadata copy; changes nothing an admin chose (the copy is derived data)",
+	"handleCheckUpcoming":          "refreshes the derived release list and records the result in the upcoming job status",
 	"handleAdminCovers":            "a read (a POST only for its batch body)",
 	"handlePreviewMatchRun":        "counts selected books, using POST for the list of picks",
 	"handleAdminBookWorks":         "a read (a POST only for its batch body)",

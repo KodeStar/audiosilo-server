@@ -491,29 +491,19 @@ export function useAudit(filter: AuditFilter) {
   });
 }
 
-/** How long the config-declared libraries count as fresh where they lock a library. */
-const CONFIG_LOCKS_STALE_MS = 60_000;
-
-/**
- * The first-run flow's state, how this request reached the server, the
- * config-declared libraries and the mount hints. Fresh for the session: the
- * flow and the Overview card write it through saveSetup. Read for the library
- * locks (`locks`), it is read again after a minute, on focus or a new mount,
- * since a restart with another config.yaml changes them (server#197); a 409
- * config_library reads it at once.
- */
-export function useSetup({ locks = false }: { locks?: boolean } = {}) {
+/** The first-run settings and progress. saveSetup updates the state for this session. */
+export function useSetup() {
   return useQuery({
     queryKey: keys.setup,
     queryFn: api.setup,
-    staleTime: locks ? CONFIG_LOCKS_STALE_MS : Infinity,
+    staleTime: Infinity,
   });
 }
 
 /** Saves a change to the setup state (PUT /admin/setup) and puts the answer in the cache. */
 export async function saveSetup(qc: QueryClient, patch: SetupPatch) {
   const state = await api.updateSetup(patch);
-  // A read for the library locks begun before the save may still hold the old
+  // A setup read begun before the save may still hold the old
   // state: discard that reply before publishing the PUT's answer (exact: the
   // folder previews share the key's prefix).
   await qc.cancelQueries({ queryKey: keys.setup, exact: true });

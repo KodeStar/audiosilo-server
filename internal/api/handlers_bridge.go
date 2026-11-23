@@ -647,7 +647,11 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 	if !a.writeBridgeError(w, err, "bridge job update failed") {
 		return
 	}
-	writeJSON(w, http.StatusOK, bridge.RedactedJob(*job))
+	// error_code is the console's word for a server cancel; the Bridge's answer
+	// stays as audiosilo-bridge's internal/link mirrors it (the reason in error).
+	out := bridge.RedactedJob(*job)
+	out.ErrorCode = ""
+	writeJSON(w, http.StatusOK, out)
 }
 
 // notifyBridgeJob reports a job that just finished, failed or parked

@@ -584,7 +584,7 @@ function ReviewDialog({
         tone="community"
         icon={Sparkles}
         title={heading.title}
-        description={heading.description}
+        description={readOnly ? t('health.bulkMatch.readOnlyDescription') : heading.description}
       >
         {open ? (
           <>
@@ -895,15 +895,16 @@ function ItemRow({
   // Every reason the run held it for (server#352). One held for its length says
   // both, the book's as it is now: none once they read the same (the book's
   // length changed since the run, server#355).
-  const holds = candidate ? holdReasons(item) : [];
   const held = heldLengths(item);
+  const holds = candidate
+    ? holdReasons(item).filter((reason) => reason !== 'length_differs' || held)
+    : [];
   const lengths = held
     ? {
         book: formatDuration(held.book, lang),
         recording: formatDuration(held.recording, lang),
       }
     : undefined;
-  const heldForLength = lengths && lengths.book !== lengths.recording ? lengths : undefined;
   const seriesLine = (refs: SeriesRef[]) =>
     refs
       .map((r) => seriesLabel(r.name, r.position, lang, t, r.position_end))
@@ -1003,13 +1004,17 @@ function ItemRow({
             )}
           </span>
         )}
+        {candidate && item.identifier_unknown ? (
+          <span className="text-[12.5px] text-muted-foreground">
+            {t('health.bulkMatch.item.foundByWork')}
+          </span>
+        ) : null}
         {holds.map((reason, i) => {
           // The first reason says it is held for review; the rest say only why.
           const [first, too] = HOLD_TEXT[reason];
-          if (reason === 'length_differs' && !heldForLength) return null;
           return (
             <span key={reason} className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-              {t(i === 0 ? first : too, reason === 'length_differs' ? heldForLength : undefined)}
+              {t(i === 0 ? first : too, reason === 'length_differs' ? lengths : undefined)}
             </span>
           );
         })}
@@ -1069,11 +1074,7 @@ function ItemRow({
               <Sparkles aria-hidden="true" className="md:hidden" />
             </Button>
             {item.outcome === 'none' && !status ? (
-              <AddItLink
-                button
-                title={title}
-                href={addBookUrl({ title: item.book.title, author: item.book.author })}
-              />
+              <AddItLink button title={title} href={addBookUrl(item.book)} />
             ) : null}
             {/* The book page in a new tab, to listen or look closer without leaving the review. */}
             <Link

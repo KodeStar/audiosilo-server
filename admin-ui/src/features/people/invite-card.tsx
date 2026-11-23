@@ -26,7 +26,7 @@ export function InviteCard({ invite }: { invite: ShownInvite }) {
   // The link's host is the server's public address, else the host it was asked on.
   const serverName = serverLabel(server.data?.name, hostOf(url));
   // Who can open the link, said before it is sent (a home address, a self-signed certificate).
-  const reach = inviteReach(url, runsSelfSigned(useSettings().data));
+  const reach = inviteReach(url, runsSelfSigned(useSettings().data), invite.external_https);
   const share = () =>
     void shareOrCopy(
       {

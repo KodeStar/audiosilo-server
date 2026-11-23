@@ -116,7 +116,7 @@ export function useIssueActions(
               // prober's message is on the Health row's Details.
               description:
                 (fresh.book.scan_error !== 'probe_failed' && fresh.book.scan_error_detail) ||
-                t(`health.code.${fresh.book.scan_error}`),
+                t(`health.code.${fresh.book.scan_error_code ?? fresh.book.scan_error}`),
               type: 'warning',
             }
           : { title: t('health.toast.fixed', { title }), type: 'success' },

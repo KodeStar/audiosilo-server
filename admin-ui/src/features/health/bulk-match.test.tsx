@@ -447,7 +447,7 @@ describe('bulk matching', () => {
               req.query.get('outcome') === 'none'
                 ? [unknown]
                 : req.query.get('outcome') === 'auto'
-                  ? [confident]
+                  ? [{ ...confident, identifier_unknown: true }]
                   : [],
             next_after: 0,
           },
@@ -465,6 +465,7 @@ describe('bulk matching', () => {
     expect(
       within(within(dialog).getByRole('list', { name: 'Confident' })).getAllByRole('listitem'),
     ).toHaveLength(1);
+    expect(within(dialog).getByText(/Found by its recorded community match/)).toBeInTheDocument();
     expect(within(dialog).queryByRole('radio', { name: /ASIN and ISBN only/ })).toBeNull();
     expect(within(dialog).getByRole('radio', { name: /Fill in what's missing/ })).toBeChecked();
     await user.click(within(dialog).getByRole('button', { name: /Not found/ }));
@@ -582,14 +583,18 @@ describe('bulk matching', () => {
     ).toBeInTheDocument();
   });
 
-  it('says a book not found still plays, links to add it prefilled, and points at the report (server#370)', async () => {
+  it.each([
+    [{}, 'Obscure Tale Some One'],
+    [{ asin: 'BX12OLD123', isbn: '9780553418026' }, 'BX12OLD123'],
+    [{ isbn: '978-0-553-41802-6' }, '9780553418026'],
+  ] as const)('prefills Add it for a Not found row with %j', async (identifiers, expected) => {
     const missing: MatchRunItem = {
       ...confident,
       id: 14,
       path: 'Someone/Obscure',
       outcome: 'none',
       score: 0,
-      book: { title: 'Obscure Tale', author: 'Some One' },
+      book: { title: 'Obscure Tale', author: 'Some One', ...identifiers },
       changes: {},
     };
     mockFetch(
@@ -617,7 +622,7 @@ describe('bulk matching', () => {
     });
     expect(add).toHaveAttribute(
       'href',
-      'https://meta.audiosilo.app/add?q=Obscure%20Tale%20Some%20One',
+      `https://meta.audiosilo.app/add?q=${encodeURIComponent(expected)}`,
     );
     expect(add).toHaveAttribute('target', '_blank');
     expect(
@@ -735,6 +740,7 @@ describe('bulk matching', () => {
     renderApp('/health?issue=unmatched');
     await user.click(await screen.findByRole('button', { name: "See the books it didn't find" }));
     const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveAccessibleDescription('Results from this match run.');
     // It opens on the books it didn't find, though others are left to review.
     expect(await within(dialog).findByText(/Only weak community matches/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /To review/ }));

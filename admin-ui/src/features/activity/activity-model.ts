@@ -3,6 +3,7 @@ import type {
   ClientCount,
   ClientInfo,
   Funnel,
+  ListeningSession,
   PlaybackShare,
   UserProgress,
 } from '@/api/types';
@@ -312,6 +313,20 @@ export function platformLabel(platform: string): string {
   return Object.hasOwn(known, key) ? known[key] : platform;
 }
 
+/** The app id AudioSilo's Apple Watch and Wear OS apps send (fe#220). */
+const WATCH_APP = 'audiosilo-watch';
+
+/**
+ * Whether a session plays an AudioSilo watch app's downloaded AAC copy (the
+ * watch rendition, fe#217): the session's codec is the indexed book's, which
+ * can be in another format.
+ */
+export function watchDownload(s: Pick<ListeningSession, 'transcoded' | 'client'>): boolean {
+  return (
+    !s.transcoded && s.client?.app.toLowerCase() === WATCH_APP && clientKind(s.client) === 'watch'
+  );
+}
+
 /**
  * How an app id reads: AudioSilo's own apps ("AudioSilo" from the player,
  * "audiosilo-watch" from the Apple Watch and Wear OS apps, fe#220) as
@@ -319,7 +334,7 @@ export function platformLabel(platform: string): string {
  */
 function appLabel(app: string): string {
   const key = app.toLowerCase();
-  return key === 'audiosilo' || key === 'audiosilo-watch' ? 'AudioSilo' : app;
+  return key === 'audiosilo' || key === WATCH_APP ? 'AudioSilo' : app;
 }
 
 /**

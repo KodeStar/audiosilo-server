@@ -50,6 +50,22 @@ describe('finish setting up card', () => {
     expect(links[0]).toHaveAttribute('href', '/admin/setup?step=abs');
   });
 
+  it('links the admin using the logged password to its replacement even after setup was skipped', async () => {
+    const state = { finished: true, dismissed: true, steps: { account: 'skipped' as const } };
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/setup': { body: setupEnvelope(state, { printed_password: true }) },
+      }),
+    );
+    renderApp();
+    expect(await screen.findByText('Your password came from the server log')).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Change password' })).toHaveAttribute(
+      'href',
+      '/admin/people/user/1?tab=sign-in',
+    );
+    expect(screen.queryByRole('region', CARD)).not.toBeInTheDocument();
+  });
+
   it('Dismiss hides it for good', async () => {
     const calls = mockFetch(
       routes({ finished: true, dismissed: false, steps: { reach: 'skipped' } }),

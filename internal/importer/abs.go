@@ -29,11 +29,12 @@ import (
 
 // Error codes (catalog.Import.ErrorCode, and the users endpoint's 502 codes).
 const (
-	CodeUnreachable  = "abs_unreachable"
-	CodeCertificate  = "abs_certificate"
-	CodeUnauthorized = "abs_unauthorized"
-	CodeNotABS       = "not_abs"
-	CodeFetchFailed  = "fetch_failed"
+	CodeUnreachable         = "abs_unreachable"
+	CodeCertificate         = "abs_certificate"
+	CodeCertificateRedirect = "abs_certificate_redirect"
+	CodeUnauthorized        = "abs_unauthorized"
+	CodeNotABS              = "not_abs"
+	CodeFetchFailed         = "fetch_failed"
 )
 
 // Error is a failure talking to ABS: a code and a safe English sentence. The
@@ -49,11 +50,12 @@ func (e *Error) Unwrap() error { return e.err }
 
 func absErr(code string, cause error) *Error {
 	msg := map[string]string{
-		CodeUnreachable:  "Could not reach the Audiobookshelf server.",
-		CodeCertificate:  "This server does not trust Audiobookshelf's https certificate.",
-		CodeUnauthorized: "Audiobookshelf refused the API token.",
-		CodeNotABS:       "That address is not an Audiobookshelf server.",
-		CodeFetchFailed:  "Audiobookshelf sent something the import could not read.",
+		CodeUnreachable:         "Could not reach the Audiobookshelf server.",
+		CodeCertificateRedirect: "The http address redirects to an https address whose certificate this server does not trust.",
+		CodeCertificate:         "This server does not trust Audiobookshelf's https certificate.",
+		CodeUnauthorized:        "Audiobookshelf refused the API token.",
+		CodeNotABS:              "That address is not an Audiobookshelf server.",
+		CodeFetchFailed:         "Audiobookshelf sent something the import could not read.",
 	}[code]
 	return &Error{Code: code, Msg: msg, err: cause}
 }
@@ -146,6 +148,9 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, limit i
 			return ctx.Err()
 		}
 		if certificateError(err) {
+			if c.base.Scheme == "http" {
+				return absErr(CodeCertificateRedirect, err)
+			}
 			return absErr(CodeCertificate, err)
 		}
 		return absErr(CodeUnreachable, err)
@@ -207,7 +212,7 @@ func (c *Client) Status(ctx context.Context) (string, error) {
 	}
 	if err := c.get(ctx, "/status", nil, capSmall, false, &st); err != nil {
 		var ae *Error
-		if errors.As(err, &ae) && ae.Code != CodeUnreachable && ae.Code != CodeCertificate {
+		if errors.As(err, &ae) && ae.Code != CodeUnreachable && ae.Code != CodeCertificate && ae.Code != CodeCertificateRedirect {
 			return "", absErr(CodeNotABS, ae)
 		}
 		return "", err

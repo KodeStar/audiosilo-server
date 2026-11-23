@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -23,6 +24,20 @@ import (
 // aggregates, which the player's browse lists take too, within the caller's scope;
 // addressed by (library_id, path) like everything else, with the internal book id
 // only ever inside an opaque cursor.
+
+// ProblemProbeFailed is the read problem stored when ffprobe could not read a
+// file (books.scan_error); ProblemProbeTimeout is the admin wire's more specific
+// scan_error_code for one that ran out of time instead.
+const (
+	ProblemProbeFailed  = "probe_failed"
+	ProblemProbeTimeout = "probe_timeout"
+)
+
+// IsProbeTimeout reports whether a stored read problem is an ffprobe time-out:
+// a probe_failed whose detail starts with metadata.ErrProbeTimeout's text.
+func IsProbeTimeout(code, detail string) bool {
+	return code == ProblemProbeFailed && strings.HasPrefix(detail, metadata.ErrProbeTimeout.Error())
+}
 
 // AdminBook is one row of the admin book list.
 type AdminBook struct {
@@ -89,6 +104,7 @@ type AdminBook struct {
 	// (a code, the library-relative file and the tool's message) and how many books
 	// its parts look like (see books.suspect_parts).
 	ScanError       string `json:"scan_error,omitempty"`
+	ScanErrorCode   string `json:"scan_error_code,omitempty"` // more specific than ScanError, when known
 	ScanErrorFile   string `json:"scan_error_file,omitempty"`
 	ScanErrorDetail string `json:"scan_error_detail,omitempty"`
 	SuspectParts    int    `json:"suspect_parts,omitempty"`
@@ -287,6 +303,9 @@ func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 			&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts, &b.ChaptersSource, &b.ChaptersCheck,
 			&b.ChapterChoice, &art, &color, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSize},
 		func() {
+			if IsProbeTimeout(b.ScanError, b.ScanErrorDetail) {
+				b.ScanErrorCode = ProblemProbeTimeout
+			}
 			b.Genres = append([]string{}, ParseLabels(genres)...)
 			b.Tags = append([]string{}, ParseLabels(tags)...)
 			b.Authors = append([]string{}, creditNames(b.Author)...)

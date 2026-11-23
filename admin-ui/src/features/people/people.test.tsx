@@ -221,36 +221,56 @@ describe('people', () => {
       'selfsigned',
       'https://nas.local:8443/connect#code=X',
       SELF_SIGNED,
+      false,
     ],
     [
       'an autocert server, at its name',
       'autocert',
       'https://books.example.com/connect#code=X',
       false,
+      false,
     ],
-    ['a server behind a proxy, at an IP', 'off', 'https://192.168.1.20/connect#code=X', AT_ADDRESS],
+    [
+      'a self-signed upstream behind an HTTPS proxy',
+      'selfsigned',
+      'https://books.example.com/connect#code=X',
+      false,
+      true,
+    ],
+    [
+      'a server behind a proxy, at an IP',
+      'off',
+      'https://192.168.1.20/connect#code=X',
+      AT_ADDRESS,
+      false,
+    ],
     [
       'a self-signed server, at an IP',
       'selfsigned',
       'https://192.168.1.20:8443/connect#code=X',
       SELF_SIGNED,
+      false,
     ],
     [
       'a server behind a proxy, at a name',
       'off',
       'https://books.example.com/connect#code=X',
       false,
+      false,
     ],
   ] as const)(
     'warns about the certificate of a self-signed server or an IP address, saying why (%s, server#386)',
-    async (_, mode, link, says) => {
+    async (_, mode, link, says, externalHTTPS) => {
       mockFetch(
         routes({
           'GET /admin/settings': {
             body: settingsWith({ network: { ...settings.network, tls_mode: mode } }),
           },
           'POST /admin/users': { status: 201, body: uncleRay },
-          'POST /admin/users/9/authcode': { status: 201, body: { ...created, invite_url: link } },
+          'POST /admin/users/9/authcode': {
+            status: 201,
+            body: { ...created, invite_url: link, external_https: externalHTTPS },
+          },
         }),
       );
       const { user, dialog } = await inviteUncleRay();
@@ -466,7 +486,11 @@ describe('a person', () => {
   });
 
   it('deletes an account after its name is typed, offering to disable instead', async () => {
-    const calls = mockFetch(routes({ 'DELETE /admin/users/2': { status: 204 } }));
+    const calls = mockFetch(
+      routes({
+        'DELETE /admin/users/2': { body: { members_deleted: 0, members_kept: 0 } },
+      }),
+    );
     const { router } = renderApp('/people/user/2?tab=account');
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Delete account' }));
@@ -484,6 +508,26 @@ describe('a person', () => {
       expect(calls.slice(deleted).some((c) => c.path === '/admin/users')).toBe(true),
     );
     expect(calls.slice(deleted + 1).some((c) => c.path.startsWith('/admin/users/2'))).toBe(false);
+  });
+
+  it('deletes an account behind a proxy that answers the delete with a page', async () => {
+    mockFetch(
+      routes({
+        'DELETE /admin/users/2': {
+          raw: '<html>OK</html>',
+          headers: { 'content-type': 'text/html' },
+        },
+      }),
+    );
+    const { router } = renderApp('/people/user/2?tab=account');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Delete account' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete sam?' });
+    await user.type(within(dialog).getByRole('textbox'), 'sam');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
+    // The plain success toast, with no counts to name, and off their page.
+    expect(await screen.findByText('Deleted sam')).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.pathname).toBe('/people'));
   });
 
   it('disables an account', async () => {

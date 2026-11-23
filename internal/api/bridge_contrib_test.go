@@ -290,6 +290,48 @@ func TestBridgeClaimShareOff(t *testing.T) {
 	}
 }
 
+// A working contribute job the server asks to stop (the module turned off,
+// server#218) reads error_code server_cancelled on the console's job and job
+// list, while the Bridge's report answer carries the stop and its reason as
+// before, without error_code (audiosilo-bridge's internal/link mirrors it).
+func TestBridgeServerCancelledCode(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	setModule(t, b.testEnv, b.adminTok, true)
+	b.beatKinds(t, `,"setup":`+setupBlock(true), bridge.KindVerify, bridge.KindSidecars, bridge.KindContribute)
+	resp, body := b.queueKind(t, bridge.KindContribute, mistbornBook, `{}`)
+	var job bridge.Job
+	decodeInto(t, body, &job)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("queue: %d %s", resp.StatusCode, body)
+	}
+	resp, body = b.do(t, "GET", "/api/v1/bridge/jobs/next?wait=0&kind="+bridge.KindContribute, b.bridgeTok, "")
+	var claimed bridge.Job
+	decodeInto(t, body, &claimed)
+	if resp.StatusCode != http.StatusOK || claimed.ID != job.ID {
+		t.Fatalf("claim: %d %s", resp.StatusCode, body)
+	}
+	setModule(t, b.testEnv, b.adminTok, false)
+	resp, body = b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", job.ID), b.bridgeTok,
+		fmt.Sprintf(`{"attempt":%d,"state":"running"}`, claimed.Attempts))
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"cancel_requested":true`) ||
+		!strings.Contains(body, bridge.CancelModuleOff) || strings.Contains(body, `"error_code"`) {
+		t.Fatalf("report with the module off: %d %s, want the stop and its reason, no error_code", resp.StatusCode, body)
+	}
+	for _, path := range []string{
+		fmt.Sprintf("/api/v1/admin/bridge/jobs/%d", job.ID),
+		"/api/v1/admin/bridge/jobs?kind=" + bridge.KindContribute,
+	} {
+		if resp, body := b.do(t, "GET", path, b.userTok, ""); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("listener GET %s: %d %s, want 403", path, resp.StatusCode, body)
+		}
+		if resp, body := b.do(t, "GET", path, b.adminTok, ""); resp.StatusCode != http.StatusOK ||
+			!strings.Contains(body, `"error_code":"server_cancelled"`) {
+			t.Fatalf("admin GET %s: %d %s, want error_code server_cancelled", path, resp.StatusCode, body)
+		}
+	}
+}
+
 // A share of a book the console matched files under that match: a contribute
 // job whose params name no work_id takes the book's recorded community work
 // (bridge#25), so the Bridge never files under its own match of the book.

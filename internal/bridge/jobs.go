@@ -494,6 +494,7 @@ type Job struct {
 	Progress  json.RawMessage `json:"progress"`
 	Result    json.RawMessage `json:"result"`
 	Error     string          `json:"error"`
+	ErrorCode string          `json:"error_code,omitempty"`
 	// RequestedBy is the listener or admin who asked, nil once they are deleted.
 	RequestedBy     *Requester `json:"requested_by"`
 	FeedRedacted    string     `json:"-"`
@@ -566,6 +567,12 @@ func scanJob(row rowScanner) (*Job, error) {
 	}
 	j.Params, j.Progress, j.Result = json.RawMessage(params), json.RawMessage(progress), json.RawMessage(result)
 	j.LeaseUntil, j.ClaimedAt, j.FinishedAt = nullable(lease), nullable(claimed), nullable(finished)
+	// A colliding move cancels immediately, without requesting a worker stop.
+	// Any state with the stop asked: a server before server#491 stored a job
+	// that failed once asked to stop as failed, keeping the reason.
+	if (j.State == StateCancelled || j.CancelRequested) && IsCancelReason(j.Error) {
+		j.ErrorCode = ErrorServerCancelled
+	}
 	j = readableJob(j)
 	return &j, nil
 }
@@ -2212,10 +2219,13 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 	return job, err
 }
 
+// ErrorServerCancelled is the error_code scanJob gives a job the server cancelled,
+// or asked to stop, for one of its own reasons (IsCancelReason) rather than an admin.
+// It is the console's: the Bridge's report answer leaves it out (api handleBridgeUpdate).
+const ErrorServerCancelled = "server_cancelled"
+
 // The reasons the server records as a job's error when it cancels the job
-// itself, not an admin (the console words a cancel by them, BRIDGE-02, and
-// keeps a copy of these strings: admin-ui generate-model.ts, checked by
-// TestCancelReasonsMatchConsole).
+// itself. scanJob marks those with ErrorServerCancelled.
 const (
 	// CancelMoved: MoveJobs, the book moved onto another open job of its kind.
 	CancelMoved = "the book moved onto another job of this kind"
@@ -2244,8 +2254,7 @@ func IsCancelReason(text string) bool {
 	return slices.Contains(cancelReasons(), text)
 }
 
-// cancelReasons is every reason IsCancelReason knows, the list the console's
-// copy (SERVER_CANCEL_REASONS) is checked against (TestCancelReasonsMatchConsole).
+// cancelReasons is every reason IsCancelReason knows.
 // The kinds are fixed at init, so it is built once.
 var cancelReasons = sync.OnceValue(func() []string {
 	out := []string{CancelMoved, CancelReplacedRequest, CancelModuleOff, CancelChaptersEdited, CancelChaptersChosen,

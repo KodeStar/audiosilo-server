@@ -280,8 +280,7 @@ describe('the folder step', () => {
     mockFetch(
       flowRoutes(
         {},
-        { 'GET /admin/libraries': { body: { libraries: libraries() } } },
-        { config_libraries: ['Fiction'] },
+        { 'GET /admin/libraries': { body: { libraries: libraries([{ from_config: true }]) } } },
       ),
     );
     renderApp('/setup');
@@ -380,12 +379,11 @@ describe('folder, naming and metadata', () => {
       flowRoutes(
         { steps: { folder: 'done' } },
         {
-          'GET /admin/libraries': { body: { libraries: libraries() } },
+          'GET /admin/libraries': { body: { libraries: libraries([{ from_config: true }]) } },
           'PATCH /admin/libraries/1': (req) => ({
             body: { ...libraries()[0], ...(req.body as object) },
           }),
         },
-        { config_libraries: ['Fiction'] },
       ),
     );
     renderApp('/setup?step=naming');
@@ -1152,15 +1150,12 @@ describe('the account step (server#369)', () => {
     ]);
   });
 
-  it('a name refused after the password changed says so, and Skip records the step done (server#391)', async () => {
-    const calls = mockFetch(
-      accountRoutes(true, {
-        'PATCH /admin/users/1': {
-          status: 409,
-          body: { error: 'username already taken', code: 'username_taken' },
-        },
-      }),
-    );
+  it('records the password change before a pending rename, including when the admin leaves via the stepper', async () => {
+    let finishRename!: (result: MockReply) => void;
+    const rename = new Promise<MockReply>((resolve) => {
+      finishRename = resolve;
+    });
+    const calls = mockFetch(accountRoutes(true, { 'PATCH /admin/users/1': () => rename }));
     renderApp('/setup');
     await screen.findByRole('heading', { name: 'Your account' });
     const user = userEvent.setup();
@@ -1170,11 +1165,24 @@ describe('the account step (server#369)', () => {
     await user.type(screen.getByLabelText('New password again'), 'a-new-password');
     await user.type(screen.getByLabelText('Current password'), 'from-the-log');
     await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(sent(calls, 'PATCH', '/admin/users/1')).toHaveLength(1));
+    expect(
+      calls.filter((c) => ['POST', 'PUT', 'PATCH'].includes(c.method)).map((c) => c.path),
+    ).toEqual(['/auth/password', '/admin/setup', '/admin/users/1']);
+    expect(puts(calls)).toEqual([{ steps: { account: 'done' } }]);
+    finishRename({
+      status: 409,
+      body: { error: 'username already taken', code: 'username_taken' },
+    });
     expect(await screen.findByText(/Someone already has that name/)).toBeVisible();
     expect(screen.getByText('Your new password is saved')).toBeVisible();
     expect(screen.queryByText('Your password came from the server log')).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'Keep chris' }));
+    expect(puts(calls)).toEqual([{ steps: { account: 'done' } }]);
+    await user.click(screen.getByRole('link', { name: /Books folder/ }));
     expect(await screen.findByRole('heading', { name: 'Where are your books?' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.click(screen.getByRole('button', { name: 'Keep chris and this password' }));
+    await screen.findByRole('heading', { name: 'Where are your books?' });
     expect(puts(calls)).toEqual([{ steps: { account: 'done' } }]);
   });
 

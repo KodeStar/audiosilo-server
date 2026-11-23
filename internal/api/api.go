@@ -801,6 +801,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(compressJSON(a.handleStats)))
 	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(compressJSON(a.handleGetSettings)))
 	mux.Handle("PATCH /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleUpdateSettings)))
+	mux.Handle("POST /api/v1/admin/upcoming/check", a.requireAdmin(http.HandlerFunc(a.handleCheckUpcoming)))
 	mux.Handle("GET /api/v1/admin/system", a.requireAdmin(compressJSON(a.handleSystem)))
 	mux.Handle("GET /api/v1/admin/update", a.requireAdmin(compressJSON(a.handleUpdateStatus)))
 	mux.Handle("POST /api/v1/admin/update/check", a.requireAdmin(http.HandlerFunc(a.handleUpdateCheck)))
