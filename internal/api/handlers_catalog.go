@@ -869,18 +869,19 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	if cands, ok := a.adminMatchCandidates(w, r, lib.ID, p); ok {
+	if cands, _, ok := a.adminMatchCandidates(w, r, lib.ID, p); ok {
 		writeJSON(w, http.StatusOK, map[string]any{"candidates": cands})
 	}
 }
 
 // adminMatchCandidates keeps a search hit's cover and the ASIN it matched
 // beside the work and edition. A lookup by work id alone lacks these facts.
-func (a *API) adminMatchCandidates(w http.ResponseWriter, r *http.Request, libraryID int64, p string) ([]meta.MatchCandidate, bool) {
+// The query it sent comes back too, so a lookup by id keeps the book's facts.
+func (a *API) adminMatchCandidates(w http.ResponseWriter, r *http.Request, libraryID int64, p string) ([]meta.MatchCandidate, meta.MatchQuery, bool) {
 	book, err := a.cat.GetBookByPath(r.Context(), libraryID, p)
 	if err != nil {
 		a.writeBookError(w, err, "load book for match failed", "could not load book", "library", libraryID, "path", p)
-		return nil, false
+		return nil, meta.MatchQuery{}, false
 	}
 	query := r.URL.Query()
 	// The library's language, as a match run sends it for a book saying none: one
@@ -895,20 +896,20 @@ func (a *API) adminMatchCandidates(w http.ResponseWriter, r *http.Request, libra
 	mq.ISBN = strings.TrimSpace(query.Get("isbn"))
 	if utf8.RuneCountInString(mq.Text) > maxMatchQuery || len(mq.ASIN) > maxMatchID || len(mq.ISBN) > maxMatchID {
 		writeError(w, http.StatusBadRequest, "query too long")
-		return nil, false
+		return nil, mq, false
 	}
 	cands, err := a.meta.Candidates(r.Context(), mq)
 	if err != nil {
 		a.log.Warn("match search failed", "err", err, "library", libraryID, "path", p)
 		writeError(w, http.StatusBadGateway, "metadata service unavailable")
-		return nil, false
+		return nil, mq, false
 	}
 	if mq.Text == "" && mq.ASIN == "" && mq.ISBN == "" {
 		if c := a.recordedCandidate(r.Context(), libraryID, p, mq, cands); c != nil {
 			cands = append(cands, *c)
 		}
 	}
-	return cands, true
+	return cands, mq, true
 }
 
 // handleMatchProposal compares a chosen work and recording with the indexed book.
@@ -933,7 +934,7 @@ func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	candidates, ok := a.adminMatchCandidates(w, r, id, path)
+	candidates, mq, ok := a.adminMatchCandidates(w, r, id, path)
 	if !ok {
 		return
 	}
@@ -942,8 +943,11 @@ func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
 	if i >= 0 {
 		c = &candidates[i]
 	} else {
-		// A candidate found by a different search can also be named directly.
-		named, err := a.meta.Candidates(r.Context(), meta.MatchQuery{WorkID: work, Region: a.config().Metadata.PreferredRegion()})
+		// A candidate found by a different search can also be named directly,
+		// with the book's facts beside the id as recordedCandidate keeps them.
+		q := mq
+		q.WorkID = work
+		named, err := a.meta.Candidates(r.Context(), q)
 		if err != nil {
 			a.log.Warn("match proposal lookup failed", "work", work, "err", err)
 			writeError(w, http.StatusBadGateway, "metadata service unavailable")
