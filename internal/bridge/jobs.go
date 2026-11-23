@@ -956,7 +956,7 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 			}
 		}
 		if j.Kind == KindPodcastSubscribe {
-			if err := checkOpenRequests(ctx, tx, KindPodcastSubscribe, j.RequestedBy, OpenStatesSQL, ErrTooManyRequests); err != nil {
+			if err := checkOpenRequests(ctx, tx, openSubscribeCountSQL, j.RequestedBy, ErrTooManyRequests); err != nil {
 				return err
 			}
 		}
@@ -1594,12 +1594,13 @@ func (s *Service) leaseLapsed(ctx context.Context, now string) (bool, error) {
 // maxOpenRequests caps one requester's open jobs of a capped kind.
 const maxOpenRequests = 5
 
-// checkOpenRequests answers over when by already has maxOpenRequests jobs of
-// kind in states (an SQL list: OpenStatesSQL, or workingStatesSQL to leave
-// parked ones out), inside the insertion's writer transaction.
-func checkOpenRequests(ctx context.Context, tx *sql.Tx, kind string, by int64, states string, over error) error {
+const openSubscribeCountSQL = `SELECT COUNT(*) FROM bridge_jobs WHERE kind='` + KindPodcastSubscribe + `'
+    AND requested_by=? AND state IN ` + OpenStatesSQL
+
+// checkOpenRequests checks the requester's cap in the insertion's transaction.
+func checkOpenRequests(ctx context.Context, tx *sql.Tx, countSQL string, by int64, over error) error {
 	var n int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind=? AND requested_by=? AND state IN `+states, kind, by).Scan(&n); err != nil {
+	if err := tx.QueryRowContext(ctx, countSQL, by).Scan(&n); err != nil {
 		return err
 	}
 	if n >= maxOpenRequests {

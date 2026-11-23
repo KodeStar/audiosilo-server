@@ -106,6 +106,10 @@ func fetchCooling(ctx context.Context, tx *sql.Tx, j NewJob, now time.Time) (boo
 	return !folded && (parseErr != nil || now.Before(t.Add(30*time.Minute))), nil
 }
 
+// The literal kind and working states match migration 0094's partial index.
+const openFetchCountSQL = `SELECT COUNT(*) FROM bridge_jobs WHERE kind='` + KindPodcastFetch + `'
+    AND requested_by=? AND state IN ` + workingStatesSQL
+
 // checkFetchLimit shares the insertion's writer transaction, after open-intent
 // dedupe. The creator owns the quota even when another listener promotes it. A
 // parked fetch (needs_attention: the Bridge waits on something no listener can
@@ -121,7 +125,7 @@ func checkFetchLimit(ctx context.Context, tx *sql.Tx, by int64) error {
 	if admin {
 		return nil
 	}
-	return checkOpenRequests(ctx, tx, KindPodcastFetch, by, workingStatesSQL, ErrFetchLimit)
+	return checkOpenRequests(ctx, tx, openFetchCountSQL, by, ErrFetchLimit)
 }
 
 // FetchStatus is the public summary, deliberately excluding job internals.

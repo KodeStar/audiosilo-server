@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -43,6 +44,20 @@ func fetchLimitListener(t *testing.T, q *testQueue, name string, kid bool) int64
 	}
 	id, _ := r.LastInsertId()
 	return id
+}
+
+func TestPodcastFetchLimitPlan(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	var id, parent, unused int
+	var detail string
+	if err := q.db.QueryRowContext(t.Context(), "EXPLAIN QUERY PLAN "+openFetchCountSQL, q.admin).
+		Scan(&id, &parent, &unused, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(detail, "idx_bridge_jobs_fetch_requester (requested_by=?)") {
+		t.Fatalf("fetch cap did not seek by requester: %s", detail)
+	}
 }
 
 func TestPodcastFetchLimitCountsCreatorOpenIntents(t *testing.T) {

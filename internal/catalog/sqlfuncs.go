@@ -19,6 +19,14 @@ import (
 // in a migration, view, index or generated column, or a database could no longer
 // be opened by a plain sqlite3 shell (or an older AudioSilo build).
 func init() {
+	// Verify a legacy colour's short version tag by the same rule as a book read.
+	store.RegisterFunction("cover_color_current", 2, func(args []driver.Value) (driver.Value, error) {
+		_, current := storedCoverColor(sqlText(args[0]), sqlText(args[1]))
+		if current {
+			return int64(1), nil
+		}
+		return int64(0), nil
+	})
 	// disc_before(a, b): whether disc folder a comes before b in the order the
 	// scanner joins a split book's discs (metadata.DiscOrder: CD2 before CD10).
 	store.RegisterFunction("disc_before", 2, func(args []driver.Value) (driver.Value, error) {
