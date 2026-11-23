@@ -45,20 +45,22 @@ const HouseRecent = "recent"
 // title names nothing, where ChapterIndex still says which; a book with one
 // chapter has neither). UpdatedAt is the newest save, fixed-width millisecond UTC.
 type HouseListeningRow struct {
-	// The path names no indexed book whose artwork this caller can read.
-	CoverUnavailable bool     `json:"cover_unavailable,omitempty"`
-	UserID           int64    `json:"user_id"`
-	Username         string   `json:"username"`
-	LibraryID        int64    `json:"library_id"`
-	Path             string   `json:"path"`
-	Title            string   `json:"title"`
-	Author           *string  `json:"author"`
-	State            string   `json:"state"`
-	Position         float64  `json:"position"`
-	Duration         *float64 `json:"duration"`
-	Chapter          *string  `json:"chapter"`
-	ChapterIndex     *int     `json:"chapter_index"`
-	UpdatedAt        string   `json:"updated_at"`
+	// The caller's grant does not reach the row's book: no indexed book this
+	// caller may read is at or above its path, so the player shows its local
+	// cover, asks for no art and opens nothing.
+	OutsideGrant bool     `json:"outside_grant,omitempty"`
+	UserID       int64    `json:"user_id"`
+	Username     string   `json:"username"`
+	LibraryID    int64    `json:"library_id"`
+	Path         string   `json:"path"`
+	Title        string   `json:"title"`
+	Author       *string  `json:"author"`
+	State        string   `json:"state"`
+	Position     float64  `json:"position"`
+	Duration     *float64 `json:"duration"`
+	Chapter      *string  `json:"chapter"`
+	ChapterIndex *int     `json:"chapter_index"`
+	UpdatedAt    string   `json:"updated_at"`
 }
 
 // HouseholdSharing reports whether userID shares their listening.
@@ -199,21 +201,21 @@ type houseRow struct {
 // isn't theirs to read. Only the two columns are read: the route is polled
 // while a person shares.
 //
-// Either way the row is CoverUnavailable: no book the caller may read is at or
+// Either way the row is OutsideGrant: no book the caller may read is at or
 // above its path. Not for a failed lookup (the next poll asks again), nor in a
 // podcast library, where an episode no longer indexed still has its show's
 // artwork (podcasts caches each library's kind for the call).
 func (c *Catalog) nameFromHolding(ctx context.Context, r *HouseListeningRow, callerScopes []Scope, podcasts map[int64]bool) {
 	id, book, err := c.bookHolding(ctx, r.LibraryID, r.Path, false)
 	if errors.Is(err, ErrNotFound) {
-		r.CoverUnavailable = !c.isPodcastLibrary(ctx, r.LibraryID, podcasts)
+		r.OutsideGrant = !c.isPodcastLibrary(ctx, r.LibraryID, podcasts)
 		return
 	}
 	if err != nil {
 		return
 	}
 	if !ScopesAllow(callerScopes, Ref{LibraryID: r.LibraryID, Path: book}) {
-		r.CoverUnavailable = true
+		r.OutsideGrant = true
 		return
 	}
 	var (

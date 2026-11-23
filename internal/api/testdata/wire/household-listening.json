@@ -21,9 +21,9 @@
             "number"
           ]
         },
-        "cover_unavailable": "boolean",
         "duration": "number",
         "library_id": "number",
+        "outside_grant": "boolean",
         "path": "string",
         "position": "number",
         "state": "string",

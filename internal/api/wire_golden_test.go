@@ -561,7 +561,7 @@ func newWireMainEnv(t *testing.T) *wireMainEnv {
 
 // newWireHouseEnv: sam, pat and dora share their listening; sam has listened,
 // and dora to a book the index no longer holds (no title, author or chapter
-// of its own, and its cover_unavailable set).
+// of its own, and its outside_grant set).
 func newWireHouseEnv(t *testing.T) *houseEnv {
 	t.Helper()
 	h := newHouseEnv(t)
