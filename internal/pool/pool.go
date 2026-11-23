@@ -14,15 +14,7 @@ import (
 // while ctx lasts and more says to go on (asked before each one). fn checks ctx
 // itself.
 func Each[T any](ctx context.Context, n int, items []T, more func() bool, fn func(*T)) {
-	if n <= 1 {
-		for i := range items {
-			if ctx.Err() != nil || !more() {
-				break
-			}
-			fn(&items[i])
-		}
-		return
-	}
+	n = max(n, 1) // no worker would leave the hand-out waiting for ctx
 	jobs := make(chan *T)
 	var wg sync.WaitGroup
 	for range n {

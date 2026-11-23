@@ -65,12 +65,17 @@ type Runner struct {
 
 // New returns a Runner; Run starts its background pass.
 func New(cat *catalog.Catalog, color Colorer, log *slog.Logger) *Runner {
+	return newRunner(cat, color, log, settleKicks)
+}
+
+// newRunner is New with the quiet a Kick waits for.
+func newRunner(cat *catalog.Catalog, color Colorer, log *slog.Logger, quiet time.Duration) *Runner {
 	if log == nil {
 		log = slog.Default()
 	}
 	r := &Runner{cat: cat, color: color, log: log}
-	r.PassRunner = pool.NewPassRunner(interval, settleKicks, maxSettle, r.pass)
-	r.SettleOnTick = true
+	r.PassRunner = pool.NewPassRunner(pool.PassOptions{Interval: interval, Quiet: quiet, MaxSettle: maxSettle,
+		SettleOnTick: true}, r.pass)
 	return r
 }
 
@@ -89,8 +94,7 @@ func (r *Runner) pass(ctx context.Context) bool {
 		byID[libs[i].ID] = &libs[i]
 	}
 	var after int64
-	read := 0
-	streak := pool.NewFailureStreak(maxFailStreak)
+	read, streak := 0, 0
 	defer func() {
 		if read > 0 {
 			r.log.Info("cover colours read", "books", read)
@@ -105,34 +109,37 @@ func (r *Runner) pass(ctx context.Context) bool {
 			return false
 		}
 		var recs []catalog.CoverColorRecord
-		pool.Each(ctx, 1, due, func() bool { return !streak.AtLimit() }, func(d *catalog.CoverColorDue) {
+		for _, d := range due {
+			if ctx.Err() != nil || streak >= maxFailStreak {
+				break
+			}
 			lib := byID[d.LibraryID]
 			if lib == nil {
-				return // a library added since the pass began waits for the next
+				continue // a library added since the pass began waits for the next
 			}
-			rec, err := r.color(ctx, lib, *d)
+			rec, err := r.color(ctx, lib, d)
 			switch {
 			case errors.Is(err, ErrArtMissing):
-				return // left due: read again next pass
+				continue // left due: read again next pass
 			case err != nil:
 				if ctx.Err() == nil {
-					streak.Failed()
+					streak++
 					r.log.Debug("cover colours: read art failed", "library", d.LibraryID, "path", d.Path, "err", err)
 				}
-				return
+				continue
 			}
-			streak.Succeeded()
+			streak = 0
 			recs = append(recs, rec)
 			if rec.Color.Bg != "" {
 				read++
 			}
-		})
+		}
 		r.record(ctx, recs)
 		switch {
 		case ctx.Err() != nil:
 			return false
-		case streak.AtLimit():
-			r.log.Warn("cover colours: the art keeps failing to read; trying again later", "failures", maxFailStreak)
+		case streak >= maxFailStreak:
+			r.log.Warn("cover colours: the art keeps failing to read; trying again later", "failures", streak)
 			return true
 		case next == 0:
 			return false

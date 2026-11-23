@@ -76,6 +76,8 @@ type Runner struct {
 	src Source
 	// ffmpeg finds the pauses a fit snaps to; "" fits without them.
 	ffmpeg string
+	// enabled is the live metadata switch: nothing is checked while it is off.
+	enabled func() bool
 	// ready reports whether lookups answer locally yet (mirror mode: the copy
 	// loaded); nil when there is nothing to wait for. Run's first pass waits
 	// for it, at most readyWait.
@@ -102,12 +104,13 @@ func New(cat *catalog.Catalog, src Source, ffmpeg string, enabled, ready func() 
 	if log == nil {
 		log = slog.Default()
 	}
-	r := &Runner{cat: cat, src: src, ffmpeg: ffmpeg, ready: ready, readyWait: readyWait,
+	r := &Runner{cat: cat, src: src, ffmpeg: ffmpeg, enabled: enabled, ready: ready, readyWait: readyWait,
 		readyPoll: readyPoll, log: log, now: time.Now, timeout: checkTimeout,
 		busy: map[catalog.Ref]bool{}, failed: map[catalog.Ref]time.Time{}}
-	r.PassRunner = pool.NewPassRunner(interval, settleKicks, settleKicks, r.pass)
-	r.Enabled = enabled
-	r.WaitReady = r.waitReady
+	// A kick's pass waits settleKicks, gathering the kicks behind it (a scan
+	// kicks once per book indexed).
+	r.PassRunner = pool.NewPassRunner(pool.PassOptions{Interval: interval, Quiet: settleKicks, MaxSettle: settleKicks,
+		Enabled: enabled, WaitReady: r.waitReady}, r.pass)
 	return r
 }
 
@@ -159,7 +162,7 @@ func (r *Runner) pass(ctx context.Context) bool {
 		if len(todo) == 0 {
 			return false
 		}
-		more := func() bool { return !streak.AtLimit() && r.Enabled() }
+		more := func() bool { return !streak.AtLimit() && r.enabled() }
 		pool.Each(ctx, workers, todo, more, func(b *catalog.Ref) {
 			_, err := r.Check(ctx, *b)
 			switch {

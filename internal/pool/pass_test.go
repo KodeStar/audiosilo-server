@@ -13,7 +13,7 @@ func TestPassRunnerCoalescesKicksAndBacksOff(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		var passes atomic.Int32
-		r := NewPassRunner(time.Hour, time.Second, 2*time.Second, func(context.Context) bool {
+		r := NewPassRunner(PassOptions{Interval: time.Hour, Quiet: time.Second, MaxSettle: 2 * time.Second}, func(context.Context) bool {
 			return passes.Add(1) == 2
 		})
 		go r.Run(ctx)
