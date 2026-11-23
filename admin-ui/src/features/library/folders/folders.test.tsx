@@ -36,6 +36,27 @@ function listingOf(fs: Record<string, FsEntry[]>, path: string) {
   return { path, folder, entries, total: entries.length, offset: 0 };
 }
 
+// One folder at the root whose own listing comes in the server's pages of 500.
+function pagedFolder(folder: FsEntry, entries: readonly FsEntry[]) {
+  return ({ query }: MockRequest) => {
+    if (!query.get('path')) {
+      return { body: { path: '', entries: [folder], total: 1, offset: 0 } };
+    }
+    const offset = Number(query.get('offset') ?? 0);
+    const end = Math.min(offset + 500, entries.length);
+    return {
+      body: {
+        path: folder.path,
+        folder,
+        entries: entries.slice(offset, end),
+        total: entries.length,
+        offset,
+        ...(end < entries.length ? { next_offset: end } : {}),
+      },
+    };
+  };
+}
+
 // Fiction: A/ holds the book B/ (three files); Other/ is empty.
 function fiction(override?: FolderMode) {
   const fs: Record<string, FsEntry[]> = {
@@ -149,27 +170,7 @@ describe('folders', () => {
       size: 1_000_000,
       duration: 60,
     }));
-    const calls = mockFetch(
-      routes({
-        'GET /libraries/1/fs': ({ query }) => {
-          if (!query.get('path')) {
-            return { body: { path: '', entries: [dir('Huge')], total: 1, offset: 0 } };
-          }
-          const offset = Number(query.get('offset') ?? 0);
-          const end = Math.min(offset + 500, files.length);
-          return {
-            body: {
-              path: 'Huge',
-              folder: dir('Huge'),
-              entries: files.slice(offset, end),
-              total: files.length,
-              offset,
-              ...(end < files.length ? { next_offset: end } : {}),
-            },
-          };
-        },
-      }),
-    );
+    const calls = mockFetch(routes({ 'GET /libraries/1/fs': pagedFolder(dir('Huge'), files) }));
     renderApp('/library/folders?library=1&folder=Huge');
     const card = await screen.findByRole('region', { name: 'Audio files in this folder' });
     expect(within(card).getByText(/10,000 files · 10 GB/)).toBeInTheDocument();
@@ -190,32 +191,7 @@ describe('folders', () => {
       dir(`Discs/CD${i + 1}`, { is_book: true }),
     );
     mockFetch(
-      routes({
-        'GET /libraries/1/fs': ({ query }) => {
-          if (!query.get('path')) {
-            return {
-              body: {
-                path: '',
-                entries: [dir('Discs', { split_discs: true })],
-                total: 1,
-                offset: 0,
-              },
-            };
-          }
-          const offset = Number(query.get('offset') ?? 0);
-          const end = Math.min(offset + 500, discs.length);
-          return {
-            body: {
-              path: 'Discs',
-              folder: dir('Discs', { split_discs: true }),
-              entries: discs.slice(offset, end),
-              total: discs.length,
-              offset,
-              ...(end < discs.length ? { next_offset: end } : {}),
-            },
-          };
-        },
-      }),
+      routes({ 'GET /libraries/1/fs': pagedFolder(dir('Discs', { split_discs: true }), discs) }),
     );
     renderApp('/library/folders?library=1&folder=Discs');
     expect(
