@@ -25,7 +25,13 @@ import { errorMessage, toastError } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { InviteCard } from './invite-card';
 import { grantAccess } from './grant-access';
-import { accessValue, inviteStatus, isLibraryGrant, parseAccessChoice } from './people-model';
+import {
+  accessValue,
+  inviteStatus,
+  shareLabel,
+  isLibraryGrant,
+  parseAccessChoice,
+} from './people-model';
 
 const USES = [1, 3, 5, 10, 0] as const; // 0 = unlimited
 const DAYS = [1, 7, 30, 0] as const; // 0 = never
@@ -152,7 +158,7 @@ function InviteForm({
       : []),
     ...named.map((s) => ({
       value: accessValue({ kind: 'share', id: s.id }),
-      title: s.name,
+      title: shareLabel(s, t),
       description: t('invite.access.shareBody', { count: s.paths?.length ?? 0 }),
     })),
     { value: 'none', title: t('invite.access.none'), description: t('invite.access.noneBody') },

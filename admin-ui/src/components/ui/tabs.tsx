@@ -1,5 +1,6 @@
 import { Tabs as TabsPrimitive } from '@base-ui/react/tabs';
 import { cn } from '@/lib/utils';
+import { focusRing } from './focus-ring';
 
 // Underline tabs for detail pages (STYLEGUIDE.md: the sub bar uses the segmented
 // variant; detail pages use underline). Counts sit in the trigger in subtle text.
@@ -28,7 +29,8 @@ export function TabsTab({
   return (
     <TabsPrimitive.Tab
       className={cn(
-        'inline-flex h-10 shrink-0 cursor-pointer items-center gap-1.5 text-[13.5px] font-[550] whitespace-nowrap text-muted-foreground outline-none hover:text-foreground data-active:text-foreground',
+        focusRing,
+        'inline-flex h-10 shrink-0 cursor-pointer items-center gap-1.5 text-[13.5px] font-[550] whitespace-nowrap text-muted-foreground hover:text-foreground data-active:text-foreground',
         className,
       )}
       {...props}

@@ -85,9 +85,31 @@ export function parseAccessChoice(value: string): AccessChoice | undefined {
  * What to call a share: a whole-library grant goes by its library's name (the
  * server names it "Library: <name>" internally), anything else by its own name.
  */
-export function shareLabel(share: Share, libraries: readonly Pick<Library, 'id' | 'name'>[]) {
+export function shareLabel(
+  share: Share,
+  t: TFunction,
+  libraries: readonly Pick<Library, 'id' | 'name'>[] = [],
+) {
   const id = wholeLibraryOf(share);
-  return (id !== undefined && libraries.find((l) => l.id === id)?.name) || share.name;
+  if (id !== undefined) return libraries.find((l) => l.id === id)?.name || share.name;
+  // A former grant can retain the server's generated name and description
+  // after its mark is cleared. Only its display label changes.
+  if (share.description === 'Whole library' && share.name.startsWith('Library: ')) {
+    return t('shares.folderShare', { name: share.name.slice('Library: '.length) });
+  }
+  return share.name;
+}
+
+/** Describe everything an old whole-library grant still gives, including extra rules. */
+export function grantSummary(
+  share: Share,
+  libraries: readonly Pick<Library, 'id' | 'name'>[],
+  t: TFunction,
+) {
+  const extra = (share.paths ?? []).filter(
+    (r) => r.library_id !== share.whole_library_id || r.path !== '',
+  );
+  return [t('shares.wholeLibrary'), ...extra.map((r) => ruleLabel(r, libraries))].join(' · ');
 }
 
 /** "Fiction" for a whole-library rule, "Fiction › Kids/Gruffalo" for a folder. */

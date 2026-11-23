@@ -1129,17 +1129,57 @@ describe('library health', () => {
     );
   });
 
+  it('ignores an across-libraries link when there is only one book library', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/libraries': { body: { libraries: libraries().slice(0, 1) } },
+        'GET /admin/issues/duplicates': { body: { groups: [] } },
+      }),
+    );
+    const { router } = renderApp('/health?issue=duplicate&across=1');
+    await waitFor(() =>
+      expect(calls.some((r) => r.path === '/admin/issues/duplicates')).toBe(true),
+    );
+    await waitFor(() => expect(router.state.location.search).toEqual({ issue: 'duplicate' }));
+    expect(screen.queryByRole('switch', { name: 'Include other libraries' })).toBeNull();
+    expect(calls.some((r) => r.query.has('across'))).toBe(false);
+  });
+
+  it('asks for the duplicates across libraries only once the libraries say there are several', async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const calls = mockFetch(
+      routes({
+        'GET /admin/libraries': async () => {
+          await pending;
+          return { body: { libraries: libraries() } };
+        },
+        'GET /admin/issues/duplicates': { body: { groups: [] } },
+      }),
+    );
+    renderApp('/health?issue=duplicate&across=1');
+    expect(await screen.findByRole('heading', { name: 'Likely duplicates' })).toBeInTheDocument();
+    expect(calls.some((c) => c.path === '/admin/issues/duplicates')).toBe(false);
+    await act(async () => finish());
+    await waitFor(() =>
+      expect(calls.some((c) => c.path === '/admin/issues/duplicates')).toBe(true),
+    );
+    expect(
+      calls.filter((c) => c.path === '/admin/issues/duplicates').map((c) => c.query.get('across')),
+    ).toEqual(['1']);
+  });
+
   it('keeps "Include other libraries" in the URL, so a reload keeps it (ADMIN-11)', async () => {
     const calls = mockFetch(routes({ 'GET /admin/issues/duplicates': { body: { groups: [] } } }));
     renderApp('/health?issue=duplicate&across=1');
     const toggle = await screen.findByRole('switch', { name: 'Include other libraries' });
     await waitFor(() => expect(toggle).toBeChecked());
-    expect(
-      calls
-        .filter((c) => c.path === '/admin/issues/duplicates')
-        .at(-1)
-        ?.query.get('across'),
-    ).toBe('1');
+    // Asked with it from the start: the list waits for the libraries to decide it.
+    const asked = calls.filter((c) => c.path === '/admin/issues/duplicates');
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.map((c) => c.query.get('across'))).toEqual(asked.map(() => '1'));
     await userEvent.setup().click(toggle);
     await waitFor(() => expect(toggle).not.toBeChecked());
     expect(window.location.search).not.toContain('across');

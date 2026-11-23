@@ -27,6 +27,15 @@ const audio = (path: string): FsEntry => ({
   mod_time: 0,
 });
 
+// The one-page listing the server sends for path, with the folder's own entry.
+function listingOf(fs: Record<string, FsEntry[]>, path: string) {
+  const entries = fs[path] ?? [];
+  const folder = Object.values(fs)
+    .flat()
+    .find((f) => f.path === path);
+  return { path, folder, entries, total: entries.length, offset: 0 };
+}
+
 // Fiction: A/ holds the book B/ (three files); Other/ is empty.
 function fiction(override?: FolderMode) {
   const fs: Record<string, FsEntry[]> = {
@@ -37,10 +46,7 @@ function fiction(override?: FolderMode) {
   };
   return (req: MockRequest) => {
     const path = req.query.get('path') ?? '';
-    const entries = fs[path];
-    return entries
-      ? { body: { path, entries, total: entries.length, offset: 0 } }
-      : { status: 404, body: { error: 'not found' } };
+    return fs[path] ? { body: listingOf(fs, path) } : { status: 404, body: { error: 'not found' } };
   };
 }
 
@@ -79,11 +85,122 @@ describe('folders', () => {
 
     await userEvent.setup().click(within(tree).getByRole('button', { name: 'Show more' }));
     expect(await within(tree).findByRole('treeitem', { name: 'F619' })).toBeInTheDocument();
+    expect(within(tree).getByRole('treeitem', { name: 'F500' })).toHaveFocus();
     expect(within(tree).getAllByRole('treeitem')).toHaveLength(620);
     expect(within(tree).queryByRole('button', { name: 'Show more' })).toBeNull();
     expect(
       calls.filter((c) => c.path === '/libraries/1/fs').map((c) => c.query.get('offset')),
     ).toEqual([null, '500']);
+  });
+
+  it('opens a folder beyond the first 500 siblings and counts all 600 of its files', async () => {
+    const files = Array.from({ length: 600 }, (_, i) => ({
+      ...audio(`Late/Part ${i + 1}.mp3`),
+      size: 1_000_000,
+      duration: 60,
+    }));
+    const calls = mockFetch(
+      routes({
+        'GET /libraries/1/fs': ({ query }) => {
+          if (!query.get('path')) {
+            return {
+              body: {
+                path: '',
+                entries: Array.from({ length: 500 }, (_, i) => dir(`A${i}`)),
+                total: 501,
+                offset: 0,
+                next_offset: 500,
+              },
+            };
+          }
+          const offset = Number(query.get('offset'));
+          return {
+            body: {
+              path: 'Late',
+              folder: dir('Late'),
+              entries: files.slice(offset, offset + 500),
+              total: 600,
+              offset,
+              next_offset: offset ? undefined : 500,
+            },
+          };
+        },
+      }),
+    );
+    renderApp('/library/folders?library=1&folder=Late');
+    const heading = await screen.findByRole('heading', { name: 'Late' });
+    expect(heading).toBeInTheDocument();
+    const card = await screen.findByRole('region', { name: 'Audio files in this folder' });
+    expect(within(card).getByText(/600 files · 600 MB · 10h/)).toBeInTheDocument();
+    expect(within(card).getByText('Showing the first 500 audio files.')).toBeInTheDocument();
+    expect(within(card).getAllByRole('listitem')).toHaveLength(500);
+    expect(within(card).queryByText('Part 501.mp3')).toBeNull();
+    expect(calls.filter((r) => r.query.get('path') === '' && r.query.has('offset'))).toHaveLength(
+      0,
+    );
+  });
+
+  it('totals a very large folder over its first 10,000 items and says so', async () => {
+    const files = Array.from({ length: 10_600 }, (_, i) => ({
+      ...audio(`Huge/Part ${i + 1}.mp3`),
+      size: 1_000_000,
+      duration: 60,
+    }));
+    const calls = mockFetch(
+      routes({
+        'GET /libraries/1/fs': ({ query }) => {
+          if (!query.get('path')) {
+            return { body: { path: '', entries: [dir('Huge')], total: 1, offset: 0 } };
+          }
+          const offset = Number(query.get('offset') ?? 0);
+          const end = Math.min(offset + 500, files.length);
+          return {
+            body: {
+              path: 'Huge',
+              folder: dir('Huge'),
+              entries: files.slice(offset, end),
+              total: files.length,
+              offset,
+              ...(end < files.length ? { next_offset: end } : {}),
+            },
+          };
+        },
+      }),
+    );
+    renderApp('/library/folders?library=1&folder=Huge');
+    const card = await screen.findByRole('region', { name: 'Audio files in this folder' });
+    expect(within(card).getByText(/10,000 files · 10 GB/)).toBeInTheDocument();
+    expect(
+      within(card).getByText('Totals cover the first 10,000 items in this folder.'),
+    ).toBeInTheDocument();
+    const offsets = calls
+      .filter((r) => r.query.get('path') === 'Huge')
+      .map((r) => Number(r.query.get('offset') ?? 0));
+    expect(Math.max(...offsets)).toBe(9_500);
+  });
+
+  it('keeps the selected folder shown when a refresh of its listing fails', async () => {
+    let down = false;
+    const ok = fiction();
+    mockFetch(
+      routes({
+        'GET /libraries/1/fs': (req) =>
+          down && req.query.get('path') === 'A/B'
+            ? { status: 500, body: { error: 'down' } }
+            : ok(req),
+      }),
+    );
+    const { queryClient } = renderApp('/library/folders?library=1&folder=A/B');
+    const card = await screen.findByRole('region', { name: 'Audio files in this folder' });
+    down = true;
+    await act(() =>
+      queryClient.refetchQueries({ queryKey: keys.folderDetail(1, 'A/B'), exact: true }),
+    );
+    expect(queryClient.getQueryState(keys.folderDetail(1, 'A/B'))?.status).toBe('error');
+    // The query's observers hear of the failure on a later task.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(card).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it('Show more asks for the next page after a refresh of the first one failed', async () => {
@@ -119,8 +236,10 @@ describe('folders', () => {
     await within(tree).findByText('500 of 620 items listed');
 
     down = true;
-    await act(() => queryClient.refetchQueries({ queryKey: keys.browse(1, 'Big'), exact: true }));
-    expect(queryClient.getQueryState(keys.browse(1, 'Big'))?.status).toBe('error');
+    await act(() =>
+      queryClient.refetchQueries({ queryKey: keys.folderDetail(1, 'Big'), exact: true }),
+    );
+    expect(queryClient.getQueryState(keys.folderDetail(1, 'Big'))?.status).toBe('error');
     await user.click(within(tree).getByRole('button', { name: 'Show more' }));
     expect(await within(tree).findByRole('treeitem', { name: 'F619' })).toBeInTheDocument();
   });
@@ -155,6 +274,29 @@ describe('folders', () => {
     }
   });
 
+  it('keeps a folder listed, and the focus on its child, when the child is selected', async () => {
+    const calls = mockFetch(routes());
+    const { router } = renderApp('/library/folders');
+    const tree = await screen.findByRole('tree', { name: 'Folders in Fiction' });
+    const user = userEvent.setup();
+    await user.click(within(tree).getByRole('treeitem', { name: 'A' }));
+    const b = await within(tree).findByRole('treeitem', { name: /^B/ });
+    b.focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ folder: 'A/B' }));
+    // A's listing stays the one the tree read (no loading row in its place), so
+    // the focused row is the same element.
+    expect(within(tree).getByRole('treeitem', { name: /^B/ })).toBe(b);
+    expect(b).toHaveFocus();
+    expect(calls.filter((c) => c.query.get('path') === 'A')).toHaveLength(1);
+  });
+
+  it('shows a folder path naming the root as a folder not found', async () => {
+    mockFetch(routes());
+    renderApp('/library/folders?library=1&folder=%2F');
+    expect(await screen.findByText(/isn't here any more/)).toBeInTheDocument();
+  });
+
   it('joins a folder whose audio is only in its disc folders', async () => {
     let override: FolderMode | undefined;
     const calls = mockFetch(
@@ -169,8 +311,7 @@ describe('folders', () => {
               dir('Dragonese/CD2', { is_book: !override }),
             ],
           };
-          const entries = fs[path] ?? [];
-          return { body: { path, entries, total: entries.length, offset: 0 } };
+          return { body: listingOf(fs, path) };
         },
         'PUT /admin/libraries/1/folder-override': (req) => {
           override = (req.body as { mode: FolderMode }).mode;
@@ -261,9 +402,8 @@ describe('folders', () => {
         ],
         'Zed/New': [audio('Zed/New/01.mp3')],
       };
-      const entries = fs[path];
-      return entries
-        ? { body: { path, entries, total: entries.length, offset: 0 } }
+      return fs[path]
+        ? { body: listingOf(fs, path) }
         : { status: 404, body: { error: 'not found' } };
     };
     const calls = mockFetch(

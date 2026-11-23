@@ -7,6 +7,7 @@ import { api } from '@/api/client';
 import {
   invalidateIssues,
   settleBookEdit,
+  useBookLibraries,
   useBookMeta,
   useLibraries,
   useServerInfo,
@@ -168,6 +169,7 @@ function CommunityCard({
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const server = useServerInfo();
+  const bookLibrary = useBookLibraries()?.some((l) => l.id === detail.book.library_id);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
   const asin = detail.fields.asin.value;
   const isbn = detail.fields.isbn.value;
@@ -332,13 +334,17 @@ function CommunityCard({
       )}
       {unlinkDialog}
       {matched ? <CorrectionsSection detail={detail} blocked={matchBlocked} /> : null}
-      <GenerateSection book={detail.book} />
-      <ShareSection book={detail.book} />
-      <DescribeSection
-        book={detail.book}
-        description={detail.generated_description}
-        ownDescription={Boolean(detail.description?.trim())}
-      />
+      {bookLibrary ? (
+        <>
+          <GenerateSection book={detail.book} />
+          <ShareSection book={detail.book} />
+          <DescribeSection
+            book={detail.book}
+            description={detail.generated_description}
+            ownDescription={Boolean(detail.description?.trim())}
+          />
+        </>
+      ) : null}
     </Card>
   );
 }

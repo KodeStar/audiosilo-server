@@ -184,15 +184,43 @@ func TestHouseListeningDiscPathNamesTheBook(t *testing.T) {
 		t.Fatalf("house = %+v, want sam's row", rows)
 	}
 	r := rows[0]
-	if r.Path != "Joined/Book/CD1" || r.Title != "The Joined Book" || r.Author == nil || *r.Author != "Jo Author" ||
+	if r.OutsideGrant || r.Path != "Joined/Book/CD1" || r.Title != "The Joined Book" || r.Author == nil || *r.Author != "Jo Author" ||
 		r.Chapter != nil || r.ChapterIndex != nil {
 		t.Fatalf("disc-path row = %+v, want the joined book's title and author, no chapter", r)
 	}
 	// Denied: a caller granted the disc folder alone sees the row, but not the
 	// title of the book above their grant: the path names it.
 	rows = f.house(t, me, []Scope{{LibraryID: f.lib, Paths: []string{"Joined/Book/CD1"}}})
-	if len(rows) != 1 || rows[0].Title != "CD1" || rows[0].Author != nil {
+	if len(rows) != 1 || !rows[0].OutsideGrant || rows[0].Title != "CD1" || rows[0].Author != nil {
 		t.Fatalf("disc-path row for a disc-only grant = %+v, want it named by its path alone", rows)
+	}
+}
+
+// A row whose path no longer names an indexed book is OutsideGrant in a
+// book library, but not in a podcast library: an episode the Bridge pruned
+// still has its show's artwork, which the cover route serves for any path in
+// the show.
+func TestHouseListeningPodcastEpisodeKeepsItsArt(t *testing.T) {
+	t.Parallel()
+	f := newSessionFixture(t)
+	pods, err := f.c.CreateLibrary(f.ctx, Library{Name: "P", Root: "/tmp/p", Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := func(name string) int64 { return f.addUser(t, name, "2025-01-01T00:00:00Z", false) }
+	me, sam, kim := user("me"), user("sam"), user("kim")
+	f.setShare(t, true, me, sam, kim)
+	f.clock = f.clock.Add(time.Minute)
+	f.houseSession(t, sam, "Gone/Book", 30*time.Second, 100)
+	f.addSession(t, kim, kim, Ref{LibraryID: pods.ID, Path: "Show/pruned-episode.mp3"}, f.clock.Add(-40*time.Second), 0, 100, "", false)
+	rows := f.house(t, me, []Scope{{LibraryID: f.lib, AllowAll: true}, {LibraryID: pods.ID, AllowAll: true}})
+	if len(rows) != 2 {
+		t.Fatalf("house = %+v, want sam's and kim's rows", rows)
+	}
+	for _, r := range rows {
+		if want := r.LibraryID == f.lib; r.OutsideGrant != want {
+			t.Errorf("row %s in library %d: outside_grant %v, want %v", r.Path, r.LibraryID, r.OutsideGrant, want)
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"maps"
@@ -120,6 +121,70 @@ func TestAScanKeepsADiscSetWhoseDiscFailsToList(t *testing.T) {
 	}
 	if got := splitParents(t, cat, lib.ID); got["A/Book/CD1"] != "A/Book" || got["A/Book/CD2"] != "A/Book" {
 		t.Errorf("split parents after a disc's listing failed %v, want %v kept", got, want)
+	}
+}
+
+// A scan whose discovery gives up on a book's folder (its listing timed out,
+// or failed as a share does) keeps the book as stored and records it unreadable
+// on its indexed path, as a Re-read that gave up does, so Health lists it; the
+// scan after the share answers again reads the book and clears it. A book that
+// answered is left alone. Not parallel: it swaps readDirLook.
+func TestAScanRecordsABookWhoseFolderDidNotAnswer(t *testing.T) {
+	cat, ctx := newHealthCatalog(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio := testAudio(t)
+	writeFile(t, root, "A/Hung/01.m4b", audio)
+	writeFile(t, root, "A/Faulted/01.m4b", audio)
+	writeFile(t, root, "A/Fine/01.m4b", audio)
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	if res := scanWithin(t, s, *lib, 20*time.Second); res.Books != 3 {
+		t.Fatalf("%d books, want 3", res.Books)
+	}
+	problems := func() map[string]catalog.Signature {
+		t.Helper()
+		sigs, err := cat.Signatures(ctx, lib.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sigs
+	}
+
+	was := readDirLook
+	t.Cleanup(func() { readDirLook = was })
+	hung, faulted := filepath.Join(root, "A", "Hung"), filepath.Join(root, "A", "Faulted")
+	readDirLook = func(ctx context.Context, p string, timeout time.Duration) ([]fs.DirEntry, error) {
+		switch p {
+		case hung:
+			return nil, fmt.Errorf("listing %q: %w", p, metadata.ErrNotAnswered)
+		case faulted:
+			return nil, &fs.PathError{Op: "open", Path: p, Err: syscall.EIO}
+		}
+		return was(ctx, p, timeout)
+	}
+	if res := scanWithin(t, s, *lib, 20*time.Second); !res.Partial || res.Removed != 0 {
+		t.Fatalf("scan with two folders unanswered: partial %v, removed %d; want partial, none removed", res.Partial, res.Removed)
+	}
+	sigs := problems()
+	for rel, detail := range map[string]string{"A/Hung": tagsUnreadDetail, "A/Faulted": syscall.EIO.Error()} {
+		if sig := sigs[rel]; sig.ScanError != catalog.ProblemUnreadable || sig.ScanErrorFile != rel || sig.ScanErrorDetail != detail {
+			t.Errorf("%s after its folder did not answer: problem %q on %q (%q), want %q on %q (%q)",
+				rel, sig.ScanError, sig.ScanErrorFile, sig.ScanErrorDetail, catalog.ProblemUnreadable, rel, detail)
+		}
+	}
+	if sig := sigs["A/Fine"]; sig.ScanError != "" {
+		t.Errorf("A/Fine, which answered, has problem %q", sig.ScanError)
+	}
+
+	readDirLook = was
+	scanWithin(t, s, *lib, 20*time.Second)
+	for rel, sig := range problems() {
+		if sig.ScanError != "" {
+			t.Errorf("%s after the share answered again: problem %q (%q), want none", rel, sig.ScanError, sig.ScanErrorDetail)
+		}
 	}
 }
 

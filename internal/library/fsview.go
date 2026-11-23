@@ -120,6 +120,8 @@ type Entry struct {
 
 // Listing is a page of directory entries.
 type Listing struct {
+	// Folder is the directory itself when an admin requests its details.
+	Folder     *Entry  `json:"folder,omitempty"`
 	Path       string  `json:"path"`
 	Entries    []Entry `json:"entries"`
 	Total      int     `json:"total"`

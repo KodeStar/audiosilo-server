@@ -1,5 +1,6 @@
 import { Switch as SwitchPrimitive } from '@base-ui/react/switch';
 import { cn } from '@/lib/utils';
+import { focusRing } from './focus-ring';
 
 // Shelf switch: on = brand pink, the thumb springs across (--ease-spring).
 export function Switch({ className, ...props }: SwitchPrimitive.Root.Props) {
@@ -7,7 +8,8 @@ export function Switch({ className, ...props }: SwitchPrimitive.Root.Props) {
     <SwitchPrimitive.Root
       data-slot="switch"
       className={cn(
-        'relative inline-flex h-6 w-[42px] shrink-0 cursor-pointer items-center rounded-full bg-border-strong p-[3px] transition-colors duration-(--dur-1) outline-none data-checked:bg-brand data-disabled:cursor-not-allowed data-disabled:opacity-45',
+        focusRing,
+        'relative inline-flex h-6 w-[42px] shrink-0 cursor-pointer items-center rounded-full bg-border-strong p-[3px] transition-colors duration-(--dur-1) data-checked:bg-brand data-disabled:cursor-not-allowed data-disabled:opacity-45',
         className,
       )}
       {...props}

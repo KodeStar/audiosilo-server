@@ -21,7 +21,6 @@ import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { rescanLibrary } from '@/features/libraries/rescan';
-import { relParent } from '@/lib/paths';
 import { LibraryFilter } from '../library-filter';
 import { useUpdateSearch } from '../library-param';
 import type { LibrarySearch } from '../library-search';
@@ -156,10 +155,13 @@ function FolderExplorer({
     { path: p, offset: 0 },
     ...(pages.get(p) ?? []).map((offset) => ({ path: p, offset })),
   ]);
+  // Every first page carries its folder's own entry (?detail=1), so selecting a
+  // folder never moves a listing the tree shows to another cache entry: its rows
+  // would drop to a loading row, and a focused one with them.
   const results = useQueries({
     queries: asked.map(({ path: p, offset }) => ({
-      queryKey: offset ? keys.browsePage(library.id, p, offset) : keys.browse(library.id, p),
-      queryFn: () => api.browse(library.id, p, offset),
+      queryKey: offset ? keys.browsePage(library.id, p, offset) : keys.folderDetail(library.id, p),
+      queryFn: () => api.browse(library.id, p, offset, offset === 0 && p !== ''),
     })),
   });
   const byPath = new Map<string, (typeof results)[number][]>();
@@ -168,7 +170,7 @@ function FolderExplorer({
     data: q.data,
     failed: q.isError,
   });
-  // Each folder's pages joined once per render: the tree, the detail and Show more all read them.
+  // Join the requested pages for the tree and its Show more control.
   const listings = new Map(
     [...byPath].map(([p, [first, ...later]]) => [p, joinPages(state(first), later.map(state))]),
   );
@@ -242,11 +244,7 @@ function FolderExplorer({
         )}
       </Card>
       {folder ? (
-        <FolderDetail
-          library={library}
-          path={folder}
-          parentListing={listing(relParent(folder))?.data}
-        />
+        <FolderDetail library={library} path={folder} own={byPath.get(folder)![0]} />
       ) : (
         <EmptyState
           icon={FolderSearch}

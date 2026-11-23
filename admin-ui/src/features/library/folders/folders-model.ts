@@ -174,11 +174,6 @@ export function treeKeyAction(rows: TreeRow[], focused: string, key: string): Tr
   }
 }
 
-/** A folder's own entry from its parent's listing (its override, whether it is a book). */
-export function entryIn(parent: FsListing | undefined, path: string): FsEntry | undefined {
-  return parent?.entries.find((e) => e.is_dir && e.path === path);
-}
-
 /** The audio files directly in a folder, with their total size and (when every file knows it) length. */
 export function audioFilesOf(listing: FsListing) {
   const files = listing.entries.filter((e) => !e.is_dir && e.is_audio);

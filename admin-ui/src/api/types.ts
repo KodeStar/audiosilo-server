@@ -1422,6 +1422,7 @@ export interface FsEntry {
 
 /** library.Listing (internal/library/fsview.go). */
 export interface FsListing {
+  folder?: FsEntry;
   path: string;
   entries: FsEntry[];
   total: number;

@@ -1,13 +1,29 @@
 {
-  "route": "GET /api/v1/household/listening (sharing, one other person listening)",
+  "route": "GET /api/v1/household/listening (sharing, two other people listening, one to a book no longer indexed)",
   "shape": {
     "listening": [
       {
-        "author": "string",
-        "chapter": "string",
-        "chapter_index": "number",
+        "author": {
+          "$or": [
+            "null",
+            "string"
+          ]
+        },
+        "chapter": {
+          "$or": [
+            "null",
+            "string"
+          ]
+        },
+        "chapter_index": {
+          "$or": [
+            "null",
+            "number"
+          ]
+        },
         "duration": "number",
         "library_id": "number",
+        "outside_grant": "boolean",
         "path": "string",
         "position": "number",
         "state": "string",

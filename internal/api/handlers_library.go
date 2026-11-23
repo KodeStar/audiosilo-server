@@ -627,6 +627,11 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ignore := library.ParseIgnore(lib.IgnorePatterns)
+	detail := rel != "" && r.URL.Query().Get("detail") == "1" && userFrom(r.Context()).Role == auth.RoleAdmin
+	if detail && ignore.Covers(rel, true) {
+		writeError(w, http.StatusNotFound, "directory not found")
+		return
+	}
 	listing, err := library.BrowseFS(r.Context(), lib.Root, dir, a.fileWait,
 		queryInt(r, "offset", 0), queryInt(r, "limit", 200), allow, ignore)
 	if errors.Is(err, library.ErrOutsideRoot) && !early {
@@ -644,8 +649,48 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	if rel != "" && !early && !a.fsGiven(w, r, lib, rel, allow) {
 		return
 	}
-	a.annotateWithBooks(r, lib, scope, ignore, listing)
+	// Annotate the folder and its children in the same catalog lookup, the folder
+	// first: the pending-book look has a time budget, and its own entry is the
+	// one the detail shows.
+	if detail && listing.Offset == 0 {
+		entries := make([]library.Entry, 0, len(listing.Entries)+1)
+		entries = append(entries, library.Entry{Path: rel, Name: filepath.Base(rel), IsDir: true})
+		entries = append(entries, listing.Entries...)
+		a.annotateWithBooks(r, lib, scope, ignore, entries)
+		listing.Folder, listing.Entries = &entries[0], entries[1:]
+	} else {
+		a.annotateWithBooks(r, lib, scope, ignore, listing.Entries)
+	}
+	// Best-effort like the annotations: without them the files list with no length.
+	if detail && len(listing.Entries) > 0 && listing.Entries[len(listing.Entries)-1].IsAudio {
+		if err := a.folderFileLengths(r.Context(), lib.ID, listing); err != nil {
+			a.log.Warn("annotate fs file lengths failed", "library", lib.ID, "err", err)
+		}
+	}
 	writeJSON(w, http.StatusOK, listing)
+}
+
+// folderFileLengths fills lengths for parts of a folder book. Separate books
+// already carry theirs from MarkBooks. A joined disc belongs to its parent.
+// Only the page's parts are asked for: a folder of 50,000 files is read 500 a page.
+func (a *API) folderFileLengths(ctx context.Context, lib int64, listing *library.Listing) error {
+	var parts []string
+	for _, e := range listing.Entries {
+		if !e.IsBook && e.IsAudio {
+			parts = append(parts, e.Path)
+		}
+	}
+	lengths, err := a.cat.FolderFileLengths(ctx, lib, listing.Path, parts)
+	if err != nil {
+		return err
+	}
+	for i := range listing.Entries {
+		e := &listing.Entries[i]
+		if !e.IsBook && e.IsAudio {
+			e.Duration = lengths[e.Path]
+		}
+	}
+	return nil
 }
 
 // annotateWithBooks turns the raw filesystem listing into the hybrid view by
@@ -654,12 +699,12 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 // the scanner would read as books it hasn't indexed yet (pending_book) for any
 // caller, within their scope. A books library's listing only: a podcast
 // library's is BrowsePodcasts'.
-func (a *API) annotateWithBooks(r *http.Request, lib *catalog.Library, scope catalog.Scope, ignore *library.Ignore, listing *library.Listing) {
-	if len(listing.Entries) == 0 {
+func (a *API) annotateWithBooks(r *http.Request, lib *catalog.Library, scope catalog.Scope, ignore *library.Ignore, entries []library.Entry) {
+	if len(entries) == 0 {
 		return
 	}
-	paths := make([]string, len(listing.Entries))
-	for i, e := range listing.Entries {
+	paths := make([]string, len(entries))
+	for i, e := range entries {
 		paths[i] = e.Path
 	}
 	books, err := a.cat.BooksByPaths(r.Context(), lib.ID, paths)
@@ -682,9 +727,9 @@ func (a *API) annotateWithBooks(r *http.Request, lib *catalog.Library, scope cat
 			a.log.Warn("annotate fs split discs failed", "library", lib.ID, "err", err)
 		}
 	}
-	library.MarkBooks(listing.Entries, books)
-	for i := range listing.Entries {
-		e := &listing.Entries[i]
+	library.MarkBooks(entries, books)
+	for i := range entries {
+		e := &entries[i]
 		if m, ok := overrides[e.Path]; ok {
 			e.Override = m
 		}
@@ -694,7 +739,7 @@ func (a *API) annotateWithBooks(r *http.Request, lib *catalog.Library, scope cat
 	// `collection` folder would read as a pending book: none are marked then, as
 	// the listing was before.
 	if overridesErr == nil {
-		a.markPendingBooks(r.Context(), lib, scope, ignore, listing.Entries, overrides)
+		a.markPendingBooks(r.Context(), lib, scope, ignore, entries, overrides)
 	}
 }
 

@@ -45,6 +45,10 @@ const HouseRecent = "recent"
 // title names nothing, where ChapterIndex still says which; a book with one
 // chapter has neither). UpdatedAt is the newest save, fixed-width millisecond UTC.
 type HouseListeningRow struct {
+	// The caller's grant does not reach the row's book: no indexed book this
+	// caller may read is at or above its path, so the player shows its local
+	// cover, asks for no art and opens nothing.
+	OutsideGrant bool     `json:"outside_grant,omitempty"`
 	UserID       int64    `json:"user_id"`
 	Username     string   `json:"username"`
 	LibraryID    int64    `json:"library_id"`
@@ -155,12 +159,13 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 	}
 	out := []HouseListeningRow{}
 	chapters := c.newChapterCache()
+	podcasts := map[int64]bool{} // by library id, read for a row with no book of its own
 	for _, r := range rows {
 		if !ScopesAllow(callerScopes, Ref{LibraryID: r.LibraryID, Path: r.Path}) {
 			continue
 		}
 		if r.bookID == 0 {
-			c.nameFromHolding(ctx, &r.HouseListeningRow, callerScopes)
+			c.nameFromHolding(ctx, &r.HouseListeningRow, callerScopes, podcasts)
 		}
 		if r.Title == "" {
 			r.Title = path.Base(r.Path) // not indexed (any more): the path names it
@@ -195,9 +200,22 @@ type houseRow struct {
 // caller's scopes don't grant (a share of the disc folder alone): its title
 // isn't theirs to read. Only the two columns are read: the route is polled
 // while a person shares.
-func (c *Catalog) nameFromHolding(ctx context.Context, r *HouseListeningRow, callerScopes []Scope) {
+//
+// Either way the row is OutsideGrant: no book the caller may read is at or
+// above its path. Not for a failed lookup (the next poll asks again), nor in a
+// podcast library, where an episode no longer indexed still has its show's
+// artwork (podcasts caches each library's kind for the call).
+func (c *Catalog) nameFromHolding(ctx context.Context, r *HouseListeningRow, callerScopes []Scope, podcasts map[int64]bool) {
 	id, book, err := c.bookHolding(ctx, r.LibraryID, r.Path, false)
-	if err != nil || !ScopesAllow(callerScopes, Ref{LibraryID: r.LibraryID, Path: book}) {
+	if errors.Is(err, ErrNotFound) {
+		r.OutsideGrant = !c.isPodcastLibrary(ctx, r.LibraryID, podcasts)
+		return
+	}
+	if err != nil {
+		return
+	}
+	if !ScopesAllow(callerScopes, Ref{LibraryID: r.LibraryID, Path: book}) {
+		r.OutsideGrant = true
 		return
 	}
 	var (
@@ -207,6 +225,19 @@ func (c *Catalog) nameFromHolding(ctx context.Context, r *HouseListeningRow, cal
 	if c.db.QueryRowContext(ctx, `SELECT title, NULLIF(author, '') FROM books WHERE id = ?`, id).Scan(&title, &author) == nil {
 		r.Title, r.Author = title, author
 	}
+}
+
+// isPodcastLibrary reports whether library id is a podcast library, read once
+// per call into known; a failed read counts as one, so the row keeps asking for
+// art the cover route checks anyway.
+func (c *Catalog) isPodcastLibrary(ctx context.Context, id int64, known map[int64]bool) bool {
+	podcast, ok := known[id]
+	if !ok {
+		lib, err := c.GetLibrary(ctx, id)
+		podcast = err != nil || lib.Kind == KindPodcasts
+		known[id] = podcast
+	}
+	return podcast
 }
 
 // houseListeningSQL is HouseListening's query (?1 the window's start, ?2 the

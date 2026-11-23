@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, Folder, FolderOpen, RotateCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatNumber } from '@/lib/format';
+import { relParent } from '@/lib/paths';
 import { cn } from '@/lib/utils';
 import { treeKeyAction, type TreeRow } from './folders-model';
 
@@ -61,6 +62,26 @@ export function FolderTree({
     items.current.get(selected)?.scrollIntoView?.({ block: 'nearest' });
   }, [selected, selectedShown]);
 
+  // When a page arrives, continue at its first new folder. Leave focus alone
+  // if the reader moved to another control while the request was in flight.
+  const moreFocus = useRef<{ parent: string; shown: number; button: HTMLElement } | null>(null);
+  useLayoutEffect(() => {
+    const pending = moreFocus.current;
+    if (!pending) return;
+    if (document.activeElement !== pending.button && document.activeElement !== document.body) {
+      moreFocus.current = null;
+      return;
+    }
+    const siblings = rows.filter(
+      (r) => r.kind === 'folder' && relParent(r.entry.path) === pending.parent,
+    );
+    const added = siblings[pending.shown];
+    if (!added && pending.button.isConnected) return;
+    moreFocus.current = null;
+    const target = added ?? siblings.at(-1);
+    if (target?.kind === 'folder') items.current.get(target.entry.path)?.focus();
+  }, [rows]);
+
   const onKeyDown = (e: React.KeyboardEvent, path: string) => {
     const action = treeKeyAction(rows, path, e.key);
     if (!action) return;
@@ -109,8 +130,19 @@ export function FolderTree({
                   <Button
                     variant="ghost"
                     size="sm"
+                    focusableWhenDisabled
                     disabled={row.state === 'loading'}
-                    onClick={() => onMore(row.parent)}
+                    onBlur={(e) => {
+                      if (e.relatedTarget) moreFocus.current = null;
+                    }}
+                    onClick={(e) => {
+                      moreFocus.current = {
+                        parent: row.parent,
+                        shown: row.shown,
+                        button: e.currentTarget,
+                      };
+                      onMore(row.parent);
+                    }}
                   >
                     {row.state === 'failed' ? (
                       <>

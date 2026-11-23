@@ -1,4 +1,8 @@
-import { useParams } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
+import { useLibraries } from '@/api/hooks';
+import { PageSkeleton } from '@/components/page';
+import { QueryError } from '@/components/query-error';
+import { useParams, useSearch } from '@tanstack/react-router';
 import type { Destination, DestinationKey } from '@/components/shell/destinations';
 import { NotFound } from '@/features/not-found';
 import { lazyScreen, type Screen } from '@/lib/lazy-screen';
@@ -119,5 +123,34 @@ export function SectionPage({ destination }: { destination: Destination }) {
   // Every listed section has a screen (section-page.test.ts), so a missing one is a 404.
   const Page = sectionScreen(destination, section);
   if (!Page) return <NotFound />;
+  if (
+    destination.key === 'library' &&
+    [BooksPage, SeriesPage, AuthorsPage, NarratorsPage].includes(Page)
+  ) {
+    return (
+      <LibraryScope>
+        <Page />
+      </LibraryScope>
+    );
+  }
   return <Page />;
+}
+
+/** A bookmarked library filter must be checked before the first catalog request. */
+function LibraryScope({ children }: { children: React.ReactNode }) {
+  const { library } = useSearch({ strict: false });
+  const libs = useLibraries();
+  const { t } = useTranslation();
+  if (library && !libs.data) {
+    if (libs.isError)
+      return (
+        <QueryError
+          title={t('libraries.error')}
+          error={libs.error}
+          onRetry={() => void libs.refetch()}
+        />
+      );
+    return <PageSkeleton />;
+  }
+  return children;
 }

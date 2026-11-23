@@ -453,7 +453,7 @@ func wireCases(t *testing.T) []wireCase {
 		{name: "meta", route: "GET /api/v1/libraries/{id}/meta?path=<a matched book>",
 			body: get(bookURL(m.metaLib, "meta", metaBook), m.adminTok)},
 		{name: "upcoming", route: "GET /api/v1/me/upcoming", body: call(u.testEnv, "GET", upcomingPath, adminSession(t, u.testEnv), "")},
-		{name: "household-listening", route: "GET /api/v1/household/listening (sharing, one other person listening)",
+		{name: "household-listening", route: "GET /api/v1/household/listening (sharing, two other people listening, one to a book no longer indexed)",
 			body: call(h.testEnv, "GET", "/api/v1/household/listening", h.patTok, "")},
 		// Last, and on an account of its own: the change signs that account's
 		// other device out, which no case before it may see.
@@ -559,12 +559,19 @@ func newWireMainEnv(t *testing.T) *wireMainEnv {
 		member: member.ID, memberTok: e.session(t, member.ID)}
 }
 
-// newWireHouseEnv: sam and pat share their listening, sam has listened.
+// newWireHouseEnv: sam, pat and dora share their listening; sam has listened,
+// and dora to a book the index no longer holds (no title, author or chapter
+// of its own, and its outside_grant set).
 func newWireHouseEnv(t *testing.T) *houseEnv {
 	t.Helper()
 	h := newHouseEnv(t)
 	h.setShare(t, h.samTok, true)
 	h.setShare(t, h.patTok, true)
+	h.setShare(t, h.doraTok, true)
 	h.listen(t, h.samTok, cradleBook)
+	h.listen(t, h.doraTok, mistbornBook)
+	if err := h.cat.DeleteBookAt(t.Context(), h.libID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
 	return h
 }

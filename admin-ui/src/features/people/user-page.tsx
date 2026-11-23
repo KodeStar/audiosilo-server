@@ -65,6 +65,7 @@ import {
   shareLabel,
   signedIn,
   sortInvites,
+  grantSummary,
   wholeLibraryOf,
   type UserTab,
 } from './people-model';
@@ -467,7 +468,7 @@ function AccessTab({ detail }: { detail: UserDetail }) {
           <ul className="divide-y">
             {grants.map((share) => {
               const library = wholeLibraryOf(share) !== undefined;
-              const label = shareLabel(share, libs);
+              const label = shareLabel(share, t, libs);
               return (
                 <AccessRow
                   key={share.id}
@@ -475,7 +476,7 @@ function AccessTab({ detail }: { detail: UserDetail }) {
                   title={label}
                   detail={
                     library
-                      ? t('user.access.wholeLibrary')
+                      ? grantSummary(share, libs, t)
                       : (share.paths ?? []).map((r) => ruleLabel(r, libs)).join(', ') ||
                         t('user.access.emptyShare')
                   }

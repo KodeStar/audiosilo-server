@@ -3,7 +3,6 @@ import { choiceOf, modeOf } from './folder-modes';
 import {
   ancestorsOf,
   audioFilesOf,
-  entryIn,
   foldersIn,
   joinChoices,
   joinPages,
@@ -215,11 +214,6 @@ describe('treeKeyAction', () => {
 });
 
 describe('a folder', () => {
-  it('finds its own entry in its parent listing', () => {
-    expect(entryIn(FS.Sanderson, 'Sanderson/Mistborn')?.is_book).toBe(true);
-    expect(entryIn(FS.Sanderson, 'Sanderson/Gone')).toBeUndefined();
-  });
-
   it('counts its audio files, with a total length only when every file knows it', () => {
     expect(audioFilesOf(FS['Sanderson/Mistborn'])).toMatchObject({ size: 30, duration: 180 });
     expect(audioFilesOf(FS['Sanderson/Mistborn']).files).toHaveLength(2);

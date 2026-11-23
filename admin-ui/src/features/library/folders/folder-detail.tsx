@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, FileAudio, FolderOpen, FolderX, RefreshCw } from 'lucide-react';
-import { invalidateLibraryBooks, keys, rescanBook, setFolderMode, useBrowse } from '@/api/hooks';
+import { api, ApiError } from '@/api/client';
+import { invalidateLibraryBooks, keys, rescanBook, setFolderMode } from '@/api/hooks';
 import type { AdminLibrary, FsEntry, FsListing } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Notice } from '@/components/notice';
@@ -13,35 +14,58 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { bookRoute } from '@/lib/book-route';
 import { toastError } from '@/lib/errors';
-import { counted, formatBytes, formatDuration } from '@/lib/format';
-import { joinLibraryPath, relBaseName, relParent } from '@/lib/paths';
+import { counted, formatBytes, formatDuration, formatNumber } from '@/lib/format';
+import { joinLibraryPath, relBaseName } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { FOLDER_CHOICES, choiceOf, modeOf, type FolderChoice } from './folder-modes';
-import { audioFilesOf, entryIn, foldersIn, joinChoices } from './folders-model';
+import { audioFilesOf, foldersIn, joinChoices } from './folders-model';
+
+/** How many of a folder's entries its totals read (20 pages of 500). */
+const TOTALLED = 10_000;
 
 /**
  * The selected folder: what it is, how AudioSilo reads it (each choice saved
- * at once, then the library rescans) and the audio files it holds. Its own
- * entry (override, whether it is a book) comes from its parent's listing, its
- * files from its own; the tree has usually loaded both already, and gives the
- * parent's with the pages Show more added (`parentListing`).
+ * at once, then the library rescans) and the audio files it holds.
+ * The listing identifies the folder even when its parent has many pages.
  */
 export function FolderDetail({
   library,
   path,
-  parentListing,
+  own,
 }: {
   library: AdminLibrary;
   path: string;
-  parentListing?: FsListing;
+  own: UseQueryResult<FsListing>;
 }) {
   const { t } = useTranslation();
-  const parent = useBrowse(library.id, relParent(path));
-  const own = useBrowse(library.id, path);
-  const entry = entryIn(parentListing ?? parent.data, path);
-  const name = entry?.name ?? relBaseName(path);
+  const next = own.data?.next_offset;
+  // The later pages up to TOTALLED entries, read once: they are read again only
+  // when something changes the library (an invalidation) or the first page counts
+  // another total, never on each focus of the window. A bigger folder is totalled
+  // over its first TOTALLED entries and says so, rather than paging for minutes.
+  const rest = useQuery({
+    queryKey: keys.folderRest(library.id, path, next ?? 0, own.data?.total ?? 0),
+    enabled: !!next,
+    staleTime: Infinity,
+    queryFn: async ({ signal }) => {
+      let offset = next;
+      const entries: FsEntry[] = [];
+      while (offset && offset < TOTALLED) {
+        signal.throwIfAborted();
+        const page = await api.browse(library.id, path, offset, true);
+        entries.push(...page.entries);
+        offset = page.next_offset;
+      }
+      return { entries, more: !!offset };
+    },
+  });
+  const name = own.data?.folder?.name ?? relBaseName(path);
 
-  if (parent.data && !entry) {
+  // A path naming the root ("/", "."): its listing has no folder entry to show.
+  if (
+    (own.error instanceof ApiError && own.error.status === 404) ||
+    (own.data && !own.data.folder)
+  ) {
     return (
       <Notice
         tone="info"
@@ -53,7 +77,8 @@ export function FolderDetail({
       </Notice>
     );
   }
-  const failed = parent.isError ? parent : own.isError ? own : undefined;
+  // A failed refresh keeps the folder and totals there are, as the tree keeps its pages.
+  const failed = own.isError && !own.data ? own : rest.isError && !rest.data ? rest : undefined;
   if (failed) {
     return (
       <QueryError
@@ -63,7 +88,7 @@ export function FolderDetail({
       />
     );
   }
-  if (!entry || !own.data) {
+  if (!own.data?.folder || (next && !rest.data)) {
     return (
       <div className="flex flex-col gap-4" role="status" aria-label={t('common.loading')}>
         <span className="skel h-[220px] rounded-xl" />
@@ -71,15 +96,21 @@ export function FolderDetail({
       </div>
     );
   }
-  const files = audioFilesOf(own.data);
+  const listing: FsListing = {
+    ...own.data,
+    entries: own.data.entries.concat(rest.data?.entries ?? []),
+  };
+  const entry = own.data.folder;
+  const files = audioFilesOf(listing);
   return (
     <Detail
       key={path}
       library={library}
       entry={entry}
       files={files}
+      partial={!!rest.data?.more}
       // A folder with no audio of its own can still be joined from its disc folders.
-      join={joinChoices(files.files.length, entry, foldersIn(own.data))}
+      join={joinChoices(files.files.length, entry, foldersIn(listing))}
     />
   );
 }
@@ -88,11 +119,14 @@ function Detail({
   library,
   entry,
   files: { files, size, duration },
+  partial,
   join,
 }: {
   library: AdminLibrary;
   entry: FsEntry;
   files: ReturnType<typeof audioFilesOf>;
+  /** Whether the totals cover only the folder's first TOTALLED entries. */
+  partial: boolean;
   join: ReturnType<typeof joinChoices>;
 }) {
   const { t, i18n } = useTranslation();
@@ -249,8 +283,16 @@ function Detail({
               </span>
             }
           />
+          {partial ? (
+            <p className="px-5 py-2 text-muted-foreground">
+              {t('folders.files.partial', { number: formatNumber(TOTALLED, lang) })}
+            </p>
+          ) : null}
+          {count > 500 ? (
+            <p className="px-5 py-2 text-muted-foreground">{t('folders.files.first500')}</p>
+          ) : null}
           <ul className="divide-y">
-            {files.map((f) => (
+            {files.slice(0, 500).map((f) => (
               <li key={f.path} className="flex min-h-11 items-center gap-3 px-5 py-2.5">
                 <FileAudio className="size-4 shrink-0 text-subtle-foreground" aria-hidden="true" />
                 {f.is_book ? (

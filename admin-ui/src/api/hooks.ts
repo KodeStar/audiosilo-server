@@ -54,6 +54,7 @@ export type BookIdentity = Pick<AdminBook, 'library_id' | 'path' | 'asin' | 'isb
 
 // Query keys live here so invalidation and the hooks can't drift apart.
 export const keys = {
+  addresses: ['addresses'] as const,
   server: ['server'] as const,
   stats: ['admin', 'stats'] as const,
   settings: ['admin', 'settings'] as const,
@@ -112,6 +113,11 @@ export const keys = {
   /** Every listing of one library's folders (a prefix: a scan changes them). */
   browseLibrary: (libraryId: number) => ['fs', libraryId] as const,
   browse: (libraryId: number, path: string) => ['fs', libraryId, path] as const,
+  /** A folder's first page with its own entry (`?detail=1`): the Folders screen's listings. */
+  folderDetail: (libraryId: number, path: string) => ['fs', libraryId, path, 'detail'] as const,
+  /** The selected folder's pages after its first, from `offset` of `total`, for its totals. */
+  folderRest: (libraryId: number, path: string, offset: number, total: number) =>
+    ['fs', libraryId, path, 'rest', offset, total] as const,
   /** A later page of a folder's listing, from `offset` (under `browse`, so its refetches reach it). */
   browsePage: (libraryId: number, path: string, offset: number) =>
     ['fs', libraryId, path, offset] as const,
@@ -223,6 +229,10 @@ export function invalidateLibraries(qc: QueryClient) {
 }
 
 const serverInfoQuery = { queryKey: keys.server, queryFn: api.serverInfo, staleTime: 5 * 60_000 };
+
+export function useAddresses() {
+  return useQuery({ queryKey: keys.addresses, queryFn: api.addresses });
+}
 
 export function useServerInfo() {
   return useQuery(serverInfoQuery);
@@ -890,6 +900,19 @@ export function useBookFacets(filter: BookFilter) {
   });
 }
 
+/** A deleted library can still be selected from a cached library list. Refresh
+ * that list before surfacing the error, so its screens can switch to All. */
+async function libraryAggregate<T>(qc: QueryClient, id: number | undefined, read: Promise<T>) {
+  try {
+    return await read;
+  } catch (error) {
+    if (id !== undefined && error instanceof ApiError && error.status === 404) {
+      await qc.invalidateQueries({ queryKey: keys.libraries });
+    }
+    throw error;
+  }
+}
+
 /** The authors or narrators of one library (or all), with merge suggestions. */
 export function usePeople(
   field: PersonField,
@@ -899,7 +922,7 @@ export function usePeople(
 ) {
   return useQuery({
     queryKey: keys.people(field, libraryId),
-    queryFn: () => api.people(field, libraryId),
+    queryFn: ({ client }) => libraryAggregate(client, libraryId, api.people(field, libraryId)),
     enabled,
     staleTime,
   });
@@ -908,7 +931,8 @@ export function usePeople(
 export function useSeries(libraryId?: number, enabled = true, staleTime?: number) {
   return useQuery({
     queryKey: keys.series(libraryId),
-    queryFn: () => api.series(libraryId).then((r) => r.series ?? []),
+    queryFn: ({ client }) =>
+      libraryAggregate(client, libraryId, api.series(libraryId)).then((r) => r.series ?? []),
     enabled,
     staleTime,
   });
@@ -926,9 +950,10 @@ export const DUPLICATES_PAGE = 50;
  * Groups of copies of one book, a page at a time (`fetchNextPage` for more): the
  * open ones, or with `ignored` the ignored ones.
  */
-export function useDuplicates(ignored: boolean, across = false) {
+export function useDuplicates(ignored: boolean, across = false, enabled = true) {
   return useInfiniteQuery({
     queryKey: keys.duplicates(ignored, across),
+    enabled,
     queryFn: ({ pageParam }) =>
       api.duplicates({
         ignored: ignored || undefined,
@@ -985,11 +1010,15 @@ export async function rescanBook(
   ref: BookRef,
   refreshIssues = true,
 ): Promise<AdminBookDetail> {
-  const fresh = await api.rescanBook(ref.library_id, ref.path);
-  settleBookEdit(qc, fresh);
-  invalidateCover(qc, ref.library_id, ref.path);
-  if (refreshIssues) invalidateIssues(qc);
-  return fresh;
+  try {
+    const fresh = await api.rescanBook(ref.library_id, ref.path);
+    settleBookEdit(qc, fresh);
+    invalidateCover(qc, ref.library_id, ref.path);
+    return fresh;
+  } finally {
+    // A failed re-read can record a read problem in Health.
+    if (refreshIssues) invalidateIssues(qc);
+  }
 }
 
 /**

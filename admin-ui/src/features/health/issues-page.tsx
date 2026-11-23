@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { RefreshCw } from 'lucide-react';
-import { useIssues, useLibraries } from '@/api/hooks';
+import { useBookLibraries, useIssues, useLibraries } from '@/api/hooks';
+import { offersLibraryChoice } from '@/features/library/library-param';
 import { scanActive } from '@/lib/library-scan';
 import type { IssueCount, IssueKind, OfflineLibrary } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
@@ -43,8 +44,23 @@ export function IssuesPage() {
   // Duplicates in other libraries too, when asked (#165): kept across a change
   // of category or of the ignored view, so its ignored groups can be reached
   // when the count (within each library) has none, and a reload keeps it.
-  const across = !!search.across;
-  const go = (next: { issue?: IssueKind; ignored?: true }, on = across) =>
+  const bookLibraries = useBookLibraries();
+  const several = offersLibraryChoice(bookLibraries ?? []);
+  const across = several && !!search.across;
+  // ?across=1 can't be checked until the libraries load: the list waits for them
+  // rather than asking without it first, and a change of category keeps it.
+  const acrossPending = libraries.isPending && !!search.across;
+  useEffect(() => {
+    if (bookLibraries && !several && search.across) {
+      void navigate({
+        to: '.',
+        search: (prev) => ({ ...prev, across: undefined }),
+        replace: true,
+        resetScroll: false,
+      });
+    }
+  }, [bookLibraries, several, search.across, navigate]);
+  const go = (next: { issue?: IssueKind; ignored?: true }, on = across || acrossPending) =>
     void navigate({ to: '.', search: { ...next, across: on || undefined }, replace: true });
   const setAcross = (on: boolean) => go({ issue: search.issue, ignored: search.ignored }, on);
   // Without ?issue= the page opens the first category needing attention and keeps
@@ -178,7 +194,13 @@ export function IssuesPage() {
           ) : cat.kind === 'series_spellings' ? (
             <SeriesSpellings ignored={ignored} />
           ) : (
-            <Duplicates ignored={ignored} across={across} onAcrossChange={setAcross} />
+            <Duplicates
+              several={several}
+              ignored={ignored}
+              across={across}
+              waiting={acrossPending}
+              onAcrossChange={setAcross}
+            />
           )}
         </section>
       ) : null}

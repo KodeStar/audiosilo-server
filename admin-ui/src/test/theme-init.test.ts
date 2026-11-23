@@ -1,3 +1,4 @@
+import { setThemePref } from '@/lib/theme';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -29,6 +30,8 @@ const theme = () => document.documentElement.getAttribute('data-theme');
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  document.documentElement.removeAttribute('data-theme-pref');
   localStorage.clear();
   document.documentElement.removeAttribute('data-theme');
 });
@@ -40,6 +43,16 @@ describe('theme-init.js', () => {
     flip(true);
     expect(theme()).toBe('dark');
     flip(false);
+    expect(theme()).toBe('light');
+  });
+
+  it('keeps a choice made with storage blocked when the OS switches', () => {
+    const { flip } = loadThemeInit(false);
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    setThemePref('light');
+    flip(true);
     expect(theme()).toBe('light');
   });
 

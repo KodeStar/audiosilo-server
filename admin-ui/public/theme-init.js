@@ -6,6 +6,8 @@
 (function () {
   var mq = window.matchMedia && matchMedia('(prefers-color-scheme: dark)');
   function apply() {
+    // Once the console takes over, its provider follows the in-memory choice.
+    if (document.documentElement.hasAttribute('data-theme-pref')) return;
     var pref = 'system';
     try {
       pref = localStorage.getItem('audiosilo.admin.theme') || 'system';

@@ -344,6 +344,9 @@ func TestRereadOnAHeldShareAnswersShareNotAnswering(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if _, err := e.api.scanner.Scan(t.Context(), *lib); err != nil {
+				t.Fatal(err)
+			}
 			e.api.fileWait = 200 * time.Millisecond
 			release := metadata.HoldOpensForTests(filepath.Join(root, filepath.FromSlash(held)))
 			t.Cleanup(release)
@@ -356,9 +359,23 @@ func TestRereadOnAHeldShareAnswersShareNotAnswering(t *testing.T) {
 			if took := time.Since(start); took > 5*time.Second {
 				t.Errorf("Re-read took %v, want it answered once a look is given up on", took)
 			}
+			issues := func() string {
+				t.Helper()
+				resp, body := e.do(t, "GET", "/api/v1/admin/books?issue=scan_error", adminTok, "")
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("Health = %d %s", resp.StatusCode, body)
+				}
+				return body
+			}
+			if got := issues(); !strings.Contains(got, `"scan_error_file":"`+held+`"`) {
+				t.Fatalf("Health after re-read of %s = %s", held, got)
+			}
 			release()
 			if resp, body := e.do(t, "POST", u, adminTok, ""); resp.StatusCode != http.StatusOK {
 				t.Errorf("Re-read once the share answers = %d %s, want the book", resp.StatusCode, body)
+			}
+			if got := issues(); strings.Contains(got, `"scan_error":"unreadable"`) {
+				t.Fatalf("Health after recovery: %s", got)
 			}
 		})
 	}

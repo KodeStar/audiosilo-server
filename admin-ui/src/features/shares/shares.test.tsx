@@ -31,13 +31,13 @@ describe('shares', () => {
     expect(within(grant).queryByRole('button', { name: /Actions for/ })).not.toBeInTheDocument();
   });
 
-  it('lists a marked grant left with no whole-library rule with the named shares', async () => {
-    const ruleless = { ...fictionGrant, paths: [] };
+  it('labels a former library grant left by deletion or migration as a folder share', async () => {
+    const ruleless = { ...fictionGrant, whole_library_id: undefined, paths: [] };
     mockFetch(routes({ 'GET /admin/shares': { body: { shares: [kidsShare, ruleless] } } }));
     renderApp('/people/shares');
     const nav = await screen.findByRole('navigation', { name: 'Shares' });
     expect(
-      await within(nav).findByRole('button', { name: /^Library: Fiction/ }),
+      await within(nav).findByRole('button', { name: /^Folder share \(Fiction\)/ }),
     ).toBeInTheDocument();
     expect(within(nav).queryByText('Whole libraries')).not.toBeInTheDocument();
   });
@@ -204,7 +204,7 @@ describe('shares', () => {
   });
 
   it("removes a stray rule from a library grant, never the grant's own (server#361)", async () => {
-    const stray = { library_id: 1, path: 'Agatha Christie' };
+    const stray = { library_id: 2, path: 'Picture books' };
     const calls = mockFetch(
       routes({
         'GET /admin/shares': {
@@ -218,12 +218,12 @@ describe('shares', () => {
     renderApp('/people/shares');
     const user = userEvent.setup();
     const nav = await screen.findByRole('navigation', { name: 'Shares' });
-    await user.click(await within(nav).findByRole('button', { name: /^Fiction/ }));
+    const tile = await within(nav).findByRole('button', { name: /^Fiction/ });
+    await waitFor(() => expect(tile).toHaveTextContent('Whole library · Kids › Picture books'));
+    await user.click(tile);
     const grant = await screen.findByRole('region', { name: 'Fiction' });
     expect(within(grant).queryByRole('button', { name: 'Remove Fiction' })).not.toBeInTheDocument();
-    await user.click(
-      within(grant).getByRole('button', { name: 'Remove Fiction › Agatha Christie' }),
-    );
+    await user.click(within(grant).getByRole('button', { name: 'Remove Kids › Picture books' }));
     await waitFor(() =>
       expect(calls.find((c) => c.path === '/admin/shares/8/paths')?.body).toEqual(stray),
     );
