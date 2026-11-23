@@ -603,8 +603,8 @@ func TestWaitFlightGivesARunningProbeItsTime(t *testing.T) {
 
 	// A probe that outlasts its time is given up on, and its read marked stuck.
 	hung := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	began = time.Now() // before the probe starts: its time runs from then
 	defer hung.progress.Probe()()
-	began = time.Now()
 	if err := s.waitFlight(asked, hung); !errors.Is(err, errReadLeft) || time.Since(began) < s.probeTimeout || !hung.stuck.Load() {
 		t.Errorf("a probe past its time: %v after %v, stuck %v; want errReadLeft once the probe's time has passed, marked stuck", err, time.Since(began), hung.stuck.Load())
 	}
