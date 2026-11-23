@@ -2219,6 +2219,7 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 
 // ErrorServerCancelled is the error_code scanJob gives a job the server cancelled,
 // or asked to stop, for one of its own reasons (IsCancelReason) rather than an admin.
+// It is the console's: the Bridge's report answer leaves it out (api handleBridgeUpdate).
 const ErrorServerCancelled = "server_cancelled"
 
 // The reasons the server records as a job's error when it cancels the job

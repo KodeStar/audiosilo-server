@@ -3982,7 +3982,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that only file (`sidecars.contribute`, `meta.correct`: `Service.stopsShare`, the kind's own module), which
   write nothing: a claimed or running one is asked to stop at the Bridge's next report (`UpdateHeld` sets
   `cancel_requested` with the server's reason `CancelModuleOff`, "its module was turned off", and
-  the job reads `error_code: "server_cancelled"`; server#218), a parked one when it reports working again. A
+  the console's reads of the job carry `error_code: "server_cancelled"`, never the Bridge's report answer,
+  which `internal/link` mirrors; server#218), a parked one when it reports working again. A
   `sidecars.generate` job with `contribute: "issue"` is never asked to stop (the Bridge would drop the
   characters and recaps it is writing): while the module is off the Bridge's claim and report answers carry
   `share_off: true` (`Job.ShareOff`, `Service.flagShareOff`, computed, never stored, omitted otherwise), and
