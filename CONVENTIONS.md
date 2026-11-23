@@ -51,6 +51,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
   The executor sorts filenames and skips exact recorded names, allowing a missing lower-numbered
   migration to arrive later. Phase F1 owns 0053 and podcast downloads own 0054; neither depends on the other.
+  A start that applied any migration truncates the WAL file afterwards (`truncateWAL`), so a backfill that
+  rewrites most rows (0082, 0095) leaves no WAL of that size on disk.
   `Open` still starts on a database recording migrations this server doesn't ship (a newer server ran on
   it: a rollback) and warns once, naming them; a restore refuses one (`Inspect`, `ErrNewerDatabase`).
   Some tables carry triggers (derived columns, guards) that a rolled-back server's writes fire too: a
