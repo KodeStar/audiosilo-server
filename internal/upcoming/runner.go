@@ -366,22 +366,7 @@ func (r *Runner) saveNext(ctx context.Context, next time.Time) {
 
 // settled waits until no Kick has come for r.settle, at most maxSettle.
 func (r *Runner) settled(ctx context.Context) bool {
-	quiet := time.NewTimer(r.settle)
-	defer quiet.Stop()
-	limit := time.NewTimer(maxSettle)
-	defer limit.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-quiet.C:
-			return true
-		case <-limit.C:
-			return true
-		case <-r.kick:
-			quiet.Reset(r.settle)
-		}
-	}
+	return pool.Settle(ctx, r.kick, r.settle, maxSettle)
 }
 
 // localSeries is one series of one library, with its books.

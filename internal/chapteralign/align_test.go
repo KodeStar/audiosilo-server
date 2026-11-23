@@ -70,7 +70,7 @@ func (r recording) pauses(trim float64) []Silence {
 // split is a Prober over pauses on the book's timeline, for a book cut into
 // files: a window in file f is answered in f's own seconds.
 func split(files []File, pauses []Silence) Prober {
-	return func(_ context.Context, file string, from, to float64) ([]Silence, error) {
+	return func(_ context.Context, file string, windows []metadata.TimeRange) ([][]Silence, error) {
 		var off float64
 		for _, f := range files {
 			if f.Path == file {
@@ -78,11 +78,13 @@ func split(files []File, pauses []Silence) Prober {
 			}
 			off += f.Duration
 		}
-		var out []Silence
-		for _, p := range pauses {
-			s, e := p.Start-off, p.End-off
-			if e > from && s < to {
-				out = append(out, Silence{Start: max(s, from), End: min(e, to)})
+		out := make([][]Silence, len(windows))
+		for i, w := range windows {
+			for _, p := range pauses {
+				s, e := p.Start-off, p.End-off
+				if e > w.Start && s < w.End {
+					out[i] = append(out[i], Silence{Start: max(s, w.Start), End: min(e, w.End)})
+				}
 			}
 		}
 		return out, nil
@@ -381,7 +383,9 @@ func TestAlignStopsOnCancel(t *testing.T) {
 	r := newRecording(6, 1200)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	probe := func(ctx context.Context, _ string, _, _ float64) ([]Silence, error) { return nil, ctx.Err() }
+	probe := func(ctx context.Context, _ string, _ []metadata.TimeRange) ([][]Silence, error) {
+		return nil, ctx.Err()
+	}
 	if _, err := Align(ctx, oneFile(r.total()), nil, r.remote(), probe); err == nil {
 		t.Error("no error from a cancelled fit")
 	}

@@ -533,7 +533,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   "no match" (no ready copy, or a request the copy failed) replaces the row as in remote mode.
   `Ping` is unchanged: its `/healthz` goes through the same client, so the copy answers it once
   ready and the remote service until then (parity by construction; cached a minute as before). The
-  runner is `internal/metamirror.Mirror` (`New(dir, Options{Enabled, Now, FreeBytes, Logger,
+  runner is `internal/metamirror.Mirror` (`New(dir, Options{Interval, Enabled, Now, FreeBytes, Logger,
   SiteURL, Repo, Release})` - it builds the release client itself, adding
   `release.WithBaseSize` - then `Run`, `CheckNow`, `Wake`, `Current`, `Ready`, `Handler`, `Status`,
   `Close`; `Remove(dataDir)`): `<data>/meta-mirror/` (0700; not in backups, which hold the
@@ -544,8 +544,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   integrity checks take seconds over 1.8 GB, which must not hold up the listener), so until then
   the status says `opening` with `fallback` and lookups go remote (a finished download is
   `opening` too while `query.Open` runs, before the swap: over a working copy that copy still
-  answers, so no `fallback`). Schedule: durable, at most once a
-  day from the `checked_at` on disk (a restart does not re-download), 30 s after start without a
+  answers, so no `fallback`). The next release check is one week after the stored `checked_at` by default.
+  Set `metadata.mirror.interval` in config.yaml to change it at startup. The first check runs 30 s after start without a
   copy, an hour after a failed check, and on `CheckNow` (which makes `next_check_at` now; a running
   check shows none until it ends); never while `metadata.enabled` is off (a check in flight, its download
   included, stops when it is turned off and records nothing: `checkWhileEnabled`, and a Check now it was
@@ -573,7 +573,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Covers are unchanged (their own hosts in both modes). Admin wire below (Server settings).
   **Bundle** (`meta_bundle` capability): `?include=previous` adds `previous`
   (`meta.PreviousWorkIDs` / `Service.Previous`: main-view works before this one
-  (an omnibus "1-3" only when it ends before this one starts), nearest first, max 5, failures left out) and `?spoilers=hide` gates the current
+  (an omnibus "1-3" only when it ends before this one starts), nearest first, max 5, with five seconds for the group and unfinished or failed lookups left out;
+  a lookup still running goes on to be cached, one per work across requests, at most 16, and ends with the server) and `?spoilers=hide` gates the current
   work by the CALLER's saved progress (`meta.ChapterAt` + `meta.HideSpoilers`,
   mirroring the player's `meta-gating.ts`; previous works lose only
   `recap_summary.ending`). Both work on a per-request copy - the cached envelope
@@ -1466,7 +1467,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   share, Windows: within the caller's time, a look whose late answer's handle is closed when it comes,
   `TestBoundedToolInputGivenUp`, `TestToolInputBoundedWhereItLooks`): ffprobe's fallback run (`runFFprobe`,
   within the probe's time, one given up on its `ErrProbeTimeout`), the chapter check's ffmpeg
-  (`media.DetectSilences`, given the library's root, within its window's time) and a transcode or a cached
+  (`media.DetectSilences`, given the library's root, within the file's probe budget) and a transcode or a cached
   copy on an ffmpeg without `fd:` (`media.fileInput`). On Unix the tool inherits the descriptor
   and is named a link to its own `/dev/fd/3` in a private folder, named for the file's extension (ffmpeg
   guesses a format by it; `TestProbeMatchesLiveFFprobe` holds parity), or, with no temporary folder it may
@@ -5390,8 +5391,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   scan kicks once per book), so a burst is one pass. In mirror mode the first pass after a start
   (the first with metadata on: no copy loads while it is off) waits for the local copy (`mirrorReady`,
   at most 10 min, server#282), so a start sends no lookups to the service while the copy loads. The book page's
-  `community_check_failed` says the last check failed (the service, or the 4-minute
-  pause budget of a 5-minute check: past it, the rest are left unsnapped).
+  `community_check_failed` says the last check failed. Pause windows for a file run in one
+  ffmpeg process (an ffmpeg older than 5.0, whose concat lists take no per-file options, or one
+  without the concat demuxer, runs one a window, each within 30 s). They stop four minutes into the five-minute check, including lookup time.
+  The remaining boundaries, and the window being read when the time ran out, keep their
+  proportional positions while the fit is saved.
   `refreshEffective` -> `applyChapterSource` (after an admin's edited list, Edited chapters below) puts the
   community chapters in the `chapters` rows when a current check fitted and either the admin chose them
   (`chapter_choices`: `files`|`community`, durable, path-keyed, moved with the book's

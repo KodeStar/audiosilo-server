@@ -180,10 +180,10 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned,
 		     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent,
 		     released, released_checked, genres_checked, tag_asin, tag_isbn, tag_language, hints_checked,
-		     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
+		     scanned_chapters, chapters_hash,
 		     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at,
 		     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size, duration_rev, duration_rev_indexed_at, path_key)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,'','',?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN 0 ELSE `+durationRev+` END,?,?)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN 0 ELSE `+durationRev+` END,?,?)
 		 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 		     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 		     series=excluded.series, series_index=excluded.series_index,
@@ -199,10 +199,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     released=excluded.released, released_checked=1, genres_checked=1,
 		     tag_asin=excluded.tag_asin, tag_isbn=excluded.tag_isbn, tag_language=excluded.tag_language,
 		     hints_checked=1,
-		     -- The rows below are the scan's: refreshEffective puts a community
-		     -- list back over them when it should.
 		     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
-		     chapters_source='', chapters_fit='',
 		     -- An ABS file that could not be read right now (ABSReading.Unread)
 		     -- keeps the stored reading, unchecked.
 		     abs_sig=CASE WHEN ? THEN books.abs_sig ELSE excluded.abs_sig END,
@@ -259,10 +256,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		}
 	}
 
-	if err := replaceChapters(ctx, tx, id, b.Chapters); err != nil {
-		return 0, err
-	}
-	return id, refreshEffective(ctx, tx, id)
+	return id, refreshBook(ctx, tx, id, b)
 }
 
 // ProblemUnreadable is the read problem (books.scan_error) of a file that
@@ -348,7 +342,7 @@ func recordLengths(ctx context.Context, tx *sql.Tx, id int64, b *Book) error {
 	}
 	// The lengths are today's revision's (LengthsRead: none left uncounted).
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE books SET duration = ?, codec = ?, scanned_chapters = ?, chapters_hash = ?, chapters_source = '', chapters_fit = '',
+		`UPDATE books SET duration = ?, codec = ?, scanned_chapters = ?, chapters_hash = ?,
 		        `+setDurationRev+`
 		  WHERE id = ?`, b.Duration, b.Codec, raw, chaptersHash(raw), id); err != nil {
 		return err
@@ -359,10 +353,7 @@ func recordLengths(ctx context.Context, tx *sql.Tx, id int64, b *Book) error {
 			return err
 		}
 	}
-	if err := replaceChapters(ctx, tx, id, b.Chapters); err != nil {
-		return err
-	}
-	return refreshEffective(ctx, tx, id)
+	return refreshBook(ctx, tx, id, b)
 }
 
 // setDurationRev is the SET clause recording today's revision of the lengths'
@@ -1050,7 +1041,7 @@ func deleteBook(ctx context.Context, tx *sql.Tx, id int64) error {
 
 // bookBaseCols are the books table's own columns a Book reads; bookCols and
 // prefixCols add its community work id.
-const bookBaseCols = `id, library_id, rel_path, is_folder, title, author, series,
+const bookBaseCols = `id, library_id, rel_path, is_folder, title, author, series, series_key,
 	series_index, series_index_end, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
 	added_at, content_hash, published, has_cover, cover_art, cover_color, attachments_sig,
 	subtitle, publisher, language, abridged, genres, tags, ebook_path, ebook_size`
@@ -1123,7 +1114,7 @@ func bookDest(b *Book) (dest []any, finish func()) {
 	var more, art, color, attachments, genres, tags, ebookPath string
 	var ebookSize int64
 	return []any{&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
-			&b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
+			&b.Series, &b.SeriesKey, &b.SeriesIndex, &b.SeriesIndexEnd, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
 			&b.Published, &b.HasCover, &art, &color, &attachments,
 			&b.Subtitle, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSize, &b.WorkID},

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // named is rail(...) with a series name.
@@ -19,7 +21,7 @@ func named(name, at string, entries ...string) MetaSeries {
 
 // mine is one of the caller's books.
 func mine(lib int64, path, series string, index float64, workID string) LocalBook {
-	return LocalBook{MetaLocal: MetaLocal{LibraryID: lib, Path: path}, Series: series, SeriesIndex: index, WorkID: workID}
+	return LocalBook{MetaLocal: MetaLocal{LibraryID: lib, Path: path}, SeriesKey: match.SeriesKey(series), SeriesIndex: index, WorkID: workID}
 }
 
 // locals reads each entry's local path ("" = none) off works.
@@ -300,8 +302,8 @@ func TestWithWorkIDs(t *testing.T) {
 	cachePut(svc.cache, nsASIN.key("B0NOVELLA"), &Enrichment{Matched: true, Work: &MetaWork{ID: "novella"}}, positiveTTL)
 	env := &Enrichment{Work: &MetaWork{ID: "one"}, Series: []MetaSeries{named("S", "1", "one@1", "two@2", "novella@2.5")}}
 	books := []LocalBook{
-		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/novella"}, Series: "S", SeriesIndex: 2, ASIN: "B0NOVELLA"},
-		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/2"}, Series: "S", SeriesIndex: 2},
+		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/novella"}, SeriesKey: "s", SeriesIndex: 2, ASIN: "B0NOVELLA"},
+		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/2"}, SeriesKey: "s", SeriesIndex: 2},
 	}
 	place := func(svc *Service, books []LocalBook) []string {
 		requested := MetaLocal{LibraryID: 1, Path: "S/1"}
@@ -332,7 +334,7 @@ func TestWithWorkIDs(t *testing.T) {
 	fresh := NewService("http://meta.invalid", nil)
 	fresh.SetStore(store)
 	loads := store.loads.Load()
-	mine := []LocalBook{{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/1"}, Series: "S", SeriesIndex: 1, ASIN: "B0REQUESTED"}}
+	mine := []LocalBook{{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/1"}, SeriesKey: "s", SeriesIndex: 1, ASIN: "B0REQUESTED"}}
 	got = place(fresh, mine)
 	if want := []string{"S/1", "", ""}; !reflect.DeepEqual(got, want) || store.loads.Load() != loads {
 		t.Fatalf("requested: placed %q (want %q), store reads %d", got, want, store.loads.Load()-loads)

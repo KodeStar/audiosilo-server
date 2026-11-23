@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
 // Bounds on the background pass: it shares the disk with the scan and the art
@@ -59,68 +60,23 @@ type Runner struct {
 	color Colorer
 	log   *slog.Logger
 
-	kick   chan struct{}
-	settle time.Duration
+	*pool.PassRunner
 }
 
 // New returns a Runner; Run starts its background pass.
 func New(cat *catalog.Catalog, color Colorer, log *slog.Logger) *Runner {
+	return newRunner(cat, color, log, settleKicks)
+}
+
+// newRunner is New with the quiet a Kick waits for.
+func newRunner(cat *catalog.Catalog, color Colorer, log *slog.Logger, quiet time.Duration) *Runner {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Runner{cat: cat, color: color, log: log, kick: make(chan struct{}, 1), settle: settleKicks}
-}
-
-// Kick asks the background to look for books due a colour once the kicks settle
-// (a scan or an edit may have made some).
-func (r *Runner) Kick() {
-	select {
-	case r.kick <- struct{}{}:
-	default:
-	}
-}
-
-// Run reads the colours of the books due one shortly after it starts, then every
-// interval and after a Kick, until ctx ends.
-func (r *Runner) Run(ctx context.Context) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		if !r.settled(ctx) {
-			return
-		}
-		kick := r.kick
-		if r.pass(ctx) {
-			kick = nil // the art keeps failing to read: wait for the tick
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		case <-kick:
-		}
-	}
-}
-
-// settled waits until no Kick has come for r.settle, at most maxSettle; false
-// when ctx ended first.
-func (r *Runner) settled(ctx context.Context) bool {
-	quiet := time.NewTimer(r.settle)
-	defer quiet.Stop()
-	limit := time.NewTimer(maxSettle)
-	defer limit.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-quiet.C:
-			return true
-		case <-limit.C:
-			return true
-		case <-r.kick:
-			quiet.Reset(r.settle)
-		}
-	}
+	r := &Runner{cat: cat, color: color, log: log}
+	r.PassRunner = pool.NewPassRunner(pool.PassOptions{Interval: interval, Quiet: quiet, MaxSettle: maxSettle,
+		SettleOnTick: true}, r.pass)
+	return r
 }
 
 // pass reads the colour of every due book once and records them a batch at a

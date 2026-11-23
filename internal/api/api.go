@@ -463,6 +463,10 @@ func (a *API) SetBaseContext(ctx context.Context) {
 	if a.prefetch != nil {
 		a.prefetch.Context = ctx
 	}
+	if a.meta != nil {
+		// The previous works' lookups a /meta leaves running end with the server.
+		a.meta.SetBaseContext(ctx)
+	}
 	if a.discovery != nil {
 		// Shutdown ends the directory and artwork fetches in flight, and
 		// starts none.

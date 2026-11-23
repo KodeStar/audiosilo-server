@@ -68,9 +68,17 @@ func TestCommunityChaptersFill(t *testing.T) {
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSet: map[int]string{1: "Second"}}); err != nil {
 		t.Fatal(err)
 	}
-	// A rescan writes the scan's chapters (none); the community ones and the
-	// rename come back in the same transaction.
+	// The rescan keeps the fitted rows in place, including their rename.
+	if _, err := c.db.ExecContext(ctx, `CREATE TRIGGER keep_fitted_rows BEFORE DELETE ON chapters
+		BEGIN SELECT RAISE(ABORT, 'replaced an unchanged fit'); END;
+		CREATE TRIGGER keep_fitted_titles BEFORE UPDATE ON chapters
+		BEGIN SELECT RAISE(ABORT, 'rewrote an unchanged title'); END`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := c.UpsertBook(ctx, chapterless(lib.ID, p)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.ExecContext(ctx, `DROP TRIGGER keep_fitted_rows; DROP TRIGGER keep_fitted_titles`); err != nil {
 		t.Fatal(err)
 	}
 	b = mustBook(t, c, ctx, lib.ID, p)

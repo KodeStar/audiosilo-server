@@ -339,9 +339,13 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 	// A book matched in the console holds its own position on a rail that
 	// doesn't list its work (meta.LocalBook.Matched), so which books are
 	// matched is read for those with a work and a position.
+	positions, err := a.cat.RailPositions(ctx, books)
+	if err != nil {
+		return nil, nil, err
+	}
 	var numbered []catalog.Ref
 	for i := range books {
-		if books[i].WorkID != "" && slices.ContainsFunc(books[i].AllSeries(), func(s catalog.SeriesRef) bool { return s.Position > 0 }) {
+		if books[i].WorkID != "" && len(positions[books[i].ID]) > 0 {
 			numbered = append(numbered, catalog.Ref{LibraryID: books[i].LibraryID, Path: books[i].RelPath})
 		}
 	}
@@ -363,13 +367,13 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 	}
 	cands = append(cands, cand(requested))
 	for i := range books {
-		all := books[i].AllSeries()
+		all := positions[books[i].ID]
 		if len(all) == 0 {
 			cands = append(cands, cand(&books[i]))
 		}
 		for _, s := range all {
 			c := cand(&books[i])
-			c.Series, c.SeriesIndex, c.SeriesIndexEnd = s.Name, s.Position, s.PositionEnd
+			c.SeriesKey, c.SeriesIndex, c.SeriesIndexEnd = s.Key, s.Start, s.End
 			cands = append(cands, c)
 		}
 	}
