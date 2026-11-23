@@ -3127,7 +3127,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Migration 0094 adds `books.cover_color_art`, the raw identity of the last art read,
   including a read that found no colour. `CoverColorsDue` pages the partial index
   of rows whose identity differs. At upgrade, `BackfillCoverColorArt` checks the
-  existing version tags before the first pass. Admin book rows (list and book page) also carry
+  existing version tags before the first pass. The trigger `books_legacy_cover_color`
+  counts any write of `cover_color` that leaves `cover_color_art` behind (an older
+  server after a rollback) as a reading of the art it names, and a write of `''` as
+  none, so the next start's pass neither misses nor repeats those reads; a migration
+  that rebuilds `books` must create it again. Admin book rows (list and book page) also carry
   `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule, `catalog.matchedExpr`: an
   ASIN or ISBN, or a recorded community match, `book_matches`, see Bulk matching), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection; a share created with `paths`
