@@ -53,6 +53,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   migration to arrive later. Phase F1 owns 0053 and podcast downloads own 0054; neither depends on the other.
   `Open` still starts on a database recording migrations this server doesn't ship (a newer server ran on
   it: a rollback) and warns once, naming them; a restore refuses one (`Inspect`, `ErrNewerDatabase`).
+  Some derived columns are kept by triggers so a rolled-back server's writes keep them right: a
+  migration rebuilding a table recreates its triggers (`books`: 0094, 0095; `book_matches`: 0095).
 - **Secrets** (tokens, auth codes) are stored only as SHA-256 hashes; passwords
   use argon2id (`auth/hash.go`). Never log or persist plaintext secrets; the
   first-run banner prints them once and is the only place they appear (`reset-admin` prints a
