@@ -53,11 +53,11 @@ func fetchLimitListener(t *testing.T, q *testQueue, name string, kid bool) int64
 func TestOpenRequestsPlan(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
-	for _, tc := range []struct{ kind, states, index string }{
-		{KindPodcastFetch, workingStatesSQL, "idx_bridge_jobs_fetch_requester (requested_by=?)"},
-		{KindPodcastSubscribe, OpenStatesSQL, "idx_bridge_jobs_subscribe_user (requested_by=?)"},
+	for _, tc := range []struct{ kind, count, index string }{
+		{KindPodcastFetch, openFetchesSQL, "idx_bridge_jobs_fetch_requester (requested_by=?)"},
+		{KindPodcastSubscribe, openSubscribesSQL, "idx_bridge_jobs_subscribe_user (requested_by=?)"},
 	} {
-		plan := strings.Join(storetest.QueryPlan(t, q.db, openRequestsSQL(tc.kind, tc.states), q.admin), "\n")
+		plan := strings.Join(storetest.QueryPlan(t, q.db, tc.count, q.admin), "\n")
 		if !strings.Contains(plan, tc.index) {
 			t.Errorf("%s cap did not seek %s:\n%s", tc.kind, tc.index, plan)
 		}
