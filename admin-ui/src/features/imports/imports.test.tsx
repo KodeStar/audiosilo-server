@@ -235,11 +235,12 @@ describe('import: connect, map, review, apply', () => {
   });
 
   it('words an untrusted certificate behind a typed http address as a redirect (server#396)', async () => {
+    // The server names it for an http address: abs_certificate_redirect.
     mockFetch(
       routes({
         'POST /admin/imports/abs/users': {
           status: 502,
-          body: { error: 'nope', code: 'abs_certificate' },
+          body: { error: 'nope', code: 'abs_certificate_redirect' },
         },
       }),
     );

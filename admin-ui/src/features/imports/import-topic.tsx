@@ -53,7 +53,6 @@ import {
   importEmpty,
   importIdentifiers,
   initialMap,
-  isPlainHttp,
   mappingBody,
   mappingProblem,
   matchTiers,
@@ -274,13 +273,12 @@ function ConnectForm({
       onConnected({ url: url.trim(), token: token.trim(), users: r.users });
     } catch (err) {
       const field = connectErrorField(err);
+      // An http address that redirects to an untrusted https one is the server's
+      // abs_certificate_redirect, worded by errorMessage (server#396).
       const message =
         err instanceof ApiError && err.code === 'invalid_import'
           ? t('imports.connect.tokenInvalid')
-          : err instanceof ApiError && err.code === 'abs_certificate' && isPlainHttp(url)
-            ? // The http address the hint would suggest is the one typed: it redirects (server#396).
-              t('imports.connect.certificateRedirect')
-            : errorMessage(err, t);
+          : errorMessage(err, t);
       setErrors({ [field ?? 'form']: message });
       setBusy(false);
     }

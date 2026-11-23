@@ -66,12 +66,12 @@ func TestProbeErrorRejected(t *testing.T) {
 	}
 }
 
-// The console's Health page tells a time-out from a damaged file by these words
-// at the start of the stored detail (admin-ui issues-model.ts PROBE_TIMEOUT), so
-// a rewording here must change them there too.
+// A stored read problem is told apart as a time-out by these words at the start
+// of its detail (catalog.IsProbeTimeout, the admin wire's probe_timeout), so a
+// rewording here loses the rows already stored.
 func TestProbeTimeoutWording(t *testing.T) {
 	t.Parallel()
 	if got := ErrProbeTimeout.Error(); got != "ffprobe timed out" {
-		t.Errorf("ErrProbeTimeout = %q: the console's Health page matches \"ffprobe timed out\"", got)
+		t.Errorf("ErrProbeTimeout = %q: stored rows match \"ffprobe timed out\"", got)
 	}
 }

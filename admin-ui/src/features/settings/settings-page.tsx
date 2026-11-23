@@ -651,7 +651,14 @@ function CheckUpcoming({ lastRun }: { lastRun?: string }) {
     }
   };
   return (
-    <Button variant="outline" size="sm" disabled={busy} onClick={() => void check()}>
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={busy}
+      onClick={() => void check()}
+      // "Check now" alone doesn't say what it checks: the row's description does.
+      aria-describedby="upcoming-switch-desc"
+    >
       {t('common.checkNow')}
     </Button>
   );
