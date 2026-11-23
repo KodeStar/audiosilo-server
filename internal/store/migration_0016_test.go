@@ -47,9 +47,6 @@ func TestMigration0016Backfill(t *testing.T) {
 	}
 }
 
-// OpenBefore lets external tests exercise the catalog startup work that follows a migration.
-var OpenBefore = openBefore
-
 // openBefore makes a database at dsn with every migration before `before` applied
 // (as an older server left it), for a test to fill before Open applies the rest.
 // exec runs a statement on it; call closeRaw before Open.
