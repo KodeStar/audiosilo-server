@@ -1531,9 +1531,8 @@ func TestRunnerUnchangedRunWritesNoItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range entries {
-		if e.WorkID == "e3" && e.ReleaseDate != "2026-12-24" {
-			t.Fatalf("e3's moved date wasn't written: %+v", e)
-		}
+	i := slices.IndexFunc(entries, func(e catalog.UpcomingEntry) bool { return e.WorkID == "e3" })
+	if i < 0 || entries[i].ReleaseDate != "2026-12-24" {
+		t.Fatalf("e3's moved date wasn't written: %+v", entries)
 	}
 }
