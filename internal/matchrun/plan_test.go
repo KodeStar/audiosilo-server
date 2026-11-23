@@ -865,3 +865,34 @@ func TestQueryForTagHints(t *testing.T) {
 		}
 	}
 }
+
+func TestPreviewUsesOverwritePlan(t *testing.T) {
+	for _, st := range []*catalog.MatchState{
+		state(nil, nil, true),
+		state(map[string]string{"series": "My series"}, []string{"series"}, false),
+		state(map[string]string{"series": "City Watch"}, nil, true),
+	} {
+		c := martian
+		c.Series = []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: "City Watch", Position: "1-3"}}
+		rec := &c.Recordings[0]
+		got := Preview(st, &c, rec)
+		want := Plan(ScopeOverwrite, st, Propose(&c, rec))
+		if !maps.Equal(want.Set, got.Set) || !slices.Equal(want.Revert, got.Revert) || got.Cover != want.Cover || got.Match != (want.Anchor != nil) {
+			t.Fatalf("preview = %+v, plan = %+v", got, want)
+		}
+		switch st.Fields[catalog.FieldSeries].Value {
+		case "":
+			if got.Values["series_index"] != "8" || got.AlternateSeries.Values["series_index"] != "" {
+				t.Fatalf("series-less book = %+v", got)
+			}
+		case "My series":
+			if got.Values["series_index"] != "" || got.AlternateSeries.Values["series_index"] != "8" {
+				t.Fatalf("edited main series = %+v", got)
+			}
+		case "City Watch":
+			if got.Values["series"] != "City Watch" || got.Values["series_index"] != "1-3" {
+				t.Fatalf("own main series = %+v", got)
+			}
+		}
+	}
+}

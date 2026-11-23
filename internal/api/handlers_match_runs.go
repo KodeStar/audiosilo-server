@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -222,33 +223,11 @@ func (a *API) handleMatchRunItems(w http.ResponseWriter, r *http.Request) {
 // cleared meanwhile); 409 match_run_busy while a run is working,
 // match_run_not_ready unless this one is ready.
 func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
-	if a.metadataOff(w) {
-		return
-	}
-	var req struct {
-		Scope   string  `json:"scope"`
-		Include []int64 `json:"include"`
-		Exclude []int64 `json:"exclude"`
-	}
-	if err := decodeJSON(r, &req, 1<<20); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
-		return
-	}
-	if !matchrun.ValidScope(req.Scope) {
-		writeError(w, http.StatusBadRequest, `scope must be "ids", "fill" or "overwrite"`)
-		return
-	}
-	if len(req.Include) > maxMatchPicks {
-		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many items in one apply")
-		return
-	}
-	run := a.matchRunFor(w, r)
+	run, opts := a.readApplyRequest(w, r)
 	if run == nil {
 		return
 	}
-	started, err := a.matchRuns.Apply(r.Context(), a.baseCtx, run.ID, matchrun.ApplyOptions{
-		Scope: req.Scope, Include: req.Include, Exclude: req.Exclude, UserID: userFrom(r.Context()).ID,
-	})
+	started, err := a.matchRuns.Apply(r.Context(), a.baseCtx, run.ID, opts)
 	switch {
 	case errors.Is(err, matchrun.ErrBusy):
 		writeErrorCode(w, http.StatusConflict, codeMatchRunBusy, "a match run is already working")
@@ -268,10 +247,63 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 	}
 	details := map[string]any{"run": started.ID, "books": started.ApplyTotal}
 	if matchrun.ScopesFor(started.Mode) != nil {
-		details["scope"] = req.Scope // a repick writes its ASIN whatever the scope
+		details["scope"] = opts.Scope // a repick writes its ASIN whatever the scope
 	}
 	a.audit(r, "book.match_apply", started.LibraryName, details)
 	writeJSON(w, http.StatusAccepted, started)
+}
+
+// handlePreviewMatchRun returns the run with the count for this apply request.
+func (a *API) handlePreviewMatchRun(w http.ResponseWriter, r *http.Request) {
+	run, opts := a.readApplyRequest(w, r)
+	if run == nil {
+		return
+	}
+	if run.Status != catalog.MatchReady {
+		writeErrorCode(w, http.StatusConflict, codeMatchRunNotReady, "the match run is not ready to apply")
+		return
+	}
+	count, err := a.cat.CountMatchItemsToApply(r.Context(), run.ID, opts.Scope, opts.Include, opts.Exclude)
+	if err != nil {
+		a.writeCatalogError(w, err, "count match apply failed", "could not count selected books")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		*catalog.MatchRun
+		ApplyCount int `json:"apply_count"`
+	}{run, count})
+}
+
+func (a *API) readApplyRequest(w http.ResponseWriter, r *http.Request) (*catalog.MatchRun, matchrun.ApplyOptions) {
+	if a.metadataOff(w) {
+		return nil, matchrun.ApplyOptions{}
+	}
+	var req struct {
+		Scope   string  `json:"scope"`
+		Include []int64 `json:"include"`
+		Exclude []int64 `json:"exclude"`
+	}
+	if err := decodeJSON(r, &req, 1<<20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return nil, matchrun.ApplyOptions{}
+	}
+	if !matchrun.ValidScope(req.Scope) {
+		writeError(w, http.StatusBadRequest, `scope must be "ids", "fill" or "overwrite"`)
+		return nil, matchrun.ApplyOptions{}
+	}
+	if len(req.Include) > maxMatchPicks {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many items in one apply")
+		return nil, matchrun.ApplyOptions{}
+	}
+	run := a.matchRunFor(w, r)
+	if run == nil {
+		return nil, matchrun.ApplyOptions{}
+	}
+	if scopes := matchrun.ScopesFor(run.Mode); scopes != nil && !slices.Contains(scopes, req.Scope) {
+		writeError(w, http.StatusBadRequest, "scope must be one of "+strings.Join(scopes, ", "))
+		return nil, matchrun.ApplyOptions{}
+	}
+	return run, matchrun.ApplyOptions{Scope: req.Scope, Include: req.Include, Exclude: req.Exclude, UserID: userFrom(r.Context()).ID}
 }
 
 // handleCancelMatchRun serves POST /admin/match-runs/{id}/cancel: stop the run

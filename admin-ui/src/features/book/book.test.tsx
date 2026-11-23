@@ -6,6 +6,7 @@ import type {
   AdminBookDetail,
   BookEditRequest,
   BookMatch,
+  BookMatchProposal,
   MatchCandidate,
   PairToken,
 } from '@/api/types';
@@ -820,6 +821,34 @@ describe('match with community metadata', () => {
   function matchRoutes(detail: AdminBookDetail, over: Record<string, MockRoute> = {}) {
     return routes(detail, {
       'GET /admin/libraries/1/book/match': { body: { candidates: [candidate] } },
+      'GET /admin/books/match-proposal': ({ query }) => {
+        const work = query.get('work_id')!;
+        const rec = query.get('recording_id') ?? '';
+        const set = {
+          published: '2010',
+          description: candidate.description!,
+          ...(rec ? { publisher: 'Macmillan Audio' } : {}),
+        };
+        const proposal: BookMatchProposal = {
+          work_id: work,
+          recording_id: rec,
+          cover_url: candidate.cover_url!,
+          match:
+            work !== detail.community_match?.work_id ||
+            rec !== (detail.community_match?.recording_id ?? ''),
+          cover: !detail.book.has_cover,
+          set,
+          values: {
+            ...set,
+            ...(rec ? { asin: 'B003P2WO5E', narrator: 'Michael Kramer, Kate Reading' } : {}),
+          },
+        };
+        if (work === sameWork.work_id) {
+          proposal.values = {};
+          proposal.set = {};
+        }
+        return { body: proposal };
+      },
       // The server fetches community covers; the console only ever sees data: URLs.
       'POST /admin/meta/covers': (req) => ({
         body: {
@@ -845,12 +874,13 @@ describe('match with community metadata', () => {
     await within(dialog).findByRole('radio', { name: /The Way of Kings/ });
     await user.click(within(dialog).getByRole('button', { name: 'Compare fields' }));
     const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
+    await within(compare).findByRole('table');
     return { user, compare };
   }
 
   /** Unticks every field, leaving the cover the only thing taken. */
   async function onlyCover(user: ReturnType<typeof userEvent.setup>, compare: HTMLElement) {
-    const cover = within(compare).getByRole('checkbox', { name: 'Accept Cover' });
+    const cover = await within(compare).findByRole('checkbox', { name: 'Accept Cover' });
     for (const box of within(compare).getAllByRole('checkbox')) {
       if (box !== cover && box.getAttribute('aria-checked') === 'true') await user.click(box);
     }
@@ -860,7 +890,7 @@ describe('match with community metadata', () => {
     calls.filter((c) => c.method === 'PUT' && c.path === '/admin/libraries/1/cover/community');
 
   it('preselects nothing when the work holds only a dramatization the book is not', async () => {
-    mockFetch(
+    const calls = mockFetch(
       matchRoutes(bookDetail(), {
         'GET /admin/libraries/1/book/match': {
           body: {
@@ -881,7 +911,13 @@ describe('match with community metadata', () => {
     expect(within(compare).queryByRole('checkbox', { name: 'Accept ASIN' })).toBeNull();
     // The admin may still say it is that production.
     await user.selectOptions(edition, 'r1');
-    expect(edition).toHaveValue('r1');
+    await waitFor(() =>
+      expect(
+        calls
+          .filter((c) => c.path.endsWith('/match-proposal'))
+          .map((c) => c.query.get('recording_id')),
+      ).toEqual([null, 'r1']),
+    );
     expect(within(compare).queryByText(/holds only a dramatization of this book/)).toBeNull();
   });
 
@@ -913,7 +949,9 @@ describe('match with community metadata', () => {
     const compare = await screen.findByRole('dialog', {
       name: 'Compare with community metadata',
     });
-    expect(within(compare).getByRole('checkbox', { name: 'Accept Narrator' })).not.toBeChecked();
+    expect(
+      await within(compare).findByRole('checkbox', { name: 'Accept Narrator' }),
+    ).not.toBeChecked();
     // The book has art of its own: the community's cover is offered, not ticked.
     expect(within(compare).getByRole('checkbox', { name: 'Accept Cover' })).not.toBeChecked();
     expect(within(compare).getByRole('checkbox', { name: 'Accept Published' })).toBeChecked();
@@ -943,6 +981,48 @@ describe('match with community metadata', () => {
       },
     ]);
     expect(coverPuts(calls)).toHaveLength(0);
+  });
+
+  it('uses the server plan for an edited series and switches its dependent writes when selected', async () => {
+    const detail = bookDetail();
+    detail.fields.series = { ...detail.fields.series, source: 'edited', value: 'My shelf' };
+    const proposal: BookMatchProposal = {
+      work_id: candidate.work_id,
+      recording_id: 'r1',
+      cover_url: '',
+      cover: false,
+      match: true,
+      values: { series: 'A different series', published: '2021' },
+      set: { published: '2021' },
+      revert: ['more_series'],
+      alternate_series: { values: { series_index: '7' }, set: { series_index: '7' } },
+    };
+    const calls = mockFetch(
+      matchRoutes(detail, { 'GET /admin/books/match-proposal': { body: proposal } }),
+    );
+    const { user, compare } = await openCompare();
+    expect(within(compare).queryByRole('checkbox', { name: 'Accept Series number' })).toBeNull();
+    const series = within(compare).getByRole('checkbox', { name: 'Accept Series' });
+    expect(series).not.toBeChecked();
+    await user.click(series);
+    expect(within(compare).getByText('7')).toBeInTheDocument();
+    await user.click(series);
+    expect(within(compare).queryByText('7')).toBeNull();
+    await user.click(within(compare).getByRole('button', { name: 'Accept 2 fields' }));
+    await waitFor(() =>
+      expect(patches(calls)[0]?.body).toMatchObject({
+        set: { published: '2021' },
+        revert: ['more_series'],
+      }),
+    );
+    expect(
+      Object.fromEntries(calls.find((c) => c.path.endsWith('/match-proposal'))!.query),
+    ).toEqual({
+      library_id: '1',
+      path: BOOK_PATH,
+      work_id: candidate.work_id,
+      recording_id: 'r1',
+    });
   });
 
   it('takes the community cover for a book without art', async () => {
@@ -1121,6 +1201,17 @@ describe('match with community metadata', () => {
     const calls = mockFetch(
       matchRoutes(detail, {
         'GET /admin/libraries/1/book/match': { body: { candidates: [offering] } },
+        'GET /admin/books/match-proposal': {
+          body: {
+            work_id: sameWork.work_id,
+            recording_id: 'r1',
+            match: false,
+            cover_url: candidate.cover_url,
+            cover: true,
+            values: { asin: 'B0OFFER001' },
+            set: { asin: 'B0OFFER001' },
+          },
+        },
       }),
     );
     const { user, compare } = await openCompare();
@@ -1164,6 +1255,17 @@ describe('match with community metadata', () => {
     const calls = mockFetch(
       matchRoutes(detail, {
         'GET /admin/libraries/1/book/match': { body: { candidates: [offering] } },
+        'GET /admin/books/match-proposal': {
+          body: {
+            work_id: sameWork.work_id,
+            recording_id: 'r1',
+            match: false,
+            cover_url: candidate.cover_url,
+            cover: false,
+            values: { asin },
+            set: {},
+          },
+        },
       }),
     );
     const { user, compare } = await openCompare();
@@ -1223,7 +1325,7 @@ describe('match with community metadata', () => {
     const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
     expect(within(compare).getByText('The Way of Kings, Part 1', { selector: 'b' })).toBeVisible();
     expect(within(compare).getByRole('combobox', { name: /Edition/ })).toHaveValue('r2');
-    await user.click(within(compare).getByRole('button', { name: /^Accept \d+ field/ }));
+    await user.click(await within(compare).findByRole('button', { name: /^Accept \d+ field/ }));
 
     await waitFor(() => expect(patches(calls)).toHaveLength(1));
     expect((patches(calls)[0].body as BookEditRequest).match).toEqual({
@@ -1372,7 +1474,7 @@ describe('match with community metadata', () => {
     await waitFor(() => expect(dialog.querySelector('.skel')).toBeNull());
     await user.click(within(dialog).getByRole('button', { name: 'Compare fields' }));
     const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
-    const cover = within(compare).getByRole('checkbox', { name: 'Accept Cover' });
+    const cover = await within(compare).findByRole('checkbox', { name: 'Accept Cover' });
     expect(cover).not.toBeChecked();
     // Still offered: the admin may try it.
     expect(cover).toBeEnabled();

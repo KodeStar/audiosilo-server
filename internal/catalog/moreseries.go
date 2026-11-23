@@ -45,6 +45,21 @@ func SeriesAt(name, index string) SeriesRef {
 	return SeriesRef{Name: name, Position: start, PositionEnd: end}
 }
 
+// SeriesFields splits an ordered membership list into the three override inputs.
+// A secondary membership keeps its name even when its position can't be stored.
+func SeriesFields[S any](series []S, membership func(S) (name, position string)) (main, index, others string) {
+	if len(series) == 0 {
+		return "", "", ""
+	}
+	main, index = membership(series[0])
+	more := make([]SeriesRef, 0, len(series)-1)
+	for _, s := range series[1:] {
+		name, position := membership(s)
+		more = append(more, SeriesAt(name, CleanOverride(FieldSeriesIndex, position)))
+	}
+	return main, index, EncodeMoreSeries(more)
+}
+
 // last is the last position s holds in its series: a range's end, else its
 // position. The next book in the series comes after it.
 func (s SeriesRef) last() float64 { return max(s.Position, s.PositionEnd) }

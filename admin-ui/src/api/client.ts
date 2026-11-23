@@ -58,7 +58,8 @@ import type {
   MatchRunList,
   MatchRunItemPage,
   MatchRunMode,
-  MatchScope,
+  MatchApplyRequest,
+  BookMatchProposal,
   ProgressEdit,
   ReadalongEstimate,
   ScanRun,
@@ -923,6 +924,11 @@ export const api = {
       'GET',
       `/admin/libraries/${libraryId}/book/match${bookQuery({ path, ...by })}`,
     ),
+  matchProposal: (libraryId: number, path: string, work: string, recording: string, by: MatchBy) =>
+    request<BookMatchProposal>(
+      'GET',
+      `/admin/books/match-proposal${bookQuery({ library_id: libraryId, path, work_id: work, recording_id: recording, ...by })}`,
+    ),
   /** Bulk matching: the kept runs, newest first, and the marketplace a new one prefers. */
   matchRuns: () => request<MatchRunList>('GET', '/admin/match-runs'),
   /** Starts matching every unmatched book (of one library), or a repick, in the background. */
@@ -931,11 +937,11 @@ export const api = {
   matchRun: (id: number) => request<MatchRun>('GET', `/admin/match-runs/${id}`),
   matchRunItems: (id: number, opts: { outcome?: MatchOutcome; after?: number; limit?: number }) =>
     request<MatchRunItemPage>('GET', `/admin/match-runs/${id}/items${bookQuery(opts)}`),
+  previewMatchRun: (id: number, body: MatchApplyRequest) =>
+    request<MatchRun & { apply_count: number }>('POST', `/admin/match-runs/${id}/preview`, body),
   /** Writes the confident matches (less `exclude`, plus `include`) under `scope`, in the background. */
-  applyMatchRun: (
-    id: number,
-    body: { scope: MatchScope; include?: number[]; exclude?: number[] },
-  ) => request<MatchRun>('POST', `/admin/match-runs/${id}/apply`, body),
+  applyMatchRun: (id: number, body: MatchApplyRequest) =>
+    request<MatchRun>('POST', `/admin/match-runs/${id}/apply`, body),
   cancelMatchRun: (id: number) => request<void>('POST', `/admin/match-runs/${id}/cancel`),
   /** Undoes the community matches of one library (none = every library), runs and all. */
   clearCommunityMatches: (libraryId?: number) =>

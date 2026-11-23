@@ -2526,6 +2526,28 @@ export interface ClearedMatches {
   runs: number;
 }
 
+/** The proposal's values and the overwrite planner's selected writes. */
+export interface ProposalFields {
+  values: Partial<Record<OverrideField, string>>;
+  set: Partial<Record<OverrideField, string>>;
+  revert?: OverrideField[];
+}
+
+export interface BookMatchProposal extends ProposalFields {
+  work_id: string;
+  recording_id: string;
+  cover_url: string;
+  cover: boolean;
+  match: boolean;
+  alternate_series?: ProposalFields;
+}
+
+export interface MatchApplyRequest {
+  scope: MatchScope;
+  include?: number[];
+  exclude?: number[];
+}
+
 /** catalog.MatchProposal: what the best community candidate offers a book. */
 export interface MatchProposal {
   work_id?: string;

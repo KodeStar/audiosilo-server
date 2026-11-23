@@ -225,7 +225,7 @@ export function togglePickRange(
 /**
  * Leaves an item out of the apply, as a book matched by hand from the review is
  * (the server leaves it alone anyway: this keeps the apply's count true). One
- * already applied is no pick at all (applyCount counts only pending ones).
+ * already applied is no pick at all.
  */
 export function leaveOut(picks: Picks, item: MatchRunItem): Picks {
   if (item.applied) return picks;
@@ -234,26 +234,16 @@ export function leaveOut(picks: Picks, item: MatchRunItem): Picks {
     : { ...picks, include: withoutId(picks.include, item.id) };
 }
 
-/**
- * The picks an apply sends, and how many confident items the server leaves out
- * itself. Every loaded item without a checkbox under this mode and scope (gone,
- * matched since the run) is excluded, so the apply's count doesn't promise it,
- * except a refresh's confident item with nothing to write under the scope: the
- * server leaves that one out of the apply (server#332), or skips it as
- * nothing_to_change when the run recorded a change for it (server#355), so it is
- * only counted (`leftOut`), never sent, and a huge refresh's request stays small. An admin's
- * own exclusion of one stays excluded (counted once). Derived, never stored, so
- * changing scope restores the admin's own picks.
- */
+/** Drops unavailable picks under this scope. The server filters recorded refresh
+ * no-ops, so even a large refresh sends only explicit exclusions and missing books. */
 export function picksForScope(
   picks: Picks,
   items: readonly MatchRunItem[],
   mode: MatchRunMode,
   scope: MatchScope,
-): { picks: Picks; leftOut: number } {
+): Picks {
   const exclude = new Set(picks.exclude);
   const include = new Set(picks.include);
-  let leftOut = 0;
   for (const item of items) {
     if (item.applied || isPickable(item, mode, scope)) continue;
     include.delete(item.id);
@@ -261,9 +251,8 @@ export function picksForScope(
     // Pickable but for having nothing to write: a refresh no-op.
     const noop = mode === 'refresh' && !item.gone && !item.matched_since;
     if (!noop) exclude.add(item.id);
-    else if (!exclude.has(item.id)) leftOut++;
   }
-  return { picks: { exclude, include }, leftOut };
+  return { exclude, include };
 }
 
 /** Keep this margin aligned with internal/matchrun.AutoLead (Classify). */
@@ -276,15 +265,6 @@ export function hasCloseScore(item: MatchRunItem): boolean {
     item.score - item.runner_up < AUTO_LEAD &&
     holdReasons(item).length === 0
   );
-}
-
-/**
- * How many books an apply writes to: the confident ones still pending, less the
- * excluded ones and those the server leaves out (`leftOut`: picksForScope), plus
- * put in.
- */
-export function applyCount(run: MatchRun, picks: Picks, leftOut = 0): number {
-  return Math.max(0, run.counts.pending - picks.exclude.size - leftOut) + picks.include.size;
 }
 
 /** The apply request for the picks. */

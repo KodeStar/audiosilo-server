@@ -869,38 +869,107 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	book, err := a.cat.GetBookByPath(r.Context(), lib.ID, p)
+	if cands, ok := a.adminMatchCandidates(w, r, lib.ID, p); ok {
+		writeJSON(w, http.StatusOK, map[string]any{"candidates": cands})
+	}
+}
+
+// adminMatchCandidates keeps a search hit's cover and the ASIN it matched
+// beside the work and edition. A lookup by work id alone lacks these facts.
+func (a *API) adminMatchCandidates(w http.ResponseWriter, r *http.Request, libraryID int64, p string) ([]meta.MatchCandidate, bool) {
+	book, err := a.cat.GetBookByPath(r.Context(), libraryID, p)
 	if err != nil {
-		a.writeBookError(w, err, "load book for match failed", "could not load book", "library", lib.ID, "path", p)
-		return
+		a.writeBookError(w, err, "load book for match failed", "could not load book", "library", libraryID, "path", p)
+		return nil, false
 	}
 	query := r.URL.Query()
 	// The library's language, as a match run sends it for a book saying none: one
 	// grouped read, none for a book saying its own. Unreadable, the book is matched as
 	// saying none.
-	libLanguage, err := matchrun.LibraryLanguageOf(r.Context(), a.cat, lib.ID, book)
+	libLanguage, err := matchrun.LibraryLanguageOf(r.Context(), a.cat, libraryID, book)
 	if err != nil {
-		a.log.Warn("library languages for match failed", "err", err, "library", lib.ID)
+		a.log.Warn("library languages for match failed", "err", err, "library", libraryID)
 	}
 	mq := matchrun.QueryFor(book, a.config().Metadata.PreferredRegion(), libLanguage)
 	mq.Text, mq.ASIN = strings.TrimSpace(query.Get("q")), strings.TrimSpace(query.Get("asin"))
 	mq.ISBN = strings.TrimSpace(query.Get("isbn"))
 	if utf8.RuneCountInString(mq.Text) > maxMatchQuery || len(mq.ASIN) > maxMatchID || len(mq.ISBN) > maxMatchID {
 		writeError(w, http.StatusBadRequest, "query too long")
-		return
+		return nil, false
 	}
 	cands, err := a.meta.Candidates(r.Context(), mq)
 	if err != nil {
-		a.log.Warn("match search failed", "err", err, "library", lib.ID, "path", p)
+		a.log.Warn("match search failed", "err", err, "library", libraryID, "path", p)
 		writeError(w, http.StatusBadGateway, "metadata service unavailable")
-		return
+		return nil, false
 	}
 	if mq.Text == "" && mq.ASIN == "" && mq.ISBN == "" {
-		if c := a.recordedCandidate(r.Context(), lib.ID, p, mq, cands); c != nil {
+		if c := a.recordedCandidate(r.Context(), libraryID, p, mq, cands); c != nil {
 			cands = append(cands, *c)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"candidates": cands})
+	return cands, true
+}
+
+// handleMatchProposal compares a chosen work and recording with the indexed book.
+// An omitted recording means the admin is comparing the work alone.
+func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
+	if a.metadataOff(w) {
+		return
+	}
+	q := r.URL.Query()
+	id, ok := parseOptionalID(q.Get("library_id"))
+	if !ok || id == 0 {
+		writeError(w, http.StatusBadRequest, "invalid library_id")
+		return
+	}
+	work, recording := q.Get("work_id"), q.Get("recording_id")
+	if strings.TrimSpace(work) == "" || !validWorkID(work) || !validWorkID(recording) {
+		writeError(w, http.StatusBadRequest, "invalid work or recording id")
+		return
+	}
+	_, path, _, status, msg := a.scopedPath(r, id, q.Get("path"))
+	if status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	candidates, ok := a.adminMatchCandidates(w, r, id, path)
+	if !ok {
+		return
+	}
+	i := slices.IndexFunc(candidates, func(c meta.MatchCandidate) bool { return c.WorkID == work })
+	var c *meta.MatchCandidate
+	if i >= 0 {
+		c = &candidates[i]
+	} else {
+		// A candidate found by a different search can also be named directly.
+		named, err := a.meta.Candidates(r.Context(), meta.MatchQuery{WorkID: work, Region: a.config().Metadata.PreferredRegion()})
+		if err != nil {
+			a.log.Warn("match proposal lookup failed", "work", work, "err", err)
+			writeError(w, http.StatusBadGateway, "metadata service unavailable")
+			return
+		}
+		if len(named) == 0 || named[0].WorkID != work {
+			writeError(w, http.StatusNotFound, "match candidate not found")
+			return
+		}
+		c = &named[0]
+	}
+	var rec *meta.MatchRecording
+	if recording != "" {
+		i := slices.IndexFunc(c.Recordings, func(r meta.MatchRecording) bool { return r.ID == recording })
+		if i < 0 {
+			writeError(w, http.StatusNotFound, "recording not found")
+			return
+		}
+		rec = &c.Recordings[i]
+	}
+	st, err := a.cat.BookMatchState(r.Context(), id, path)
+	if err != nil {
+		a.writeBookError(w, err, "load book for proposal failed", "could not load book", "library", id, "path", path)
+		return
+	}
+	writeJSON(w, http.StatusOK, matchrun.Preview(st, c, rec))
 }
 
 // recordedCandidate is the book's recorded community match as a match

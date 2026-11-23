@@ -89,6 +89,21 @@ function routes(over: Record<string, MockRoute> = {}) {
       body: edited({ author: 'B. Sanderson', narrator: 'Kate Reading', title: 'The Way of Kings' }),
     },
     'GET /admin/libraries/1/book/match': { body: { candidates: [candidate] } },
+    'GET /admin/books/match-proposal': {
+      body: {
+        work_id: candidate.work_id,
+        recording_id: 'r1',
+        set: {},
+        cover: false,
+        match: false,
+        cover_url: '',
+        values: {
+          title: 'The Way of Kings',
+          author: 'Brandon Sanderson',
+          narrator: 'Michael Kramer',
+        },
+      },
+    },
     'GET /admin/bridge/jobs': { body: { jobs: [] } },
     ...over,
   });

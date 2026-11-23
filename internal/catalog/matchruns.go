@@ -488,27 +488,36 @@ func (c *Catalog) ListMatchRunItems(ctx context.Context, runID int64, outcome st
 // Unchanged: a refresh item the review showed no change for, left out unread,
 // as an exclusion leaves it, whatever the book would take now: server#332).
 func (c *Catalog) MatchItemsToApply(ctx context.Context, runID int64, scope string, include, exclude []int64) ([]MatchRunItem, error) {
-	all, err := queryRows(ctx, c.db, scanMatchItem, `SELECT `+matchItemCols+` FROM match_run_items
-	     WHERE run_id = ? AND applied = '' AND outcome IN (?, ?)
-	       AND instr(',' || unchanged || ',', ',' || ? || ',') = 0 ORDER BY id`,
-		runID, OutcomeAuto, OutcomeReview, scope)
+	args, err := matchApplyArgs(runID, scope, include, exclude)
 	if err != nil {
 		return nil, err
 	}
-	set := func(ids []int64) map[int64]bool {
-		m := make(map[int64]bool, len(ids))
-		for _, id := range ids {
-			m[id] = true
-		}
-		return m
+	return queryRows(ctx, c.db, scanMatchItem, `SELECT `+matchItemCols+matchApplyFrom+` ORDER BY id`, args...)
+}
+
+// CountMatchItemsToApply counts the same selection without decoding proposals.
+func (c *Catalog) CountMatchItemsToApply(ctx context.Context, runID int64, scope string, include, exclude []int64) (int, error) {
+	args, err := matchApplyArgs(runID, scope, include, exclude)
+	if err != nil {
+		return 0, err
 	}
-	in, out := set(include), set(exclude)
-	return slices.DeleteFunc(all, func(it MatchRunItem) bool {
-		if it.Outcome == OutcomeAuto {
-			return out[it.ID]
-		}
-		return !in[it.ID]
-	}), nil
+	var count int
+	err = c.db.QueryRowContext(ctx, `SELECT count(*)`+matchApplyFrom, args...).Scan(&count)
+	return count, err
+}
+
+const matchApplyFrom = ` FROM match_run_items
+	WHERE run_id = ? AND applied = '' AND instr(',' || unchanged || ',', ',' || ? || ',') = 0
+	AND ((outcome = ? AND id NOT IN (SELECT value FROM json_each(?)))
+	  OR (outcome = ? AND id IN (SELECT value FROM json_each(?))))`
+
+func matchApplyArgs(runID int64, scope string, include, exclude []int64) ([]any, error) {
+	_, in, err := idList(include)
+	if err != nil {
+		return nil, err
+	}
+	_, out, err := idList(exclude)
+	return []any{runID, scope, OutcomeAuto, out, OutcomeReview, in}, err
 }
 
 // matchSubjectCols are the facts a match reads of a book.

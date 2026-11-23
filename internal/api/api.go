@@ -865,6 +865,7 @@ func (a *API) Handler() http.Handler {
 	// Admin catalog: the console's Library and Book screens. Metadata edits are
 	// path-keyed overrides in the database; no file on disk is ever modified.
 	mux.Handle("GET /api/v1/admin/books", a.requireAdmin(compressJSON(a.handleAdminListBooks)))
+	mux.Handle("GET /api/v1/admin/books/match-proposal", a.requireAdmin(compressJSON(a.handleMatchProposal)))
 	mux.Handle("GET /api/v1/admin/books/facets", a.requireAdmin(compressJSON(a.handleAdminBookFacets)))
 	mux.Handle("POST /api/v1/admin/books/bulk", a.requireAdmin(http.HandlerFunc(a.handleAdminBulkEdit)))
 	mux.Handle("POST /api/v1/admin/books/merge", a.requireAdmin(http.HandlerFunc(a.handleAdminMergeSpellings)))
@@ -887,6 +888,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/match-runs", a.requireAdmin(http.HandlerFunc(a.handleStartMatchRun)))
 	mux.Handle("GET /api/v1/admin/match-runs/{id}", a.requireAdmin(compressJSON(a.handleGetMatchRun)))
 	mux.Handle("GET /api/v1/admin/match-runs/{id}/items", a.requireAdmin(compressJSON(a.handleMatchRunItems)))
+	mux.Handle("POST /api/v1/admin/match-runs/{id}/preview", a.requireAdmin(http.HandlerFunc(a.handlePreviewMatchRun)))
 	mux.Handle("POST /api/v1/admin/match-runs/{id}/apply", a.requireAdmin(http.HandlerFunc(a.handleApplyMatchRun)))
 	mux.Handle("POST /api/v1/admin/match-runs/{id}/cancel", a.requireAdmin(http.HandlerFunc(a.handleCancelMatchRun)))
 	mux.Handle("DELETE /api/v1/admin/community-matches", a.requireAdmin(http.HandlerFunc(a.handleClearCommunityMatches)))

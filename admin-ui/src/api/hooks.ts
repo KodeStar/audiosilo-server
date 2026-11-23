@@ -36,6 +36,7 @@ import type {
   Import,
   FolderMode,
   MatchOutcome,
+  MatchApplyRequest,
   MatchRun,
   MatchRunList,
   MetaMirrorStatus,
@@ -1050,6 +1051,15 @@ export function useMatchRuns() {
   });
 }
 
+export function useMatchRunPreview(id: number, picks: MatchApplyRequest, enabled: boolean) {
+  return useQuery({
+    queryKey: [...keys.matchRuns, id, 'preview', picks],
+    queryFn: () => api.previewMatchRun(id, picks),
+    enabled,
+    retry: false,
+  });
+}
+
 /** One outcome's books of a match run, a page at a time (the review). */
 export function useMatchRunItems(id: number, outcome: MatchOutcome) {
   return useInfiniteQuery({
@@ -1141,6 +1151,22 @@ export function useMatchCandidates(libraryId: number, path: string, by: MatchBy,
     enabled,
     retry: false,
     staleTime: 5 * 60_000,
+  });
+}
+
+export function useMatchProposal(
+  libraryId: number,
+  path: string,
+  by: MatchBy,
+  work = '',
+  recording = '',
+) {
+  const clean = compact(by);
+  return useQuery({
+    queryKey: [...keys.match(libraryId, path, clean), 'proposal', work, recording],
+    queryFn: () => api.matchProposal(libraryId, path, work, recording, clean),
+    enabled: !!work,
+    retry: false,
   });
 }
 
