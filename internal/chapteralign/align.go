@@ -581,8 +581,9 @@ func (f *fit) place() {
 // approximate when its stretch drifts.
 func (f *fit) snap(ctx context.Context, probe Prober) error {
 	type candidate struct {
-		index int
-		drift float64
+		index   int
+		drift   float64
+		snapped bool
 	}
 	byFile := make([][]candidate, len(f.files))
 	for k, r := range f.remote {
@@ -590,16 +591,11 @@ func (f *fit) snap(ctx context.Context, probe Prober) error {
 			continue
 		}
 		_, drift := f.toLocal(r.m)
-		if drift > approxDrift {
-			f.detail.Approximate++
-		}
-		if probe != nil {
-			fi := f.fileAt(r.t)
-			byFile[fi] = append(byFile[fi], candidate{k, drift})
-		}
+		fi := f.fileAt(r.t)
+		byFile[fi] = append(byFile[fi], candidate{index: k, drift: drift})
 	}
 	for fi, candidates := range byFile {
-		if len(candidates) == 0 {
+		if probe == nil || len(candidates) == 0 {
 			continue
 		}
 		off := f.cum[fi]
@@ -616,7 +612,8 @@ func (f *fit) snap(ctx context.Context, probe Prober) error {
 		if err != nil {
 			continue
 		}
-		for i, c := range candidates {
+		for i := range candidates {
+			c := &candidates[i]
 			// Clip in playback order. The preceding boundary may itself
 			// have moved since these windows were read.
 			lo, hi := windows[i].Start, windows[i].End
@@ -628,10 +625,15 @@ func (f *fit) snap(ctx context.Context, probe Prober) error {
 			}
 			if p, ok := longest(pauses[i], lo, hi); ok {
 				f.remote[c.index].t = off + max(p.Start, p.End-leadIn)
+				c.snapped = true
 				f.detail.Snapped++
-				if c.drift > approxDrift {
-					f.detail.Approximate--
-				}
+			}
+		}
+	}
+	for _, candidates := range byFile {
+		for _, c := range candidates {
+			if !c.snapped && c.drift > approxDrift {
+				f.detail.Approximate++
 			}
 		}
 	}
