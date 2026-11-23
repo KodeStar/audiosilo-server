@@ -3,6 +3,7 @@ package catalog
 import (
 	"database/sql"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -345,9 +346,8 @@ func TestCoverColorsDue(t *testing.T) {
 	if cc, _ := coverState(t, c, lib.ID, "artless.m4b"); cc != nil {
 		t.Fatalf("artless book colour = %+v, want none", cc)
 	}
-	// Read, but not coloured: a thumbnail that does decode still records its colour.
-	if src := coverSource(t, c, lib.ID, "artless.m4b"); src.Colored || !src.ColorRead {
-		t.Fatalf("artless cover source = %+v, want read and not coloured", src)
+	if src := coverSource(t, c, lib.ID, "artless.m4b"); src.Colored {
+		t.Fatalf("artless cover source = %+v, want not coloured", src)
 	}
 
 	var got []string
@@ -371,8 +371,29 @@ func TestCoverColorsDue(t *testing.T) {
 		after = next
 	}
 	want := []string{"art.m4b", "unchecked.m4b", "custom.m4b"}
-	if !slices.Equal(got, want) || pages != 3 {
-		t.Fatalf("due = %v over %d pages, want %v over 3", got, pages, want)
+	if !slices.Equal(got, want) || pages != 2 {
+		t.Fatalf("due = %v over %d pages, want %v over 2", got, pages, want)
+	}
+
+	// Changing the cover after a read puts just that book back in the queue.
+	if err := c.SetCover(ctx, lib.ID, "colored.m4b", pngBytes, 0, SourceEdited); err != nil {
+		t.Fatal(err)
+	}
+	due, next, err := c.CoverColorsDue(ctx, 0, 4)
+	if err != nil || next != 0 || len(due) != 4 || due[3].Path != "colored.m4b" || due[3].Source != coverSource(t, c, lib.ID, "colored.m4b") {
+		t.Fatalf("changed cover: due=%+v next=%d err=%v", due, next, err)
+	}
+	// So does art replaced in place, a scan's new version of the file.
+	was := coverSource(t, c, lib.ID, "artless.m4b").Art
+	if err := c.SetArtVersions(ctx, lib.ID, map[string]ArtChange{"artless.m4b": {Was: was, Now: "s9-9"}}); err != nil {
+		t.Fatal(err)
+	}
+	if due, next, err = c.CoverColorsDue(ctx, 0, 10); err != nil || next != 0 || len(due) != 5 || due[4].Path != "artless.m4b" {
+		t.Fatalf("replaced art: due=%+v next=%d err=%v", due, next, err)
+	}
+	plan := strings.Join(queryPlan(t, c, coverColorsDueSQL, []any{0, 4}), "\n")
+	if !strings.Contains(plan, "idx_books_cover_color_due") {
+		t.Fatalf("due page does not seek in the partial index:\n%s", plan)
 	}
 }
 

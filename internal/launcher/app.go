@@ -202,6 +202,9 @@ func Run(ctx context.Context, opts Options) (err error) {
 
 	authSvc := auth.New(db, time.Now)
 	cat := catalog.New(db, time.Now)
+	if err := cat.BackfillCoverColorArt(ctx); err != nil {
+		return fmt.Errorf("backfilling cover colours: %w", err)
+	}
 	if err := cat.MapLegacyDuplicateIgnores(ctx); err != nil {
 		return fmt.Errorf("mapping duplicate ignores: %w", err)
 	}

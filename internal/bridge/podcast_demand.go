@@ -121,7 +121,7 @@ func checkFetchLimit(ctx context.Context, tx *sql.Tx, by int64) error {
 	if admin {
 		return nil
 	}
-	return checkOpenRequests(ctx, tx, KindPodcastFetch, by, workingStatesSQL, ErrFetchLimit)
+	return checkOpenRequests(ctx, tx, openFetchesSQL, by, ErrFetchLimit)
 }
 
 // FetchStatus is the public summary, deliberately excluding job internals.
