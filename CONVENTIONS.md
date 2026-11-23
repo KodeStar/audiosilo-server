@@ -4588,7 +4588,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   an accepted match (the poll's, a kept `import` match, `FoldAudibleImport`) clears them. A rejected
   title can keep a plan alongside the rejected match. The match identifies the book for Undo and for
   refusing a backup that landed there. Undo accepts that match: the plan stays stored but is not shown,
-  and the contest an older Bridge's poll left beside it goes, with a `contested` reason. A title the final call marks
+  and the contest an older Bridge's poll left beside it goes, with a `contested` reason. A poll in flight read the
+  title as rejected and reports no match for it: until the account's next complete poll, an undone title reported with
+  no match keeps the match Undo accepted (`audibleUndo`, in memory; a restart loses it and the next poll matches
+  again), so the poll neither drops it nor lets a policy back up a book already here. A title the final call marks
   `gone` loses its plan. **Planned**: each title of the PUT may carry `planned {library_id, path, file, kind, siblings, state,
   conflict, template}` (the Bridge plans the backup's place during `audible.poll`; placement rules and the disk check
   are its own, the server never previews one), checked strictly by `checkAudiblePlan`: library > 0, `path` a clean

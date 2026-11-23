@@ -215,8 +215,9 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 	err := c.db.WithUserStateTx(ctx, "PatchAudibleTitle", func(tx *sql.Tx) error {
 		var library int64
 		var template string
-		err := tx.QueryRowContext(ctx, `SELECT COALESCE(a.library_id, 0), a.template FROM audible_titles t
-			JOIN audible_accounts a ON a.account = t.account WHERE t.account = ? AND t.asin = ?`, account, asin).Scan(&library, &template)
+		var wasRejected bool
+		err := tx.QueryRowContext(ctx, `SELECT COALESCE(a.library_id, 0), a.template, t.rejected FROM audible_titles t
+			JOIN audible_accounts a ON a.account = t.account WHERE t.account = ? AND t.asin = ?`, account, asin).Scan(&library, &template, &wasRejected)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrUnknownTitle
 		}
@@ -233,6 +234,11 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 			// An older Bridge still claims a rejected title, so a poll can leave
 			// it contested beside the match it keeps.
 			if !*p.Rejected {
+				if wasRejected {
+					// Recorded inside the write, so a poll's next call sees it
+					// once it sees the Undo (the writer runs one at a time).
+					c.audibleUndo(account, asin)
+				}
 				if _, err := tx.ExecContext(ctx, `UPDATE audible_titles SET contest_library_id = NULL, contest_path = '',
 					    reason = CASE WHEN reason = ?1 THEN '' ELSE reason END
 					  WHERE account = ?2 AND asin = ?3 AND match_path IS NOT NULL`,

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -782,6 +783,8 @@ func bridgeBookPath(p string) bool {
 // not a books library is stored as none. A backup's match (how "import",
 // FoldAudibleImport) stays while its book is indexed and the poll names no
 // other: the next poll may have listed the library before the backup landed.
+// A title whose "Not this book" was undone while the poll ran keeps the match
+// Undo accepted when the poll names none (audibleUndo).
 // On the poll's final call every title of the account the poll didn't report
 // becomes gone (its plan, contest, pending request and reason dropped), and the account's last_poll_at is now, its sync's refusal
 // ended (refused_at: Audible answered the account's whole library); on its
@@ -800,7 +803,7 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 			return err
 		}
 	}
-	return c.db.WithUserStateTx(ctx, "PutAudibleTitles", func(tx *sql.Tx) error {
+	err := c.db.WithUserStateTx(ctx, "PutAudibleTitles", func(tx *sql.Tx) error {
 		// The account's library (NULL while paused) is a contest's.
 		var acctLib sql.NullInt64
 		err := tx.QueryRowContext(ctx, `SELECT library_id FROM audible_accounts WHERE account = ?`, account).Scan(&acctLib)
@@ -819,6 +822,7 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 		if err != nil {
 			return err
 		}
+		undone := c.audibleUndoneOf(account)
 		upsert, err := tx.PrepareContext(ctx,
 			`INSERT INTO audible_titles(account, asin, title, authors, series, release_date, runtime_s, state, reason,
 			     match_library_id, match_path, match_how, first_seen, updated_at, poll_id, planned,
@@ -851,6 +855,20 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 			if im, ok := imported[t.ASIN]; ok && books[im.LibraryID] &&
 				(matchPath == nil || (t.Match.LibraryID == im.LibraryID && t.Match.Path == im.Path)) {
 				matchLib, matchPath, how = im.LibraryID, im.Path, AudibleMatchImport
+			}
+			if matchPath == nil && undone[t.ASIN] {
+				// Undone while this poll ran, which read the title as
+				// rejected and matched nothing: the kept match is accepted.
+				var kept AudibleMatch
+				err := tx.QueryRowContext(ctx, `SELECT match_library_id, match_path, match_how FROM audible_titles
+					  WHERE account = ? AND asin = ? AND rejected = 0 AND match_library_id IS NOT NULL AND match_path IS NOT NULL`,
+					account, t.ASIN).Scan(&kept.LibraryID, &kept.Path, &kept.How)
+				switch {
+				case err == nil && books[kept.LibraryID]:
+					matchLib, matchPath, how = kept.LibraryID, kept.Path, kept.How
+				case err != nil && !errors.Is(err, sql.ErrNoRows):
+					return err
+				}
 			}
 			// The plan and the contest are an unmatched title's: the poll's
 			// match drops both.
@@ -898,6 +916,44 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 			    policy_since = CASE WHEN last_poll_at IS NULL THEN ?1 ELSE policy_since END WHERE account = ?2`, now, account)
 		return err
 	})
+	if err == nil && final {
+		c.audibleUndoneEnds(account)
+	}
+	return err
+}
+
+// audibleUndo records that account's title asin had its "Not this book"
+// undone. A poll in flight read it as rejected, so it reports no match for
+// it, and storing that would drop the match Undo accepted (and, under a
+// policy, back the title up as a new purchase). Until the account's next
+// complete poll, a title reported with no match keeps the match Undo
+// accepted. In memory only: a restart in that window loses it, and the next
+// poll matches the title again.
+func (c *Catalog) audibleUndo(account, asin string) {
+	c.audibleUndoneMu.Lock()
+	defer c.audibleUndoneMu.Unlock()
+	if c.audibleUndone == nil {
+		c.audibleUndone = map[string]map[string]bool{}
+	}
+	if c.audibleUndone[account] == nil {
+		c.audibleUndone[account] = map[string]bool{}
+	}
+	c.audibleUndone[account][asin] = true
+}
+
+// audibleUndoneOf is a copy of account's titles audibleUndo recorded.
+func (c *Catalog) audibleUndoneOf(account string) map[string]bool {
+	c.audibleUndoneMu.Lock()
+	defer c.audibleUndoneMu.Unlock()
+	return maps.Clone(c.audibleUndone[account])
+}
+
+// audibleUndoneEnds forgets account's undone titles once a poll completed:
+// the next one reads the decisions after them.
+func (c *Catalog) audibleUndoneEnds(account string) {
+	c.audibleUndoneMu.Lock()
+	defer c.audibleUndoneMu.Unlock()
+	delete(c.audibleUndone, account)
 }
 
 // importMatches are account's titles matched by a backup whose book is still

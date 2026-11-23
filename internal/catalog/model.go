@@ -387,6 +387,11 @@ type Catalog struct {
 	// rekeyMemos is each library's scan-end re-key memo (RekeyLibrary).
 	rekeyMemosMu sync.Mutex
 	rekeyMemos   map[int64]rekeyMemo
+	// audibleUndone is, by account, the titles whose "Not this book" was
+	// undone since the account's last complete poll (audibleUndo): a poll in
+	// flight may have read them as rejected.
+	audibleUndoneMu sync.Mutex
+	audibleUndone   map[string]map[string]bool
 	// memoRekeyFrom, tests only, is rekeyMemoFrom when not 0.
 	memoRekeyFrom int
 	// rekeyLooked, tests only, runs as rekeyOne looks at a path.
