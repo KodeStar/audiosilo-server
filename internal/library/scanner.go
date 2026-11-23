@@ -364,7 +364,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// per-file output, so bookend it with logs - otherwise a long scan looks hung.
 	s.log.Info("scan started: discovering books", "library", lib.Name, "root", lib.Root)
 	ignore := ParseIgnore(lib.IgnorePatterns)
-	books, epubs, partialDiscovery, err := discoverAuto(ctx, lib, overrides, ignore, s.log, rl, nil, s.walkWidth(), s.probeTimeout)
+	books, epubs, unanswered, partialDiscovery, err := discoverAuto(ctx, lib, overrides, ignore, s.log, rl, nil, s.walkWidth(), s.probeTimeout)
 	if err != nil {
 		return res, err
 	}
@@ -402,6 +402,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	for _, to := range moves {
 		movedTo[to] = true
 	}
+	s.noteUnanswered(ctx, lib, sigs, keep, moves, unanswered)
 
 	// Books a folder's joined book splits back into (its `book` override removed);
 	// the folder's book went, and they are no new content.
@@ -1731,7 +1732,7 @@ func partTitle(relPath string) string {
 // unreadable path. epubs are
 // the walk's .epub entries by folder (sidecarFiles.epubs), which a scan turns
 // into its books' ebook candidates (ebooksOfWalk) and a setup preview ignores.
-func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int, timeout time.Duration) (books []*catalog.Book, epubs map[string][]fs.DirEntry, hadErrors bool, err error) {
+func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int, timeout time.Duration) (books []*catalog.Book, epubs map[string][]fs.DirEntry, unanswered map[string]error, hadErrors bool, err error) {
 	walkRoot := lib.Root
 	if resolved, rerr := metadata.EvalSymlinksBounded(ctx, lib.Root, timeout); rerr == nil {
 		walkRoot = resolved
@@ -1739,17 +1740,17 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 		// A root that won't resolve in time won't list either: no walk at all,
 		// rather than one that starts at a link and finds nothing.
 		if cerr := ctx.Err(); cerr != nil {
-			return nil, nil, true, cerr
+			return nil, nil, nil, true, cerr
 		}
-		return nil, nil, true, fmt.Errorf("%w: %q: %w", ErrLibraryUnavailable, lib.Root, rerr)
+		return nil, nil, nil, true, fmt.Errorf("%w: %q: %w", ErrLibraryUnavailable, lib.Root, rerr)
 	}
 	dirs, side, hadErrors, err := audioDirs(ctx, lib, walkRoot, "", ignore, log, rl, limit, width, timeout)
 	if err != nil && !errors.Is(err, errWalkCapped) {
-		return nil, nil, hadErrors, err
+		return nil, nil, nil, hadErrors, err
 	}
 	gone, unanswered, serr := statAudio(ctx, dirs, width, timeout)
 	if serr != nil {
-		return nil, nil, hadErrors, serr
+		return nil, nil, nil, hadErrors, serr
 	}
 	if len(unanswered) > 0 {
 		// Folders with a file whose look was given up on: their books drop out
@@ -1781,7 +1782,7 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 	}
 	attachmentsOfWalk(books, side)
 	coversOfWalk(books, side.images)
-	return books, side.epubs, hadErrors, err
+	return books, side.epubs, unanswered, hadErrors, err
 }
 
 // ebooksOfWalk sets each book's ebook candidate (EbookFile: the path BookEbook's
@@ -2765,7 +2766,7 @@ func (s *Scanner) ReindexPath(ctx context.Context, lib catalog.Library, relPath 
 		// A read can time out before discovery reaches the audio. Preserve the
 		// indexed book and give Health a problem to recheck after the share returns.
 		if metadata.GaveUp(err) {
-			if saveErr := s.cat.NoteUnreadablePath(ctx, lib, relPath, gaveUpDetail(err)); saveErr != nil {
+			if saveErr := s.cat.NoteUnreadablePath(ctx, lib, relPath, unansweredDetail(err)); saveErr != nil {
 				s.log.Warn("record re-read problem failed", "library", lib.Name, "path", relPath, "err", saveErr)
 			}
 		}

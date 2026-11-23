@@ -66,7 +66,7 @@ func TestDiscoveryOfARootThatDoesNotResolveIsUnavailable(t *testing.T) {
 	lib := catalog.Library{Name: "L", Root: root}
 	release := metadata.HoldOpensForTests(root)
 	defer release()
-	books, _, _, err := discoverAuto(t.Context(), lib, nil, nil, slog.New(slog.DiscardHandler), nil, nil, 4, 200*time.Millisecond)
+	books, _, _, _, err := discoverAuto(t.Context(), lib, nil, nil, slog.New(slog.DiscardHandler), nil, nil, 4, 200*time.Millisecond)
 	if !errors.Is(err, ErrLibraryUnavailable) || len(books) != 0 {
 		t.Errorf("discovery of a held root = %d books, %v; want none, unavailable", len(books), err)
 	}
