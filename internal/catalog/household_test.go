@@ -196,6 +196,34 @@ func TestHouseListeningDiscPathNamesTheBook(t *testing.T) {
 	}
 }
 
+// A row whose path no longer names an indexed book is CoverUnavailable in a
+// book library, but not in a podcast library: an episode the Bridge pruned
+// still has its show's artwork, which the cover route serves for any path in
+// the show.
+func TestHouseListeningPodcastEpisodeKeepsItsArt(t *testing.T) {
+	t.Parallel()
+	f := newSessionFixture(t)
+	pods, err := f.c.CreateLibrary(f.ctx, Library{Name: "P", Root: "/tmp/p", Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := func(name string) int64 { return f.addUser(t, name, "2025-01-01T00:00:00Z", false) }
+	me, sam, kim := user("me"), user("sam"), user("kim")
+	f.setShare(t, true, me, sam, kim)
+	f.clock = f.clock.Add(time.Minute)
+	f.houseSession(t, sam, "Gone/Book", 30*time.Second, 100)
+	f.addSession(t, kim, kim, Ref{LibraryID: pods.ID, Path: "Show/pruned-episode.mp3"}, f.clock.Add(-40*time.Second), 0, 100, "", false)
+	rows := f.house(t, me, []Scope{{LibraryID: f.lib, AllowAll: true}, {LibraryID: pods.ID, AllowAll: true}})
+	if len(rows) != 2 {
+		t.Fatalf("house = %+v, want sam's and kim's rows", rows)
+	}
+	for _, r := range rows {
+		if want := r.LibraryID == f.lib; r.CoverUnavailable != want {
+			t.Errorf("row %s in library %d: cover_unavailable %v, want %v", r.Path, r.LibraryID, r.CoverUnavailable, want)
+		}
+	}
+}
+
 // The states follow the newest save's age: playing within 150 s (a background
 // player saves every 60 s, server#364), paused within SessionGap, else recent.
 func TestHouseState(t *testing.T) {
