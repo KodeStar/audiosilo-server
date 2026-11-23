@@ -383,6 +383,14 @@ func TestCoverColorsDue(t *testing.T) {
 	if err != nil || next != 0 || len(due) != 4 || due[3].Path != "colored.m4b" || due[3].Source != coverSource(t, c, lib.ID, "colored.m4b") {
 		t.Fatalf("changed cover: due=%+v next=%d err=%v", due, next, err)
 	}
+	// So does art replaced in place, a scan's new version of the file.
+	was := coverSource(t, c, lib.ID, "artless.m4b").Art
+	if err := c.SetArtVersions(ctx, lib.ID, map[string]ArtChange{"artless.m4b": {Was: was, Now: "s9-9"}}); err != nil {
+		t.Fatal(err)
+	}
+	if due, next, err = c.CoverColorsDue(ctx, 0, 10); err != nil || next != 0 || len(due) != 5 || due[4].Path != "artless.m4b" {
+		t.Fatalf("replaced art: due=%+v next=%d err=%v", due, next, err)
+	}
 	plan := strings.Join(queryPlan(t, c, coverColorsDueSQL, []any{0, 4}), "\n")
 	if !strings.Contains(plan, "idx_books_cover_color_due") {
 		t.Fatalf("due page does not seek in the partial index:\n%s", plan)
