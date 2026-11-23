@@ -1340,9 +1340,11 @@ func (c *Catalog) BridgeBooks(ctx context.Context, libraryID int64, after string
 // BackfillASIN attaches asin to an indexed book that has none (the Bridge's
 // unambiguous Audible match), durably (book_enrichment) and on the index row
 // at once. ErrNotFound when no book of a books library is indexed at path;
-// ErrASINSet when the book has another ASIN, or an admin's edit of its ASIN
-// (an override, a cleared one too: a backfill never goes under one). The
-// same ASIN again is a no-op. Only a write moves the content generation: the
+// ErrASINSet when the book has another ASIN, an admin's edit of its ASIN
+// (an override, a cleared one too: a backfill never goes under one), or an
+// account marked the title of that ASIN "Not this book" on it (an older
+// Bridge still enriches the match it rejected; any Bridge takes asin_set as
+// a skip). The same ASIN again is a no-op. Only a write moves the content generation: the
 // Bridge asks again for such a book after every poll.
 func (c *Catalog) BackfillASIN(ctx context.Context, libraryID int64, path, asin string) error {
 	if path != "." { // the library root's book keeps "." (bridgeBookPath)
@@ -1370,16 +1372,19 @@ func (c *Catalog) BackfillASIN(ctx context.Context, libraryID int64, path, asin 
 // backfillWanted reports whether BackfillASIN writes asin onto the book at
 // path, read through q: false for a book that has it already, ErrNotFound for
 // no book of a books library (a podcast's episode is none), ErrASINSet for a
-// book with another ASIN or an ASIN override.
+// book with another ASIN or an ASIN override, or the book a title of asin is
+// marked "Not this book" on.
 func backfillWanted(ctx context.Context, q querier, libraryID int64, path, asin string) (bool, error) {
 	var (
-		have, kind string
-		edited     bool
+		have, kind       string
+		edited, rejected bool
 	)
 	err := q.QueryRowContext(ctx, `SELECT b.asin, l.kind,
-		    EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path AND o.field = ?)
+		    EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path AND o.field = ?),
+		    EXISTS(SELECT 1 FROM audible_titles t WHERE t.asin = ? AND t.rejected = 1
+		           AND t.match_library_id = b.library_id AND t.match_path = b.rel_path)
 		  FROM books b JOIN libraries l ON l.id = b.library_id WHERE b.library_id = ? AND b.rel_path = ?`,
-		FieldASIN, libraryID, path).Scan(&have, &kind, &edited)
+		FieldASIN, asin, libraryID, path).Scan(&have, &kind, &edited, &rejected)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, ErrNotFound
@@ -1391,6 +1396,8 @@ func backfillWanted(ctx context.Context, q querier, libraryID int64, path, asin 
 		return false, nil
 	case have != "" || edited:
 		return false, ErrASINSet
+	case rejected:
+		return false, fmt.Errorf("%w: its Audible title is marked Not this book on it", ErrASINSet)
 	}
 	return true, nil
 }

@@ -364,8 +364,8 @@ func (a *API) handleBridgeBooks(w http.ResponseWriter, r *http.Request) {
 // {"asin": ".."}: the ASIN of an Audible title the Bridge matched to the book
 // without doubt, for a book with none. 204; 400 "path is too long" past
 // catalog.MaxPathBytes (pathTooLong), invalid_request with no path or ASIN; 404
-// no such book (none in a books library); 409 asin_set when it has another, or
-// an admin's ASIN edit.
+// no such book (none in a books library); 409 asin_set when it has another, an
+// admin's ASIN edit, or the ASIN's title is marked "Not this book" on it.
 func (a *API) handleBridgeEnrichment(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {

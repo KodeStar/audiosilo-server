@@ -983,6 +983,57 @@ func TestBridgeSeriesFolderCode(t *testing.T) {
 	}
 }
 
+// The book an account marked a title "Not this book" on never takes that
+// title's ASIN (an older Bridge still asks): 409 asin_set, which every Bridge
+// takes as a skip, and nothing written. Undo lets it.
+func TestBridgeEnrichmentRefusesRejectedMatch(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	ctx := context.Background()
+	setAudible(t, b.testEnv, b.adminTok, true)
+	if _, err := b.db.ExecContext(ctx, `UPDATE books SET asin='' WHERE library_id=? AND rel_path=?`, b.lib.ID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := b.putAccount(t, testAccount, b.adminID, b.lib.ID); code != http.StatusOK {
+		t.Fatalf("account: %d %s", code, out)
+	}
+	if code, out := b.putTitles(t, testAccount, "p1", true, title("B000000001", "One", "available", b.lib.ID, mistbornBook)); code != http.StatusOK {
+		t.Fatalf("titles: %d %s", code, out)
+	}
+	patch := func(rejected string) {
+		t.Helper()
+		if resp, out := b.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001", b.adminTok, `{"rejected":`+rejected+`}`); resp.StatusCode != http.StatusOK {
+			t.Fatal(out)
+		}
+	}
+	enrich := func(asin string) (int, string) {
+		resp, out := b.do(t, "PUT", fmt.Sprintf("/api/v1/bridge/libraries/%d/enrichment?path=%s", b.lib.ID, url.QueryEscape(mistbornBook)), b.bridgeTok, `{"asin":"`+asin+`"}`)
+		return resp.StatusCode, out
+	}
+	patch("true")
+	gen := b.db.ContentGeneration()
+	if code, out := enrich("B000000001"); code != http.StatusConflict || codeOf(out) != "asin_set" {
+		t.Fatalf("the rejected book: %d %s", code, out)
+	}
+	if book, err := b.cat.GetBookByPath(ctx, b.lib.ID, mistbornBook); err != nil || book.ASIN != "" || b.db.ContentGeneration() != gen {
+		t.Fatalf("after the refusal: asin %q, %v, generation %d -> %d", book.ASIN, err, gen, b.db.ContentGeneration())
+	}
+	// Another ASIN on that book is no business of the mark.
+	if code, out := enrich("B000000009"); code != http.StatusNoContent {
+		t.Fatalf("another title's ASIN: %d %s", code, out)
+	}
+	if _, err := b.db.ExecContext(ctx, `UPDATE books SET asin='' WHERE library_id=? AND rel_path=?`, b.lib.ID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.db.ExecContext(ctx, `DELETE FROM book_enrichment WHERE library_id=? AND path=?`, b.lib.ID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	patch("false")
+	if code, out := enrich("B000000001"); code != http.StatusNoContent {
+		t.Fatalf("after Undo: %d %s", code, out)
+	}
+}
+
 // PUT /bridge/libraries/{id}/enrichment backfills an ASIN on a book with none,
 // once: the same ASIN again is fine, another 409 asin_set.
 func TestBridgeEnrichment(t *testing.T) {

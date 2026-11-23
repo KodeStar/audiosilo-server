@@ -4449,7 +4449,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   matches under `match.ImportOptions`, see `pkg/match` `Options`);
   `PUT /bridge/libraries/{id}/enrichment?path=` (body `{"asin"}`: `catalog.BackfillASIN`, 204; the
   same ASIN again a no-op; 404 `book_not_found` for no book of a books library there; 409 `asin_set` for
-  another ASIN or an admin's ASIN override, a cleared one too; only a write moves the content generation,
+  another ASIN, an admin's ASIN override, a cleared one too, or a title of that ASIN marked "Not this book" on the
+  book (an older Bridge still enriches the match it rejected; every Bridge skips on `asin_set`); only a write moves the content generation,
   since the Bridge asks again for such a book after every poll).
   **Admin routes** (`moduleRoutes`, 404 `module_off` while off): `GET /admin/audible/titles` (`account`, `state`, `matched=1|0`, `q` over the title, each author
   as written (`json_each`, never the stored list's JSON) and an exact ASIN, keyset by title then account and
