@@ -26,6 +26,7 @@ func serviceRun(t *testing.T, cat *catalog.Catalog, delays ...time.Duration) (s 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	s = newTestService(cat)
+	t.Cleanup(s.Close) // the events still queued are recorded before the database closes
 	if len(delays) > 0 {
 		s.delays = delays
 	}

@@ -153,6 +153,7 @@ func newService(t *testing.T) (*Service, *catalog.Catalog, context.Context) {
 	t.Cleanup(cancel)
 	cat := catalog.New(storetest.Open(t), time.Now)
 	s := newTestService(cat)
+	t.Cleanup(s.Close) // the events still queued are recorded before the database closes
 	s.delays = []time.Duration{time.Millisecond, time.Millisecond}
 	s.Run(ctx)
 	return s, cat, ctx
