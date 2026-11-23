@@ -451,7 +451,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   first (`workSeries.of`). The dialog asks `GET /admin/books/match-proposal` for its
   chosen `work_id` and optional `recording_id` at `library_id` and `path`, with the
   search parameters that found the candidate (`matchrun.Preview`). Its proposed values,
-  default sets, reverts and cover come from the same overwrite plan as a run. Changing
+  default sets, reverts and cover come from the same overwrite plan as a run, and
+  `match_alone` says whether Accept with nothing ticked records the match by itself
+  (a new match for a book with no ASIN or ISBN of its own). Changing
   the main series checkbox uses the position and other memberships planned for that
   choice (`alternate_series`). A book left with no main series (one that declines
   the series offered, or whose series an admin cleared) doesn't get the offered one

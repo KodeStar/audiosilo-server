@@ -588,7 +588,7 @@ func TestMatchProposalAPI(t *testing.T) {
 			}
 			withRecording := strings.Contains(tc.url, "bray")
 			if p.WorkID != "the-martian" || p.Values["title"] != "The Martian" || p.Set["description"] != "Stranded." ||
-				!p.Match || (p.Set["asin"] == "B0UK000001") != withRecording || (p.RecordingID == "bray") != withRecording {
+				!p.Match || !p.MatchAlone || (p.Set["asin"] == "B0UK000001") != withRecording || (p.RecordingID == "bray") != withRecording {
 				t.Fatalf("unexpected proposal: %s", body)
 			}
 		}

@@ -79,6 +79,7 @@ it('displays the proposed values and submits selected writes, including a revert
     cover_url: '',
     cover: false,
     match: true,
+    match_alone: false,
     values: { author: 'Community author', asin: 'B0OFFER000' },
     set: { author: 'Community author', asin: 'B0OFFER000' },
     revert: ['more_series'],

@@ -316,7 +316,7 @@ function MatchCompare({
     coverChoice ?? (proposal?.cover === true && cachedCommunityCover(qc, coverUrl) !== null);
   const taking = ticks.size + Number(coverTick);
   const isRecorded = proposal?.match === false;
-  const recordsMatch = !!proposal?.match && !detail.fields.asin.value && !detail.fields.isbn.value;
+  const recordsMatch = proposal?.match_alone === true;
   const recordsOffered = isRecorded && !!(proposal?.values.asin || proposal?.values.isbn);
 
   const accept = async () => {
@@ -324,8 +324,8 @@ function MatchCompare({
     setBusy(true);
     // The work and recording go with the ticked fields (acceptRequest's match),
     // before the cover. With no field ticked the cover goes first, then the match
-    // alone when it records one (recordsMatch) or is the book's recorded match
-    // already (isRecorded: its offered ASIN and ISBN are recorded again, so one
+    // alone when the server's plan records it by itself (match_alone) or it is
+    // the book's recorded match already (isRecorded: its offered ASIN and ISBN are recorded again, so one
     // unticked is never filled back by a refresh, server#330), so a cover that
     // fails still leaves nothing changed. Another work beside the book's own
     // ASIN or ISBN leaves the recorded match as it is.

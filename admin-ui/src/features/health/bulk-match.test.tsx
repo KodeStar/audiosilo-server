@@ -924,6 +924,7 @@ describe('bulk matching', () => {
         work_id: 'the-martian',
         recording_id: '',
         match: true,
+        match_alone: true,
         cover: false,
         cover_url: '',
         values: { published: '2011' },

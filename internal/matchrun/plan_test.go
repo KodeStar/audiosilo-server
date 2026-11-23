@@ -949,3 +949,27 @@ func TestPreviewKeptSeries(t *testing.T) {
 		}
 	}
 }
+
+// TestPreviewMatchAlone: with nothing ticked, the dialog records a new match by
+// itself only for a book with no ASIN or ISBN of its own; never the match it
+// already has.
+func TestPreviewMatchAlone(t *testing.T) {
+	rec := &martian.Recordings[0]
+	for _, tc := range []struct {
+		name   string
+		st     *catalog.MatchState
+		anchor catalog.MatchAnchor
+		want   bool
+	}{
+		{name: "no identifiers", st: state(nil, nil, false), want: true},
+		{name: "own ASIN", st: state(map[string]string{"asin": "B0OTHER001"}, nil, false)},
+		{name: "own ISBN", st: state(map[string]string{"isbn": "9780000000002"}, nil, false)},
+		{name: "recorded match", st: state(nil, nil, false), anchor: catalog.MatchAnchor{WorkID: martian.WorkID, RecordingID: rec.ID}},
+		{name: "another recording", st: state(nil, nil, false), anchor: catalog.MatchAnchor{WorkID: martian.WorkID, RecordingID: "other"}, want: true},
+	} {
+		tc.st.Anchor = tc.anchor
+		if got := Preview(tc.st, &martian, rec); got.MatchAlone != tc.want || (got.MatchAlone && !got.Match) {
+			t.Errorf("%s: match_alone = %v (match %v), want %v", tc.name, got.MatchAlone, got.Match, tc.want)
+		}
+	}
+}

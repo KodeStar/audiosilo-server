@@ -96,6 +96,7 @@ function routes(over: Record<string, MockRoute> = {}) {
         set: {},
         cover: false,
         match: false,
+        match_alone: false,
         cover_url: '',
         values: {
           title: 'The Way of Kings',

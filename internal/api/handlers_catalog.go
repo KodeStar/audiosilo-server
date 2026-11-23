@@ -925,7 +925,8 @@ func (a *API) adminMatchCandidates(w http.ResponseWriter, r *http.Request, libra
 // Responses: metadata off -> 404 (code metadata_off); no library_id, or a work
 // or recording id that isn't one -> 400; no book -> 404 (code book_not_found);
 // the work or recording not found -> 404 (code not_found); upstream down -> 502;
-// otherwise 200.
+// otherwise 200, with match_alone (matchrun.BookProposal) saying whether an
+// accept with nothing ticked records the match by itself.
 func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return

@@ -25,6 +25,10 @@ type BookProposal struct {
 	CoverURL    string `json:"cover_url"`
 	Cover       bool   `json:"cover"`
 	Match       bool   `json:"match"`
+	// MatchAlone: accepting with nothing ticked records the match by itself. Only
+	// a new match for a book with no ASIN or ISBN of its own: another work beside
+	// the book's own identifier leaves its recorded match as it is.
+	MatchAlone bool `json:"match_alone"`
 	// Position and other series if the admin changes the main series checkbox.
 	AlternateSeries *ProposalFields `json:"alternate_series,omitempty"`
 }
@@ -43,6 +47,7 @@ func Preview(st *catalog.MatchState, c *meta.MatchCandidate, rec *meta.MatchReco
 	w, series := planBook(ScopeOverwrite, st, p)
 	result := BookProposal{ProposalFields: ProposalFields{Values: p.Values, Set: w.Set, Revert: w.Revert},
 		WorkID: p.WorkID, RecordingID: p.RecordingID, CoverURL: p.CoverURL, Cover: w.Cover, Match: w.Anchor != nil}
+	result.MatchAlone = result.Match && st.Fields[catalog.FieldASIN].Value == "" && st.Fields[catalog.FieldISBN].Value == ""
 	result.offer(catalog.FieldSeries, series.name)
 	result.offer(catalog.FieldSeriesIndex, series.position)
 	result.offer(catalog.FieldMoreSeries, series.more)

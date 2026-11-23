@@ -829,13 +829,16 @@ describe('match with community metadata', () => {
           description: candidate.description!,
           ...(rec ? { publisher: 'Macmillan Audio' } : {}),
         };
+        const match =
+          work !== detail.community_match?.work_id ||
+          rec !== (detail.community_match?.recording_id ?? '');
         const proposal: BookMatchProposal = {
           work_id: work,
           recording_id: rec,
           cover_url: candidate.cover_url!,
-          match:
-            work !== detail.community_match?.work_id ||
-            rec !== (detail.community_match?.recording_id ?? ''),
+          match,
+          // The server's rule (matchrun.Preview), as this fixture's book has it.
+          match_alone: match && !detail.fields.asin.value && !detail.fields.isbn.value,
           cover: !detail.book.has_cover,
           set,
           values: {
@@ -992,6 +995,7 @@ describe('match with community metadata', () => {
       cover_url: '',
       cover: false,
       match: true,
+      match_alone: false,
       values: { series: 'A different series', published: '2021' },
       set: { published: '2021' },
       revert: ['more_series'],
@@ -1037,6 +1041,7 @@ describe('match with community metadata', () => {
       cover_url: '',
       cover: false,
       match: true,
+      match_alone: false,
       values: { published: '2010' },
       set: { published: '2010' },
     };
@@ -1081,6 +1086,7 @@ describe('match with community metadata', () => {
       cover_url: '',
       cover: false,
       match: true,
+      match_alone: false,
       values: { published },
       set: { published },
     });
@@ -1290,6 +1296,7 @@ describe('match with community metadata', () => {
             work_id: sameWork.work_id,
             recording_id: 'r1',
             match: false,
+            match_alone: false,
             cover_url: candidate.cover_url,
             cover: true,
             values: { asin: 'B0OFFER001' },
@@ -1344,6 +1351,7 @@ describe('match with community metadata', () => {
             work_id: sameWork.work_id,
             recording_id: 'r1',
             match: false,
+            match_alone: false,
             cover_url: candidate.cover_url,
             cover: false,
             values: { asin },
@@ -1371,6 +1379,49 @@ describe('match with community metadata', () => {
     const { compare } = await openCompare();
     expect(fieldBox(compare)).toBeNull();
     expect(within(compare).getByRole('button', { name: 'Match to this work' })).toBeDisabled();
+  });
+
+  const matchOnly = (alone: boolean): BookMatchProposal => ({
+    work_id: sameWork.work_id,
+    recording_id: 'r1',
+    cover_url: '',
+    cover: false,
+    match: true,
+    match_alone: alone,
+    values: {},
+    set: {},
+  });
+
+  it("offers no match alone for a store listing when the server's plan doesn't record one", async () => {
+    mockFetch(
+      matchRoutes(listingBook(), {
+        ...findsSameWork,
+        'GET /admin/books/match-proposal': { body: matchOnly(false) },
+      }),
+    );
+    const { compare } = await openCompare(MATCH_HERO);
+    expect(fieldBox(compare)).toBeNull();
+    expect(within(compare).getByRole('button', { name: 'Match to this work' })).toBeDisabled();
+  });
+
+  it('records the match alone for a book with an ASIN when the server says it does', async () => {
+    const detail = bookDetail();
+    detail.book = { ...detail.book, has_cover: true };
+    const calls = mockFetch(
+      matchRoutes(detail, {
+        ...findsSameWork,
+        'GET /admin/books/match-proposal': { body: matchOnly(true) },
+      }),
+    );
+    const { user, compare } = await openCompare();
+    const accept = within(compare).getByRole('button', { name: 'Match to this work' });
+    expect(accept).toBeEnabled();
+    await user.click(accept);
+    await waitFor(() =>
+      expect(patches(calls).map((c) => c.body)).toEqual([
+        { set: {}, source: 'community', match: sameWorkMatch },
+      ]),
+    );
   });
 
   it("starts at the book's recorded work and recording, and accepting keeps them", async () => {

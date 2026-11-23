@@ -2544,6 +2544,11 @@ export interface BookMatchProposal extends SeriesPlan {
   cover_url: string;
   cover: boolean;
   match: boolean;
+  /**
+   * Accepting with nothing ticked records the match by itself: a new match for a
+   * book with no ASIN or ISBN of its own (matchrun.BookProposal.MatchAlone).
+   */
+  match_alone: boolean;
 }
 
 export interface MatchApplyRequest {
