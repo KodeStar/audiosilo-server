@@ -254,6 +254,20 @@ describe('library health', () => {
     expect(screen.queryByRole('button', { name: 'Details' })).not.toBeInTheDocument();
   });
 
+  it('reports a probe deadline after a re-read using its code', async () => {
+    const slow = {
+      ...broken,
+      scan_error: 'probe_failed',
+      scan_error_code: 'probe_timeout',
+      scan_error_detail: 'deadline',
+    } as const;
+    mockFetch(routes({ 'POST /admin/libraries/1/book/rescan': { body: rescanned(slow) } }));
+    const user = userEvent.setup();
+    renderApp('/health?issue=scan_error');
+    await user.click(await screen.findByRole('button', { name: 'Read again' }));
+    expect(await screen.findByText('Took too long to read as audio')).toBeInTheDocument();
+  });
+
   it('reads an unreadable book again and says whether that fixed it', async () => {
     const calls = mockFetch(
       routes({

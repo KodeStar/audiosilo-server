@@ -982,6 +982,73 @@ func TestRunnerKicksSettle(t *testing.T) {
 	}
 }
 
+// Repeated manual requests before the scheduler runs share a full check,
+// even if a recent success means the next scheduled check is tomorrow.
+func TestRequestedRunAfterRecentSuccess(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.clock = time.Now()
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.cat.SaveUpcomingRunState(t.Context(), catalog.UpcomingRun{
+		LastSuccessAt: stamp(f.clock.Add(-time.Minute)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.r.RequestRun()
+	f.r.RequestRun()
+	runSchedule(t, f)
+	eventually(t, "full run and new schedule", func() bool {
+		st, err := f.cat.UpcomingRunState(t.Context())
+		next, ok := parseStamp(st.NextRunAt)
+		return err == nil && ok && st.LastSuccessAt == stamp(f.clock) && next.Sub(f.clock) >= interval-jitter
+	})
+	if n := f.md.feedCount(); n != 1 {
+		t.Fatalf("feed requests = %d, want one full run", n)
+	}
+}
+
+func TestRequestedRunSwitchedOffWhileMirrorLoads(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		kick bool
+	}{{"manual only", false}, {"manual during book changes", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			f.clock = time.Now()
+			f.r.opt.Resolve = func() bool { return true }
+			f.r.opt.Ready = func() bool { f.off.Store(true); return true }
+			f.r.settle = time.Hour
+			f.loose(t, f.lib, "Book", "A1", "e1")
+			steps := stepSignal(f)
+			runSchedule(t, f)
+			<-steps
+			before, err := f.cat.UpcomingRunState(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.kick {
+				f.r.Kick()
+				eventually(t, "scheduler received book change", func() bool { return len(f.r.kick) == 0 })
+			}
+			f.r.RequestRun()
+			select {
+			case <-steps:
+			case <-time.After(testwait.Scaled(5 * time.Second)):
+				t.Fatal("manual request did not interrupt the wait")
+			}
+			after, err := f.cat.UpcomingRunState(t.Context())
+			if err != nil || after != before || f.md.feedCount() != 0 {
+				t.Fatalf("disabled manual check changed the schedule: before %+v, after %+v, err %v", before, after, err)
+			}
+			if resolved := len(f.md.lookups()) != 0; resolved != tc.kick {
+				t.Fatalf("resolved a book = %v, pending book change = %v", resolved, tc.kick)
+			}
+		})
+	}
+}
+
 // Switching the job on wakes the schedule: with no success in the last day, a
 // full run comes at once (not an hour after the start); woken again after it,
 // or while off, nothing runs.

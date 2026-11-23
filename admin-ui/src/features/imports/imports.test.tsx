@@ -216,6 +216,7 @@ describe('import: connect, map, review, apply', () => {
   it.each([
     ['invalid_url', 400, 'Audiobookshelf address', /starting with http:\/\/ or https:\/\//],
     ['abs_unreachable', 502, 'Audiobookshelf address', /couldn't reach that address/],
+    ['abs_certificate_redirect', 502, 'Audiobookshelf address', /sends the server on/],
     ['abs_certificate', 502, 'Audiobookshelf address', /plain http:\/\/ address/],
     ['not_abs', 502, 'Audiobookshelf address', /but not Audiobookshelf/],
     ['abs_unauthorized', 502, 'API token', /refused this token/],

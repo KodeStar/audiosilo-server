@@ -20,6 +20,7 @@ import {
   BRIDGE_JOB_STATES,
   backupAsin,
   hasContent,
+  isOpen,
   jobActions,
   kindName,
   listedProgress,
@@ -28,7 +29,7 @@ import {
   serverScheduled,
   stateLook,
 } from './bridge-model';
-import { isBookKind, isServerCancelReason } from './generate-model';
+import { isBookKind } from './generate-model';
 import { CancelledStatus, GenerateStatus } from './generate-status';
 import { podcastJobReason } from './podcast-reason';
 import { useBridgeJobs } from './use-bridge';
@@ -206,7 +207,7 @@ function JobRow({
               {kind}
             </b>
             <Badge variant={look.tone}>{t(look.key)}</Badge>
-            {job.priority > 0 ? (
+            {job.priority > 0 && isOpen(job.state) ? (
               <Badge variant="outline">{t('bridge.jobs.highPriority')}</Badge>
             ) : null}
           </span>
@@ -306,7 +307,7 @@ function JobRow({
         <GenerateStatus job={job} uiUrl={uiUrl} />
       ) : job.state === 'cancelled' ||
         // A working job the server asked to stop: its reason, not an error.
-        (job.cancel_requested && isServerCancelReason(job.error)) ? (
+        (job.cancel_requested && job.error_code === 'server_cancelled') ? (
         <CancelledStatus job={job} />
       ) : job.error ? (
         <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">

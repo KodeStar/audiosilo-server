@@ -152,8 +152,9 @@ type Runner struct {
 	opt  Options
 	log  *slog.Logger
 
-	kick chan struct{}
-	wake chan struct{}
+	kick   chan struct{}
+	wake   chan struct{}
+	runNow chan struct{}
 	// mu makes one run at a time (the schedule's, a kick's, a test's).
 	mu sync.Mutex
 	// settle is how long kicks must be quiet before a kick's run; offCheck
@@ -194,7 +195,8 @@ func New(cat *catalog.Catalog, md Metadata, opt Options) *Runner {
 		opt.On = func() bool { return true }
 	}
 	return &Runner{cat: cat, meta: md, opt: opt, log: opt.Log,
-		kick: make(chan struct{}, 1), wake: make(chan struct{}, 1), settle: settleKicks, offCheck: time.Second,
+		kick: make(chan struct{}, 1), wake: make(chan struct{}, 1), runNow: make(chan struct{}, 1),
+		settle: settleKicks, offCheck: time.Second,
 		readyWait: readyWait, readyPoll: readyPoll, pending: map[catalog.Ref]bool{}}
 }
 
@@ -211,6 +213,15 @@ func (r *Runner) Kick() {
 func (r *Runner) Wake() {
 	select {
 	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// RequestRun queues a full check even after a recent success. Repeated
+// requests share one pending check, run by the scheduler with its own context.
+func (r *Runner) RequestRun() {
+	select {
+	case r.runNow <- struct{}{}:
 	default:
 	}
 }
@@ -232,6 +243,7 @@ func (r *Runner) Run(ctx context.Context) {
 			wait = min(wait, offPoll)
 		}
 		t := time.NewTimer(max(wait, 0))
+		trigger := scheduledRun
 		select {
 		case <-ctx.Done():
 			t.Stop()
@@ -245,17 +257,20 @@ func (r *Runner) Run(ctx context.Context) {
 			continue
 		case <-r.kick:
 			t.Stop()
-			if !r.settled(ctx) {
+			trigger = bookChange
+			if r.waitForKicks(ctx) {
+				trigger = manualWithBookChange
+			}
+			if ctx.Err() != nil {
 				return
 			}
-			if r.active() {
-				if !r.waitReady(ctx) {
-					return
-				}
-				_ = r.RunOnce(ctx, false)
-			}
-			continue
+		case <-r.runNow:
+			t.Stop()
+			trigger = manualRun
 		case <-t.C:
+			if r.opt.Now().Before(next) {
+				continue
+			}
 		}
 		if !r.active() {
 			if !r.opt.Now().Before(next) {
@@ -263,17 +278,12 @@ func (r *Runner) Run(ctx context.Context) {
 			}
 			continue
 		}
-		if !r.opt.Now().Before(next) {
-			if !r.waitReady(ctx) {
-				return
-			}
-			whole, err := r.runOnce(ctx, true)
-			if errors.Is(err, errSwitchedOff) {
-				// Switched off before or during it: still due, run once it is
-				// back on (not a day on, which would leave its books without
-				// their works that long).
-				continue
-			}
+		if !r.waitReady(ctx) {
+			return
+		}
+		whole, err := r.runOnce(ctx, trigger)
+		// A full run interrupted by the switch going off stays due.
+		if trigger.full(whole) && !errors.Is(err, errSwitchedOff) {
 			next = r.after(ctx, whole, err)
 			r.saveNext(ctx, next)
 		}
@@ -364,8 +374,9 @@ func (r *Runner) saveNext(ctx context.Context, next time.Time) {
 	}
 }
 
-// settled waits until no Kick has come for r.settle, at most maxSettle.
-func (r *Runner) settled(ctx context.Context) bool {
+// waitForKicks waits for a quiet interval or maxSettle. A manual check takes
+// over immediately and also covers the pending book changes.
+func (r *Runner) waitForKicks(ctx context.Context) (manual bool) {
 	quiet := time.NewTimer(r.settle)
 	defer quiet.Stop()
 	limit := time.NewTimer(maxSettle)
@@ -375,8 +386,10 @@ func (r *Runner) settled(ctx context.Context) bool {
 		case <-ctx.Done():
 			return false
 		case <-quiet.C:
-			return true
+			return false
 		case <-limit.C:
+			return false
+		case <-r.runNow:
 			return true
 		case <-r.kick:
 			quiet.Reset(r.settle)
@@ -405,24 +418,45 @@ type seriesKey struct {
 // further call and ends with errSwitchedOff (a cancellation: no status). With
 // the job off but Resolve on, the run is step 1 alone (resolveOnly).
 func (r *Runner) RunOnce(ctx context.Context, full bool) error {
-	_, err := r.runOnce(ctx, full)
+	trigger := bookChange
+	if full {
+		trigger = scheduledRun
+	}
+	_, err := r.runOnce(ctx, trigger)
 	return err
+}
+
+type runTrigger int
+
+const (
+	bookChange runTrigger = iota
+	scheduledRun
+	manualRun
+	manualWithBookChange
+)
+
+// The schedule also performs full work-id resolution while Upcoming is off.
+// A manual request runs only while enabled. If it interrupted a book change,
+// that change still gets its ordinary light pass.
+func (t runTrigger) full(on bool) bool {
+	return t == scheduledRun || (on && t != bookChange)
 }
 
 // runOnce is RunOnce, also saying whether the run was of the whole job (On, read
 // once at its start) rather than step 1 alone.
-func (r *Runner) runOnce(ctx context.Context, full bool) (whole bool, err error) {
+func (r *Runner) runOnce(ctx context.Context, trigger runTrigger) (whole bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.loadPending(ctx)
 	whole = r.opt.On()
 	on, step := r.opt.On, r.run
 	if !whole {
-		if !r.resolveOn() {
+		if trigger == manualRun || !r.resolveOn() {
 			return false, errSwitchedOff
 		}
 		on, step = r.resolveOn, r.resolveOnly
 	}
+	full := trigger.full(whole)
 	now := r.opt.Now()
 	rctx, stop := pool.WhileOn(ctx, r.offCheck, on, errSwitchedOff)
 	defer stop()

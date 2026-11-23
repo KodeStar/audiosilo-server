@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/base64"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -153,6 +154,29 @@ const (
 // connect page reads it client-side and redeems via POST.
 func (a *API) inviteURL(r *http.Request, code string) string {
 	return a.baseURL(r) + "/connect#code=" + code
+}
+
+// externalHTTPS is an invite display hint. Only an HTTPS public URL or an
+// explicit protocol from a configured proxy can speak for the external TLS.
+// Forwarding headers never determine the invite URL.
+func (a *API) externalHTTPS(r *http.Request) bool {
+	cfg := a.config()
+	if cfg.PublicURL != "" {
+		u, err := url.Parse(cfg.PublicURL)
+		return err == nil && u.Scheme == "https"
+	}
+	if !isTrusted(peerIP(r.RemoteAddr), cfg.proxies) {
+		return false
+	}
+	if proto := r.Header.Values("X-Forwarded-Proto"); len(proto) > 0 {
+		return len(proto) == 1 && strings.EqualFold(strings.TrimSpace(proto[0]), "https")
+	}
+	// Accept an unambiguous RFC 7239 element, including quoted values.
+	if forwarded := r.Header.Values("Forwarded"); len(forwarded) == 1 {
+		_, params, err := mime.ParseMediaType("forwarded;" + forwarded[0])
+		return err == nil && strings.EqualFold(params["proto"], "https")
+	}
+	return false
 }
 
 // baseURL determines the externally reachable base URL: configured PublicURL

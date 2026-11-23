@@ -184,6 +184,7 @@ export function unmatchedReasonKey(reason: UnmatchedItem['reason']): string {
 const FAILURE_CODES = [
   'abs_unreachable',
   'abs_certificate',
+  'abs_certificate_redirect',
   'abs_unauthorized',
   'not_abs',
   'interrupted',
@@ -197,7 +198,8 @@ export function isPlainHttp(url: string): boolean {
 
 /**
  * The i18n key of what to do about a failed import (by its error_code). An
- * untrusted certificate behind a plain http:// address means that address
+ * older failed import recorded abs_certificate even behind an http address.
+ * An untrusted certificate behind a plain http:// address means that address
  * redirects to https, so "use the http:// address" would name the one that
  * failed (server#396).
  */

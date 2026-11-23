@@ -9,10 +9,13 @@ describe('addBookUrl', () => {
     expect(q(addBookUrl({ asin: ' b0ownasin1 ', query: 'words', title: 'T' }))).toBe('B0OWNASIN1');
   });
 
-  it('skips an ASIN the site would not read as one (an ISBN-10, a bad shape)', () => {
+  it('searches by an older Audible ASIN, including a numeric ISBN-10', () => {
+    expect(q(addBookUrl({ asin: ' b000abc123 ', title: 'Dune' }))).toBe('B000ABC123');
     expect(q(addBookUrl({ asin: '0441013597', title: 'Dune', author: 'Frank Herbert' }))).toBe(
-      'Dune Frank Herbert',
+      '0441013597',
     );
+    expect(q(addBookUrl({ asin: 'bad', isbn: 'bad', title: 'Dune' }))).toBe('Dune');
+    expect(q(addBookUrl({ asin: 'bad', isbn: '0-12345678-x', title: 'Dune' }))).toBe('012345678X');
   });
 
   it('prefills the words searched with, else the title and author', () => {

@@ -1,4 +1,4 @@
-import type { AdminLibrary, AdminModule, AdminUser, SetupEnvelope } from '@/api/types';
+import type { AdminLibrary, AdminModule, AdminUser } from '@/api/types';
 import { separatorOf } from '@/lib/paths';
 
 /**
@@ -8,15 +8,6 @@ import { separatorOf } from '@/lib/paths';
  */
 export function everyoneToGrant(users: readonly AdminUser[]): AdminUser[] {
   return users.filter((u) => u.role !== 'admin' && !u.disabled && !u.managed_by && !u.is_demo);
-}
-
-/**
- * Whether the config declares this library (config.yaml, or the app that runs
- * the server; GET /admin/setup's config_libraries): its name and folder are
- * set there.
- */
-export function configLibrary(setup: SetupEnvelope | undefined, name: string): boolean {
-  return !!setup?.config_libraries.includes(name);
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { AdminLibrary, AdminModule, AdminUser, SetupEnvelope } from '@/api/types';
-import { bookRootOverlap, configLibrary, everyoneToGrant, podcastsHintKey } from './library-access';
+import type { AdminLibrary, AdminModule, AdminUser } from '@/api/types';
+import { bookRootOverlap, everyoneToGrant, podcastsHintKey } from './library-access';
 
 const user = (u: Partial<AdminUser>): AdminUser =>
   ({ id: 1, username: 'u', role: 'user', disabled: false, ...u }) as AdminUser;
@@ -19,17 +19,6 @@ describe('everyoneToGrant', () => {
       user({ id: 5 }),
     ];
     expect(everyoneToGrant(users).map((u) => u.id)).toEqual([5]);
-  });
-});
-
-describe('configLibrary', () => {
-  const setup = { config_libraries: ['Audiobooks'] } as unknown as SetupEnvelope;
-  it('names a library config.yaml declares', () => {
-    expect(configLibrary(setup, 'Audiobooks')).toBe(true);
-  });
-  it('leaves out one the console added, and an unloaded setup', () => {
-    expect(configLibrary(setup, 'Podcasts')).toBe(false);
-    expect(configLibrary(undefined, 'Audiobooks')).toBe(false);
   });
 });
 

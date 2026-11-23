@@ -232,8 +232,10 @@ describe("an owner's page", () => {
     );
   });
 
-  it('deletes the owner with the ticked members and keeps the unticked ones', async () => {
-    const calls = mockFetch(routes({ 'DELETE /admin/users/5': { status: 204 } }));
+  it('reports everyone the server kept, including a member added while the dialog was open', async () => {
+    const calls = mockFetch(
+      routes({ 'DELETE /admin/users/5': { body: { members_deleted: 1, members_kept: 2 } } }),
+    );
     const { router } = renderApp('/people/user/5?tab=account');
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Delete account' }));
@@ -250,12 +252,13 @@ describe("an owner's page", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/people'));
     const del = calls.find((c) => c.method === 'DELETE');
     expect(del?.path).toBe('/admin/users/5');
+    expect(del?.query.get('detail')).toBe('1');
     expect(del?.query.get('keep_members')).toBe('7');
     // Only the members the dialog showed go (server#222): one added since is kept.
     expect(del?.query.get('delete_members')).toBe('6');
     expect(
       await screen.findByText(
-        '1 household member was deleted too. 1 household member is now an independent account.',
+        '1 household member was deleted too. 2 household members are now independent accounts.',
       ),
     ).toBeInTheDocument();
   });

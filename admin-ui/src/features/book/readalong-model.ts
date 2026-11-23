@@ -1,7 +1,6 @@
 import type { AdminBook, BridgeJob, ReadalongEstimate, ServerInfo } from '@/api/types';
 import { isOpen } from '@/features/bridge/bridge-model';
 import {
-  cancelledView,
   coverageDown,
   FEATURE_READALONG,
   generateResult,
@@ -148,10 +147,10 @@ export function readalongView(
  */
 export function readalongJobShown(
   map: ReadalongMapState,
-  job: Pick<BridgeJob, 'state' | 'error' | 'cancel_requested' | 'progress' | 'result'> | undefined,
+  job: Pick<BridgeJob, 'state' | 'error_code' | 'result'> | undefined,
 ): boolean {
   if (!job) return false;
-  if (job.state === 'cancelled') return cancelledView(job).reason !== undefined;
+  if (job.state === 'cancelled') return job.error_code === 'server_cancelled';
   if (job.state !== 'done') return true;
   if (map === 'stale') return false;
   return map !== 'ready' || generateResult(job.result)?.transcribed === false;

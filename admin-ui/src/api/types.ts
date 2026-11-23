@@ -1150,6 +1150,8 @@ export interface Library {
  * whether its root folder is reachable right now, and its scan progress.
  */
 export interface AdminLibrary extends Library {
+  /** The server config declares this library and fixes its name and folder. */
+  from_config: boolean;
   book_count: number;
   available: boolean;
   scan: ScanProgress;
@@ -1302,7 +1304,7 @@ export const ISSUE_KINDS = [
 ] as const;
 export type IssueKind = (typeof ISSUE_KINDS)[number];
 
-/** A read problem's code (books.scan_error, library.noteProblem). */
+/** A read problem's category (catalog.ScanProblemKind). */
 export type ScanErrorCode = 'unreadable' | 'empty_file' | 'probe_failed';
 
 /** catalog.IssueSample: a book shown on a category card. */
@@ -1537,6 +1539,8 @@ export interface Invite extends AuthCode {
 export interface InviteCreated {
   auth_code: string;
   invite_url: string;
+  /** The invite uses the HTTPS public URL or HTTPS forwarded by a trusted proxy. */
+  external_https?: boolean;
   /** 0 = unlimited. */
   max_uses: number;
   /** Absent = never expires. */
@@ -1699,6 +1703,8 @@ export interface AdminBook {
   edited_fields: OverrideField[];
   /** A read problem on its last indexing, in which file (library-relative), and the tool's message. */
   scan_error?: ScanErrorCode;
+  /** More specific reason within scan_error. */
+  scan_error_code?: 'probe_timeout';
   scan_error_file?: string;
   scan_error_detail?: string;
   /** How many books its parts look like (>= 2: the folder may hold several). */
@@ -2550,6 +2556,8 @@ export interface BookMatchProposal extends SeriesPlan {
    * book with no ASIN or ISBN of its own (matchrun.BookProposal.MatchAlone).
    */
   match_alone: boolean;
+  /** Accepting the recorded match without field edits would change its offered identifiers. */
+  records_offered?: boolean;
 }
 
 export interface MatchApplyRequest {
@@ -2560,6 +2568,8 @@ export interface MatchApplyRequest {
 
 /** catalog.MatchProposal: what the best community candidate offers a book. */
 export interface MatchProposal {
+  /** Fractional length difference allowed for an item held for its recording length. */
+  length_tolerance?: number;
   work_id?: string;
   recording_id?: string;
   title?: string;
@@ -2618,8 +2628,10 @@ export interface MatchRunItem {
    * is every reason the item was held for, a lone one too.
    */
   holds?: string[];
+  /** A refresh found this proposal by the recorded work after its identifier lookup missed. */
+  identifier_unknown?: boolean;
   /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */
-  book: { title: string; author: string; duration?: number };
+  book: { title: string; author: string; duration?: number; asin?: string; isbn?: string };
   /** Nothing is indexed at the path any more. */
   gone?: boolean;
   /**
@@ -2711,7 +2723,7 @@ export interface Import {
   applied_at: string | null;
   /** "" unless failed: a safe English sentence. */
   error: string;
-  /** "" unless failed: abs_unreachable | abs_certificate | abs_unauthorized | not_abs | interrupted | fetch_failed. */
+  /** "" unless failed: abs_unreachable | abs_certificate | abs_certificate_redirect | abs_unauthorized | not_abs | interrupted | fetch_failed. */
   error_code: string;
   /** null while fetching, or when it failed before planning. */
   summary: ImportSummary | null;
@@ -2945,6 +2957,8 @@ export interface BridgeJob {
   /** null when the stored result is not JSON (a damaged row). */
   result: Record<string, unknown> | null;
   error: string;
+  /** server_cancelled when the server stopped this job for the reason in error. */
+  error_code?: string;
   requested_by: UserRef | null;
   priority: number;
   attempts: number;

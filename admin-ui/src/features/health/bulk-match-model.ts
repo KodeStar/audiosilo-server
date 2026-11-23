@@ -92,7 +92,9 @@ export function heldLengths(
   item: Pick<MatchRunItem, 'detail' | 'holds' | 'proposal' | 'book'>,
 ): { book: number; recording: number } | undefined {
   const book = item.book.duration ?? 0;
-  if (runtimeOff(item.proposal.runtime_min, book) === undefined) return undefined;
+  const off = runtimeOff(item.proposal.runtime_min, book);
+  // Older items lack the run's tolerance. Every recording fit within 10%.
+  if (off === undefined || off <= (item.proposal.length_tolerance ?? 0.1)) return undefined;
   return holdReasons(item).includes('length_differs')
     ? { book, recording: (item.proposal.runtime_min ?? 0) * 60 }
     : undefined;

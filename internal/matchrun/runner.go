@@ -554,6 +554,7 @@ func judge(cands []meta.MatchCandidate, q meta.MatchQuery, seconds float64, regi
 	}
 	if !lengthFits(j.proposal, seconds, narrated) {
 		j.holds = append(j.holds, DetailLengthDiffers)
+		j.proposal.LengthTolerance = lengthTolerance(narrated)
 	}
 	return j
 }
@@ -657,8 +658,10 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	// book's own credit naming the recording's reader widens the guard as in a match
 	// run (readsRecording), so a book a run applied on its narrator's say-so stays
 	// up to date.
-	if !lengthFits(item.Proposal, b.Duration, readsRecording(c, item.Proposal, names.Split(b.Narrator))) {
+	narrated := readsRecording(c, item.Proposal, names.Split(b.Narrator))
+	if !lengthFits(item.Proposal, b.Duration, narrated) {
 		item.Outcome, item.Detail = catalog.OutcomeReview, DetailLengthDiffers
+		item.Proposal.LengthTolerance = lengthTolerance(narrated)
 	}
 	if byWork {
 		// Found by the recorded match, the apply's guard (stillFoundBy). A book
@@ -994,8 +997,9 @@ type ItemView struct {
 	// MatchedSince: a match or unknown_asin run's book matched since the run
 	// (matchedSince; an unknown_asin run's also once the community knows its
 	// ASIN, asinKnownSince), which an apply leaves alone; its changes are none.
-	MatchedSince bool              `json:"matched_since,omitempty"`
-	Changes      map[string]Change `json:"changes"`
+	MatchedSince      bool              `json:"matched_since,omitempty"`
+	IdentifierUnknown bool              `json:"identifier_unknown,omitempty"`
+	Changes           map[string]Change `json:"changes"`
 }
 
 // ItemBook is the book an item is for, as it is now: Duration its length in
@@ -1004,6 +1008,8 @@ type ItemBook struct {
 	Title    string  `json:"title"`
 	Author   string  `json:"author"`
 	Duration float64 `json:"duration,omitempty"`
+	ASIN     string  `json:"asin,omitempty"`
+	ISBN     string  `json:"isbn,omitempty"`
 }
 
 // itemScopes is the scopes the review shows a run in mode's changes under: its
@@ -1026,6 +1032,10 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 	scopes := itemScopes(run.Mode)
 	for i, it := range items {
 		v := ItemView{MatchRunItem: it, Changes: map[string]Change{}}
+		if run.Mode == catalog.MatchModeRefresh {
+			_, missed := splitFallback(it.Proposal.FoundBy)
+			v.IdentifierUnknown = missed != ""
+		}
 		st, err := r.cat.BookMatchState(ctx, it.LibraryID, it.Path)
 		switch {
 		case errors.Is(err, catalog.ErrNotFound):
@@ -1034,6 +1044,9 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 			return nil, 0, err
 		default:
 			v.Book = ItemBook{Title: st.Title, Author: st.Author, Duration: st.Duration}
+			if it.Outcome == catalog.OutcomeNone {
+				v.Book.ASIN, v.Book.ISBN = st.Fields[catalog.FieldASIN].Value, st.Fields[catalog.FieldISBN].Value
+			}
 			v.MatchedSince = newMatches(run.Mode) && it.Applied == "" &&
 				(matchedSince(run.Mode, st, &it) || asinKnownSince(run.Mode, st, &it))
 			for _, scope := range scopes {

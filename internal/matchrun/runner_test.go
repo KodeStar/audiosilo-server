@@ -1181,7 +1181,8 @@ func TestMatchTakesTheNarratorsLength(t *testing.T) {
 		t.Fatalf("review = %+v, want Far, Other and Cast", review)
 	}
 	for _, it := range review {
-		if (it.Path != "A/Far" && it.Path != "A/Other" && it.Path != "A/Cast") || it.Detail != DetailLengthDiffers {
+		if (it.Path != "A/Far" && it.Path != "A/Other" && it.Path != "A/Cast") || it.Detail != DetailLengthDiffers ||
+			it.Proposal.LengthTolerance != lengthTolerance(it.Path == "A/Far") {
 			t.Errorf("review %s = %+v, want held for its length", it.Path, it)
 		}
 	}

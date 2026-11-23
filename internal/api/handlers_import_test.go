@@ -656,23 +656,32 @@ func TestImportCertificate(t *testing.T) {
 	}))
 	defer selfSigned.Close()
 
-	var errBody map[string]string
-	e.call(t, "POST", "/admin/imports/abs/users", e.adminTok,
-		fmt.Sprintf(`{"url":%q,"token":"x"}`, selfSigned.URL), 502, &errBody)
-	if errBody["code"] != importer.CodeCertificate || errBody["error"] == "" {
-		t.Errorf("connect = %v", errBody)
-	}
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, selfSigned.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	for _, tc := range []struct{ url, code string }{
+		{selfSigned.URL, importer.CodeCertificate},
+		{redirect.URL, importer.CodeCertificateRedirect},
+	} {
+		var errBody map[string]string
+		e.call(t, "POST", "/admin/imports/abs/users", e.adminTok,
+			fmt.Sprintf(`{"url":%q,"token":"x"}`, tc.url), 502, &errBody)
+		if errBody["code"] != tc.code || errBody["error"] == "" {
+			t.Errorf("connect at %s = %v, want %s", tc.url, errBody, tc.code)
+		}
 
-	var started struct {
-		Imports []catalog.Import `json:"imports"`
-	}
-	e.call(t, "POST", "/admin/imports/abs", e.adminTok, fmt.Sprintf(`{"url":%q,"token":"x","users":[{"abs_user_id":%q,"user_id":%d}]}`,
-		selfSigned.URL, abstest.AlexID, e.alexID), 202, &started)
-	e.api.imports.Wait()
-	var d catalog.ImportDetail
-	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", started.Imports[0].ID), e.adminTok, "", 200, &d)
-	if d.Status != catalog.ImportFailed || d.ErrorCode != importer.CodeCertificate || d.Error == "" {
-		t.Errorf("failed import = %+v", d.Import)
+		var started struct {
+			Imports []catalog.Import `json:"imports"`
+		}
+		e.call(t, "POST", "/admin/imports/abs", e.adminTok, fmt.Sprintf(`{"url":%q,"token":"x","users":[{"abs_user_id":%q,"user_id":%d}]}`,
+			tc.url, abstest.AlexID, e.alexID), 202, &started)
+		e.api.imports.Wait()
+		var d catalog.ImportDetail
+		e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", started.Imports[0].ID), e.adminTok, "", 200, &d)
+		if d.Status != catalog.ImportFailed || d.ErrorCode != tc.code || d.Error == "" {
+			t.Errorf("import from %s = %+v, want %s", tc.url, d.Import, tc.code)
+		}
 	}
 }
 

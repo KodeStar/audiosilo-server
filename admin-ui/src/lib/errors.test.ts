@@ -48,7 +48,7 @@ describe('errorMessage', () => {
     ).toMatch(/^That isn't a place inside the library/);
     expect(
       errorMessage(new ApiError(400, 'invalid template: unknown {Foo}', 'invalid_template'), t),
-    ).toMatch(/^That template doesn't work/);
+    ).toMatch(/at most 500 bytes/);
   });
 
   it('words every household member refusal the server sends', () => {

@@ -187,7 +187,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   **preserving** its `max_uses` and renewing its expiry for the original window (never
   silently downgrading to defaults) and **revoking the invite's outstanding pairing
   tokens** (a QR already on screen dies with the old secret) and, like a mint, retiring
-  the user's other still-redeemable invites; `redeemed_at` records
+  the user's other still-redeemable invites. Mint and rotate include `external_https: true` for
+  an HTTPS public URL or HTTPS forwarded by a configured trusted proxy, so the console skips
+  the upstream certificate notice. The invite URL still uses `baseURL`. `redeemed_at` records
   acceptance (first successful exchange) but the console buckets invites by whether
   they are still redeemable, not by `redeemed_at`. **Self-
   service password**: `POST /auth/password` calls `ChangePassword` (`SetPassword` answering the count below); setting a first
@@ -747,7 +749,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.UpcomingPending`, path-keyed) so a restart keeps them (server#447). It makes no call while
   `metadataOn()` is false, and a run in flight stops within a second when switched off (`pool.WhileOn`,
   `errSwitchedOff`: a cancellation, no status recorded, no retry). In mirror mode every call goes to the
-  local copy, and the schedule's first run (kicked or timed) waits for it to load (`Options.Ready`,
+  local copy, and the schedule's first run waits for it to load (`Options.Ready`,
   `api.mirrorReady`, at most 10 min, as the chapter checks: server#454). A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
   path-keyed, no FK to `books`, cascaded with the library, written through the user-state path; no
   content cache reads them but `upcoming_owned`'s rows, `work_id` and `id_key`, the list books' `work_id`,
@@ -758,6 +760,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   work a local series lacks, its kind, title, authors and cover, `first_seen_at`, `announced_at`) and
   `upcoming_announced` (server-wide, the works `book_released` named, kept 400 days); the run's status is
   `server_state('upcoming')` (`metadata.upcoming_status` in the settings envelope, read only).
+  **Check now** in Settings > Metadata sends `POST /api/v1/admin/upcoming/check` (admin only).
+  A 202 queues a full check even after a recent success. The scheduler coalesces pending requests
+  and records the result in the usual status. The route uses the same `metadata_off` and
+  `upcoming_off` refusals as the list.
   **Silent baseline**: a released item is announced only when a community series the local series was
   classified against BEFORE lists its work; anything a series' first classification finds (a new server,
   a new library, a series newly resolved) is marked dealt with, never announced. **`upcoming_announced`**
@@ -1737,7 +1743,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   sets `Book.ReadCutShort`, and rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
   length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
   its read problem, `unreadable` ("reading it timed out", a `ProbeTimedOut` too, or for a refused read "too many earlier reads
-  from the same drive or share are stuck", with ffprobe or without; `probe_failed` for an ffprobe
+  from the same drive or share are stuck", with ffprobe or without; `probe_timeout` for an ffprobe
   time-out: `noteProblem` records one for every `readCutShort`, a folder book's first part cut short going over an
   earlier part's lasting problem, as the record is what `problemCleared` asks again), so the next scan reads it again (the stored
   mtime and size are the old ones, else `problemCleared`, which a read still cut short, its length
@@ -3225,7 +3231,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that skip every indexed book prune it rather than tripping the unavailable guard.
   `metadata.Extract` reports `OpenErr`/`ProbeErr`
   (ffprobe runs with `-v error` so its message survives, path prefix stripped); `noteProblem`
-  records the first read problem per book (`unreadable|empty_file|probe_failed`), and a scan
+  records the first read problem per book (`unreadable|empty_file|probe_failed|probe_timeout`).
+  Admin books report probe timeouts as `scan_error: "probe_failed"` with the more specific
+  `scan_error_code: "probe_timeout"`, including books indexed before the code was stored. A scan
   re-reads an otherwise unchanged book once the file its problem names opens or probes again
   (`problemCleared`: a fixed permission changes neither mtime nor size). A one-file book with a
   problem counts as unchanged while `problemCleared` finds the problem there (`soleFileProblem`;
@@ -3369,7 +3377,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `POST /admin/imports/abs {url, token, users:[{abs_user_id, abs_username?, user_id}], cutoff?}` records one import per
   mapping (`abs_username` names its source until the fetch reads ABS's own) (status `fetching`; 409 `import_running` while that user has one fetching or applying) and
   fetches in the background on `baseCtx`; then `review` (or `failed` with `error_code`
-  abs_unreachable | abs_certificate | abs_unauthorized | not_abs | fetch_failed | interrupted). `GET /admin/imports?user_id=` (each import with `cutoff_utc_offset`: the server's offset at the
+  abs_unreachable | abs_certificate | abs_certificate_redirect | abs_unauthorized | not_abs | fetch_failed | interrupted). `GET /admin/imports?user_id=` (each import with `cutoff_utc_offset`: the server's offset at the
   cutoff, so the console shows and compares it in server time),
   `GET /admin/imports/{id}` (+ `unmatched_items`, most listened first, <= 500), `PATCH` `{cutoff}` (re-plans
   from the stored payload, `import_payloads`, gzipped and versioned; deleted once applied), `POST .../apply` (one transaction: the person's previous applied ABS import is
@@ -3382,7 +3390,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   whole-request timeouts, every error a fixed sentence (never an ABS body). An https certificate the
   server doesn't trust (self-signed, another name, expired: `tls.CertificateVerificationError`, which
   wraps every x509 verification error) is `abs_certificate` (502 on connect, from `/status` too, never `not_abs`),
-  so the console points at ABS's plain http:// address; there is no switch to trust one. https to an
+  or `abs_certificate_redirect` when connecting from an http address. The console points at ABS's
+  plain HTTP address on the local network. HTTPS to an
   http-only port (`http.ErrSchemeMismatch`) stays `abs_unreachable`. It does NOT block private
   or loopback addresses (an ABS on the LAN is the normal case); acceptable because every import route
   is admin-only. Matching
@@ -3580,7 +3589,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   empty: the console always sends the members its dialog showed and left ticked) only those go and every
   other member is kept, so one added after the page opened is never deleted unseen
   (`auth.DeleteUserListed`, server#222; 400 `invalid_delete_members` for an id that isn't theirs or one
-  `keep_members` names). Joining another owner's household signs the
+  `keep_members` names). The console requests `detail=1` to receive the committed counts
+  `{members_deleted, members_kept}` (200). The default response is 204. Joining another owner's household signs the
   person out of what another owner set up for them (`auth.leaveOwners`: the sessions and API keys made
   on anyone else's devices, by `created_on_token_id`, which would otherwise carry the new owner's
   access to the old owner's phone, the calendar feed link made on one (deleted; `IssueFeedToken`
@@ -3970,8 +3980,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   lapsed lease requeued included). A job the Bridge already holds carries on, but for one of the two kinds
   that only file (`sidecars.contribute`, `meta.correct`: `Service.stopsShare`, the kind's own module), which
   write nothing: a claimed or running one is asked to stop at the Bridge's next report (`UpdateHeld` sets
-  `cancel_requested` with the server's reason `CancelModuleOff`, "its module was turned off", in the
-  console's `SERVER_CANCEL_REASONS`; server#218), a parked one when it reports working again. A
+  `cancel_requested` with the server's reason `CancelModuleOff`, "its module was turned off", and
+  the job reads `error_code: "server_cancelled"`; server#218), a parked one when it reports working again. A
   `sidecars.generate` job with `contribute: "issue"` is never asked to stop (the Bridge would drop the
   characters and recaps it is writing): while the module is off the Bridge's claim and report answers carry
   `share_off: true` (`Job.ShareOff`, `Service.flagShareOff`, computed, never stored, omitted otherwise), and
@@ -4457,8 +4467,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   display_name, admin}]}`: `catalog.BridgeUsers`, never a kid member, a demo or a disabled account, and a
   PUT naming one is 404 `unknown_user`); `PUT`/`DELETE /bridge/audible/accounts/{account}` (an upsert in one
   transaction, the library must be a books library (400 `not_books`, 404 `unknown_library`); DELETE cancels
-  the account's open poll (`bridge.CancelAudibleRemoved`; both reasons are `IsCancelReason`'s and the
-  console's `SERVER_CANCEL_REASONS`), 204 even when unknown); `PUT .../titles` (`{poll_id, final,
+  the account's open poll (`bridge.CancelAudibleRemoved`; the job carries
+  `error_code: "server_cancelled"`), 204 even when unknown); `PUT .../titles` (`{poll_id, final,
   titles:[...]}`, strict JSON, up to `MaxAudibleTitles` a call (refused at the title past it as the list is
   read), a call without its `titles` array 400, never
   "owns nothing"; free text cleaned and bounded, not refused: a title's authors and series past the first 20
@@ -4965,7 +4975,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   next `sort_order` (max + 1), so it lands last in the display order, never in its name's place
   among libraries left at 0 (ADMIN-12). `PATCH /admin/libraries/{id}` edits name/root/default_view and the scan
   settings (`scan_schedule`, `ignore_patterns`) and queues a rescan when the root or ignore rules
-  change. A library the config declares (config.yaml; upserted by name at every start) keeps its name and folder: changing
+  change. The admin listing and reorder result carry `from_config` on each library.
+  A library the config declares (config.yaml; upserted by name at every start) keeps its name and folder: changing
   either is 409 `config_library`, the same values resent (a folder respelled) write nothing, and
   another library renamed or added with a declared name at another folder is 409 `name_taken`
   (the next start would re-root it). `DELETE /admin/libraries/{id}` removes the library
@@ -5766,7 +5777,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   start, after the config's libraries are synced, `catalog.SkipSetup` finishes and dismisses a flow not
   yet finished (one transaction, the same unmarked-step fill), so a scripted install or a demo never
   opens it; a finished flow is left alone, so a card the admin reopened stays, and the first-run banner
-  names the console ("Admin console:") instead of "Finish setting up:". **Preview** `POST /admin/setup/preview` `{root, ignore_patterns?}` ->
+  names the console ("Admin console:") instead of "Finish setting up:". With the flow dismissed,
+  Overview links the admin still using the printed password to their Sign-in tab. **Preview** `POST /admin/setup/preview` `{root, ignore_patterns?}` ->
   `{root, counts: {audio_files, folder_books, file_books, capped}, same_root, samples: [{rel_path, tags,
   path, abs}], blanks: {tags, path}, suggested}`: checks the folder as the folder picker does
   (`library.CheckRoot` behind the picker's `DirLister`, so a hung mount is 404 at its time-out: 400 `path_not_absolute`, 404 `folder_unreadable`; library create checks neither;
@@ -5792,7 +5804,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   /admin/users/{id}` `{username}` (400 `username_required`, 409 `username_taken`, audited with
   `username_was`; the session stays) and changes the password with the caller's own `POST /auth/password`
   (its wrong current password is 401 `current_password_incorrect`, which the console never treats as a lost
-  session). **The sign-in hint** (`auth/firstrun.go`): the banner's `ensureAdmin` writes `server_state`
+  session). After a password change, the console records the account step as done before sending a rename.
+  **The sign-in hint** (`auth/firstrun.go`): the banner's `ensureAdmin` writes `server_state`
   `first_admin` `{user_id, signed_in, chose_password, code_id, code_created_at}` (the last two name the auth
   code printed beside the password: a rotation in the console keeps the row's id but stamps it anew, so a
   rotated code, never printed, no longer matches); while `signed_in` is false every later start prints

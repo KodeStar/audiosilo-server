@@ -2,7 +2,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { admin, idle, libraries, sam, setupEnvelope, stats } from '@/test/fixtures';
+import { admin, idle, libraries, sam, stats } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -747,7 +747,7 @@ describe('libraries, 2.4.0 fixes', () => {
   it('keeps the name and folder of a library config.yaml declares (UPG-01)', async () => {
     const calls = mockFetch(
       routes({
-        'GET /admin/setup': { body: setupEnvelope({}, { config_libraries: ['Fiction'] }) },
+        'GET /admin/libraries': { body: { libraries: libraries([{ from_config: true }]) } },
         'PATCH /admin/libraries/1': { body: { id: 1, name: 'Fiction', root: '/media/fiction' } },
       }),
     );
@@ -774,7 +774,7 @@ describe('libraries, 2.4.0 fixes', () => {
   it('keeps a library config.yaml declares from being deleted, with the reason (server#176)', async () => {
     const calls = mockFetch(
       routes({
-        'GET /admin/setup': { body: setupEnvelope({}, { config_libraries: ['Fiction'] }) },
+        'GET /admin/libraries': { body: { libraries: libraries([{ from_config: true }]) } },
         'DELETE /admin/libraries/2': { status: 204 },
       }),
     );
@@ -803,13 +803,15 @@ describe('libraries, 2.4.0 fixes', () => {
   });
 
   it("says why the server refused a config library's delete the console didn't know of, and locks it", async () => {
-    // The console read the setup before the config declared Fiction.
-    let declared: string[] = [];
+    // The console read the libraries before the config declared Fiction.
+    let declared = false;
     const calls = mockFetch(
       routes({
-        'GET /admin/setup': () => ({ body: setupEnvelope({}, { config_libraries: declared }) }),
+        'GET /admin/libraries': () => ({
+          body: { libraries: libraries([{ from_config: declared }]) },
+        }),
         'DELETE /admin/libraries/1': () => {
-          declared = ['Fiction'];
+          declared = true;
           return {
             status: 409,
             body: {
@@ -837,9 +839,9 @@ describe('libraries, 2.4.0 fixes', () => {
       await screen.findByText(/^Declared in config\.yaml .*remove it there and restart/),
     ).toBeInTheDocument();
     expect(screen.queryByText('Deleted Fiction')).toBeNull();
-    // The setup is read again: the card now says where the library comes from.
+    // The library list is read again: the card now says where the library comes from.
     expect(await within(fiction).findByText('From your config')).toBeInTheDocument();
-    expect(calls.filter((c) => c.path === '/admin/setup').length).toBeGreaterThan(1);
+    expect(calls.filter((c) => c.path === '/admin/libraries').length).toBeGreaterThan(1);
     await user.click(within(fiction).getByRole('button', { name: 'Actions for Fiction' }));
     expect(await screen.findByRole('menuitem', { name: /Delete library\.\.\./ })).toHaveAttribute(
       'aria-disabled',
@@ -872,13 +874,15 @@ describe('libraries, 2.4.0 fixes', () => {
   });
 
   it("lets a library the console added be renamed, and puts the server's config refusal on the name", async () => {
-    // The console read the setup before a restart made the config declare Fiction.
-    let declared: string[] = [];
+    // The console read the libraries before a restart made the config declare Fiction.
+    let declared = false;
     const calls = mockFetch(
       routes({
-        'GET /admin/setup': () => ({ body: setupEnvelope({}, { config_libraries: declared }) }),
+        'GET /admin/libraries': () => ({
+          body: { libraries: libraries([{ from_config: declared }]) },
+        }),
         'PATCH /admin/libraries/1': () => {
-          declared = ['Fiction'];
+          declared = true;
           return { status: 409, body: { error: 'declared in config', code: 'config_library' } };
         },
       }),
@@ -897,30 +901,32 @@ describe('libraries, 2.4.0 fixes', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(name).toHaveAttribute('aria-invalid', 'true'));
     expect(within(dialog).getAllByText(/set in config.yaml/)[0]).toBeInTheDocument();
-    // The setup is read again (server#197): the name locks, and so does the card.
+    // The library list is read again (server#197): the name locks, and so does the card.
     await waitFor(() => expect(name).toHaveAttribute('readonly'));
     // The refused name doesn't stay in a field that can no longer be edited.
     await waitFor(() => expect(name).toHaveValue('Fiction'));
-    expect(calls.filter((c) => c.path === '/admin/setup').length).toBeGreaterThan(1);
+    expect(calls.filter((c) => c.path === '/admin/libraries').length).toBeGreaterThan(1);
     await user.keyboard('{Escape}');
     expect(await within(fiction).findByText('From your config')).toBeInTheDocument();
   });
 
   it('reads the config-declared libraries again after a minute, on a new visit (server#197)', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    let declared: string[] = [];
+    let declared = false;
     const calls = mockFetch(
       routes({
-        'GET /admin/setup': () => ({ body: setupEnvelope({}, { config_libraries: declared }) }),
+        'GET /admin/libraries': () => ({
+          body: { libraries: libraries([{ from_config: declared }]) },
+        }),
       }),
     );
     const { router } = renderApp('/library/libraries');
     const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
     expect(within(fiction).queryByText('From your config')).toBeNull();
-    const reads = () => calls.filter((c) => c.path === '/admin/setup').length;
+    const reads = () => calls.filter((c) => c.path === '/admin/libraries').length;
     const first = reads();
     // A restart with Fiction in config.yaml; the admin comes back to the page later.
-    declared = ['Fiction'];
+    declared = true;
     act(() => router.history.push('/'));
     await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Fiction' })).toBeNull());
     vi.setSystemTime(Date.now() + 61_000);

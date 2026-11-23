@@ -54,7 +54,7 @@ export function NamingStep({ env, libraries, draft, setDraft, leave, back, last 
   const targets: Target[] = [
     ...(draft ? [{ key: 'draft', root: draft.root, name: draft.name }] : []),
     ...libraries
-      .filter((l) => l.kind === 'books' && (!draft || env.config_libraries.includes(l.name)))
+      .filter((l) => l.kind === 'books' && (!draft || l.from_config))
       .map((l) => ({ key: `library-${l.id}`, root: l.root, name: l.name, library: l })),
   ];
   const [targetKey, setTargetKey] = useState(targets[0]?.key);

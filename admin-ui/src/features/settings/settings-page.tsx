@@ -1,4 +1,5 @@
 import { Link, useLocation, useNavigate, useSearch } from '@tanstack/react-router';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -22,7 +23,8 @@ import {
   Waypoints,
   type LucideIcon,
 } from 'lucide-react';
-import { useLibraries, useMirrorPoll, useSettings, useSystem } from '@/api/hooks';
+import { api } from '@/api/client';
+import { keys, useLibraries, useMirrorPoll, useSettings, useSystem } from '@/api/hooks';
 import type { AdminSettings, ReportStatus, UpcomingStatus } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
@@ -31,9 +33,10 @@ import { QueryError } from '@/components/query-error';
 import { SettingRow } from '@/components/setting-row';
 import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
-import { buttonVariants } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { counted, formatDate, formatNumber, formatRecent } from '@/lib/format';
+import { toastError } from '@/lib/errors';
 import { regionOptions } from '@/lib/regions';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
@@ -56,6 +59,7 @@ import {
   lockOf,
   METADATA_MODES,
   pollsReport,
+  REPORT_WATCH_MS,
   SESSION_DAYS_RANGE,
   SETTINGS_PAGES,
   visiblePages,
@@ -597,6 +601,9 @@ function JobRow({
       }
       descriptionId={`${name}-switch-desc`}
     >
+      {field === 'upcoming' && on ? (
+        <CheckUpcoming lastRun={m.upcoming_status?.last_run_at} />
+      ) : null}
       <InstantSwitch
         id={`${name}-switch`}
         checked={on}
@@ -613,6 +620,39 @@ function JobRow({
         }}
       />
     </SettingRow>
+  );
+}
+
+/** Watch the last-check line until the server records the requested run. */
+function CheckUpcoming({ lastRun }: { lastRun?: string }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const check = useMutation({
+    mutationFn: async () => {
+      await api.checkUpcoming();
+      return lastRun;
+    },
+    onSuccess: () => {
+      toast.add({ title: t('settings.metadata.upcomingQueued'), type: 'success' });
+    },
+    onError: (err) =>
+      toastError(t('health.toast.checkFailed'), err, {
+        upcoming_off: 'settings.metadata.upcomingOff',
+      }),
+    onSettled: () => void qc.invalidateQueries({ queryKey: keys.settings }),
+  });
+  useSettings(
+    (s) =>
+      check.isSuccess &&
+      s.metadata.enabled &&
+      !!s.metadata.upcoming &&
+      s.metadata.upcoming_status?.last_run_at === check.data &&
+      Date.now() - check.submittedAt < REPORT_WATCH_MS,
+  );
+  return (
+    <Button variant="outline" size="sm" disabled={check.isPending} onClick={() => check.mutate()}>
+      {t('common.checkNow')}
+    </Button>
   );
 }
 

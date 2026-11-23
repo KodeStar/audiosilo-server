@@ -28,11 +28,22 @@ const loaders = import.meta.glob<Record<string, string>>(
   { import: 'default' },
 );
 
+// An abbreviation may supply the full stop ending its sentence. Mark just the
+// interpolation before that literal stop, leaving other values and ellipses as written.
+function withSentenceStops(dict: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(dict).map(([key, text]) => [
+      key,
+      text.replace(/\{\{(\w+)\}\}\.(?!\.)/g, '{{$1, beforeStop}}.'),
+    ]),
+  );
+}
+
 /** Loads a language's strings into i18next (English is always there). */
 async function loadLanguage(lang: Language): Promise<void> {
   if (i18n.hasResourceBundle(lang, 'translation')) return;
   const load = loaders[`./locales/${lang}.json`];
-  if (load) i18n.addResourceBundle(lang, 'translation', await load());
+  if (load) i18n.addResourceBundle(lang, 'translation', withSentenceStops(await load()));
 }
 
 const LANG_KEY = 'audiosilo.lang';
@@ -59,7 +70,7 @@ export function setLanguage(lang: Language) {
 const initial = detectLanguage();
 
 void i18n.use(initReactI18next).init({
-  resources: { en: { translation: en } },
+  resources: { en: { translation: withSentenceStops(en) } },
   // English until the detected language has loaded (i18nReady), so the first
   // render never shows keys.
   lng: 'en',
@@ -69,6 +80,9 @@ void i18n.use(initReactI18next).init({
   interpolation: { escapeValue: false }, // React escapes
   returnNull: false,
 });
+i18n.services.formatter?.add('beforeStop', (value: unknown) =>
+  String(value ?? '').replace(/\.$/, ''),
+);
 
 /**
  * Settles once the detected language's strings are loaded and active (at once

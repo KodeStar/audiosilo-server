@@ -16,6 +16,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 	"github.com/kodestar/audiosilo-server/internal/upcoming"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -25,6 +26,49 @@ import (
 // transport and the access rules.
 
 const upcomingPath = "/api/v1/me/upcoming"
+
+func TestAdminCheckUpcoming(t *testing.T) {
+	t.Parallel()
+	const path = "/api/v1/admin/upcoming/check"
+	e := newTestEnvWith(t, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		e.api.upcoming.Run(ctx)
+		close(done)
+	}()
+	defer func() { cancel(); <-done }()
+	admin, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "console", 0)
+	member, err := e.auth.CreateUser(ctx, "listener", "listener-password", auth.RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "listener", 0)
+	for _, tc := range []struct {
+		token string
+		want  int
+	}{{"", http.StatusUnauthorized}, {listener, http.StatusForbidden}, {admin, http.StatusAccepted}} {
+		if resp, body := e.do(t, "POST", path, tc.token, ""); resp.StatusCode != tc.want {
+			t.Fatalf("POST check = %d %s, want %d", resp.StatusCode, body, tc.want)
+		}
+	}
+	testwait.Eventually(t, "requested upcoming check", 5*time.Second, func() bool {
+		st, err := e.cat.UpcomingRunState(ctx)
+		return err == nil && st.LastSuccessAt != ""
+	})
+	for _, tc := range []struct{ patch, code string }{
+		{`{"metadata":{"upcoming":false}}`, "upcoming_off"},
+		{`{"metadata":{"enabled":false}}`, "metadata_off"},
+	} {
+		if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", admin, tc.patch); resp.StatusCode != http.StatusOK {
+			t.Fatalf("save settings = %d %s", resp.StatusCode, body)
+		}
+		if resp, body := e.do(t, "POST", path, admin, ""); resp.StatusCode != http.StatusNotFound ||
+			!strings.Contains(body, `"code":"`+tc.code+`"`) {
+			t.Fatalf("disabled check = %d %s, want 404 %s", resp.StatusCode, body, tc.code)
+		}
+	}
+}
 
 // upcomingEnv is a test env with a books library holding two series in two
 // folders ("Expanse/" and "Other/"), each with the job's results stored.

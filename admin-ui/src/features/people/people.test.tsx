@@ -221,36 +221,56 @@ describe('people', () => {
       'selfsigned',
       'https://nas.local:8443/connect#code=X',
       SELF_SIGNED,
+      false,
     ],
     [
       'an autocert server, at its name',
       'autocert',
       'https://books.example.com/connect#code=X',
       false,
+      false,
     ],
-    ['a server behind a proxy, at an IP', 'off', 'https://192.168.1.20/connect#code=X', AT_ADDRESS],
+    [
+      'a self-signed upstream behind an HTTPS proxy',
+      'selfsigned',
+      'https://books.example.com/connect#code=X',
+      false,
+      true,
+    ],
+    [
+      'a server behind a proxy, at an IP',
+      'off',
+      'https://192.168.1.20/connect#code=X',
+      AT_ADDRESS,
+      false,
+    ],
     [
       'a self-signed server, at an IP',
       'selfsigned',
       'https://192.168.1.20:8443/connect#code=X',
       SELF_SIGNED,
+      false,
     ],
     [
       'a server behind a proxy, at a name',
       'off',
       'https://books.example.com/connect#code=X',
       false,
+      false,
     ],
   ] as const)(
     'warns about the certificate of a self-signed server or an IP address, saying why (%s, server#386)',
-    async (_, mode, link, says) => {
+    async (_, mode, link, says, externalHTTPS) => {
       mockFetch(
         routes({
           'GET /admin/settings': {
             body: settingsWith({ network: { ...settings.network, tls_mode: mode } }),
           },
           'POST /admin/users': { status: 201, body: uncleRay },
-          'POST /admin/users/9/authcode': { status: 201, body: { ...created, invite_url: link } },
+          'POST /admin/users/9/authcode': {
+            status: 201,
+            body: { ...created, invite_url: link, external_https: externalHTTPS },
+          },
         }),
       );
       const { user, dialog } = await inviteUncleRay();

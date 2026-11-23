@@ -62,6 +62,52 @@ func TestHealthEndpointsRequireAdmin(t *testing.T) {
 	}
 }
 
+// The original probe_failed category remains usable by older consoles. A
+// specific code on both new and legacy timeout rows supplies the translated reason.
+func TestAdminScanErrorCode(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	admin, member, _ := adminAndMember(t, e)
+	lib, err := e.cat.CreateLibrary(t.Context(), catalog.Library{Name: "Books", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range []catalog.Book{
+		{RelPath: "new", ScanError: "probe_timeout", ScanErrorDetail: "deadline"},
+		{RelPath: "old", ScanError: "probe_failed", ScanErrorDetail: "ffprobe timed out after 30s"},
+		{RelPath: "bad", ScanError: "probe_failed", ScanErrorDetail: "invalid data"},
+	} {
+		b.LibraryID = lib.ID
+		if _, err := e.cat.UpsertBook(t.Context(), &b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const list = "/api/v1/admin/books?issue=scan_error"
+	if resp, _ := e.do(t, "GET", list, member, ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member status = %d", resp.StatusCode)
+	}
+	resp, body := e.do(t, "GET", list, admin, "")
+	var out struct {
+		Books []struct {
+			Path          string `json:"path"`
+			ScanError     string `json:"scan_error"`
+			ScanErrorCode string `json:"scan_error_code"`
+		} `json:"books"`
+	}
+	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &out) != nil || len(out.Books) != 3 {
+		t.Fatalf("admin status %d, books %s", resp.StatusCode, body)
+	}
+	for _, b := range out.Books {
+		code := "probe_timeout"
+		if b.Path == "bad" {
+			code = ""
+		}
+		if b.ScanError != "probe_failed" || b.ScanErrorCode != code {
+			t.Errorf("%s: (%q,%q), want (probe_failed,%q)", b.Path, b.ScanError, b.ScanErrorCode, code)
+		}
+	}
+}
+
 // ?across=1 groups copies in different libraries, each naming its library;
 // without it they never group (#165).
 func TestDuplicatesAcrossLibraries(t *testing.T) {

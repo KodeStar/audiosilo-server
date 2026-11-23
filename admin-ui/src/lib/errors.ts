@@ -51,6 +51,7 @@ const BY_CODE: Record<string, string> = {
   invalid_import: 'errors.invalidImport',
   abs_unreachable: 'errors.absUnreachable',
   abs_certificate: 'errors.absCertificate',
+  abs_certificate_redirect: 'imports.connect.certificateRedirect',
   not_abs: 'errors.notAbs',
   abs_unauthorized: 'errors.absUnauthorized',
   fetch_failed: 'errors.fetchFailed',

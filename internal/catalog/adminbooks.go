@@ -24,6 +24,29 @@ import (
 // addressed by (library_id, path) like everything else, with the internal book id
 // only ever inside an opaque cursor.
 
+// Probe failures share a category on the existing admin wire. The stored code
+// also distinguishes an ffprobe deadline from a failure to read the file.
+const (
+	ProblemProbeFailed  = "probe_failed"
+	ProblemProbeTimeout = "probe_timeout"
+)
+
+// ScanProblemKind returns the original problem category for a stored code.
+func ScanProblemKind(code string) string {
+	if code == ProblemProbeTimeout {
+		return ProblemProbeFailed
+	}
+	return code
+}
+
+// IsProbeTimeout also recognizes books indexed before probe_timeout was stored.
+// Those rows used the deadline's message as their only distinguishing detail.
+func IsProbeTimeout(code, detail string) bool {
+	return code == ProblemProbeTimeout || (code == ProblemProbeFailed &&
+		(detail == "ffprobe timed out" || strings.HasPrefix(detail, "ffprobe timed out after ") ||
+			strings.HasPrefix(detail, "ffprobe timed out: ")))
+}
+
 // AdminBook is one row of the admin book list.
 type AdminBook struct {
 	id          int64
@@ -89,6 +112,7 @@ type AdminBook struct {
 	// (a code, the library-relative file and the tool's message) and how many books
 	// its parts look like (see books.suspect_parts).
 	ScanError       string `json:"scan_error,omitempty"`
+	ScanErrorCode   string `json:"scan_error_code,omitempty"` // more specific than ScanError, when known
 	ScanErrorFile   string `json:"scan_error_file,omitempty"`
 	ScanErrorDetail string `json:"scan_error_detail,omitempty"`
 	SuspectParts    int    `json:"suspect_parts,omitempty"`
@@ -287,6 +311,10 @@ func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 			&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts, &b.ChaptersSource, &b.ChaptersCheck,
 			&b.ChapterChoice, &art, &color, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSize},
 		func() {
+			if IsProbeTimeout(b.ScanError, b.ScanErrorDetail) {
+				b.ScanErrorCode = ProblemProbeTimeout
+			}
+			b.ScanError = ScanProblemKind(b.ScanError)
 			b.Genres = append([]string{}, ParseLabels(genres)...)
 			b.Tags = append([]string{}, ParseLabels(tags)...)
 			b.Authors = append([]string{}, creditNames(b.Author)...)

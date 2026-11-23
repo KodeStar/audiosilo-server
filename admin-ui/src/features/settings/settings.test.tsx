@@ -641,6 +641,54 @@ describe('settings', () => {
     expect(screen.getByTestId('upcoming-window')).toBeInTheDocument();
   });
 
+  it('requests a full upcoming check by keyboard and refreshes its last result', async () => {
+    const state = settingsWith();
+    state.metadata.upcoming = true;
+    let requested = false;
+    const ranAt = new Date().toISOString();
+    const calls = mockFetch(
+      routes({
+        'GET /admin/settings': () => ({ body: state }),
+        'POST /admin/upcoming/check': () => {
+          requested = true;
+          state.metadata.upcoming_status = {
+            last_run_at: ranAt,
+            last_success_at: ranAt,
+            series: 3,
+            items: 8,
+          };
+          return { status: 202 };
+        },
+      }),
+    );
+    renderApp('/server?topic=metadata');
+    const button = await screen.findByRole('button', { name: 'Check now' });
+    button.focus();
+    await userEvent.setup().keyboard('{Enter}');
+    expect(await screen.findByText('Upcoming releases check requested')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('upcoming-run')).toHaveTextContent('8 books'));
+    expect(requested).toBe(true);
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+  });
+
+  it('explains a refused upcoming check when another admin has switched it off', async () => {
+    const state = settingsWith();
+    state.metadata.upcoming = true;
+    mockFetch(
+      routes({
+        'GET /admin/settings': { body: state },
+        'POST /admin/upcoming/check': () => {
+          state.metadata.upcoming = false;
+          return { status: 404, body: { code: 'upcoming_off', error: 'refused' } };
+        },
+      }),
+    );
+    renderApp('/server?topic=metadata');
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Check now' }));
+    expect(await screen.findByText('Upcoming releases check is off')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Check now' })).toBeNull());
+  });
+
   it('says when the upcoming releases check has not run or failed', async () => {
     const base = settingsWith();
     const failed = settingsWith({
@@ -699,6 +747,7 @@ describe('settings', () => {
     const toggle = await screen.findByRole('switch', { name: 'Check for upcoming releases' });
     expect(toggle).not.toBeChecked();
     expect(toggle).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByRole('button', { name: 'Check now' })).not.toBeInTheDocument();
   });
 
   it('switches the unknown-ASIN report off by default, and says how its last run went', async () => {

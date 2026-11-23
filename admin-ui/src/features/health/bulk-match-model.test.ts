@@ -116,17 +116,25 @@ describe('a run seen for what it found (server#307, server#352)', () => {
   });
 
   it('gives the lengths of an item held for its length, alone or beside another reason', () => {
-    const held = (detail: string, runtime: number, duration: number, holds?: string[]) =>
+    const held = (
+      detail: string,
+      runtime: number,
+      duration: number,
+      holds?: string[],
+      tolerance?: number,
+    ) =>
       heldLengths(
         item({
           outcome: 'review',
           detail,
           holds,
-          proposal: { values: {}, runtime_min: runtime },
+          proposal: { values: {}, runtime_min: runtime, length_tolerance: tolerance },
           book: { title: 'B', author: 'A', duration },
         }),
       );
-    expect(held('length_differs', 600, 36000)).toEqual({ book: 36000, recording: 36000 });
+    expect(held('length_differs', 660, 36000)).toBeUndefined();
+    expect(held('length_differs', 720, 36000, undefined, 0.2)).toBeUndefined();
+    expect(held('length_differs', 661, 36000)).toEqual({ book: 36000, recording: 39660 });
     expect(
       held('identifier_disagrees', 600, 28800, ['identifier_disagrees', 'length_differs']),
     ).toEqual({ book: 28800, recording: 36000 });

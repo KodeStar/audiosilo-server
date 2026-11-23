@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { CircleCheck, KeyRound } from 'lucide-react';
 import { ApiError, WRONG_CURRENT_PASSWORD, api } from '@/api/client';
-import { invalidatePeople, notePasswordChosen } from '@/api/hooks';
+import { invalidatePeople, notePasswordChosen, saveSetup } from '@/api/hooks';
 import { MIN_PASSWORD } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Field } from '@/components/ui/field';
@@ -75,7 +75,14 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
       setPasswordChanged(true);
       setDraft((d) => ({ ...d, password: '', repeat: '', current: '' }));
     }
+    // Save the completed step before trying the name, so a reload while the
+    // rename is pending resumes after the account step.
+    let recorded = env.state.steps.account === 'done';
     if (plan.rename) {
+      if ((plan.password || passwordChanged) && !recorded) {
+        await saveSetup(qc, { steps: { account: 'done' } });
+        recorded = true;
+      }
       try {
         const u = await api.updateUser(me.id, { username: plan.rename });
         // The console names the admin as the server now does.
@@ -88,7 +95,7 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
         throw err;
       }
     }
-    await leave('done');
+    await leave(recorded ? undefined : 'done');
   };
 
   const field = (
@@ -162,7 +169,10 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
       <StepFooter
         back={back}
         // With the password changed the step is done: Skip keeps only the name.
-        onSkip={() => leave(passwordChanged ? 'done' : 'skipped')}
+        onSkip={() => {
+          if (env.state.steps.account === 'done') return leave();
+          return leave(passwordChanged ? 'done' : 'skipped');
+        }}
         onContinue={onContinue}
         last={last}
         skipLabel={t(passwordChanged ? 'setup.account.keepName' : 'setup.account.keep', {

@@ -172,6 +172,35 @@ describe('live now', () => {
     expect(within(items[1]).getByText('Chapter 24')).toBeInTheDocument();
   });
 
+  it.each(['watchos', 'wearos'])(
+    'names the AAC download on %s when the book is MP3',
+    async (platform) => {
+      mockFetch(
+        routes({
+          'GET /admin/sessions/live': {
+            body: {
+              sessions: [
+                liveSession({
+                  id: 1,
+                  codec: 'mp3',
+                  client: { app: 'audiosilo-watch', version: '2.6', platform },
+                }),
+                liveSession({
+                  id: 2,
+                  codec: 'mp3',
+                  client: { app: 'Other', version: '1', platform },
+                }),
+              ],
+            },
+          },
+        }),
+      );
+      renderApp('/activity/live');
+      expect(await screen.findByText('Watch download · AAC')).toBeInTheDocument();
+      expect(screen.getByText('Direct · MP3')).toBeInTheDocument();
+    },
+  );
+
   it('says when nobody is listening', async () => {
     mockFetch(routes());
     renderApp('/activity/live');

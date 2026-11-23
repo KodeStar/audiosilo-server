@@ -75,12 +75,15 @@ func TestIssue330UnknownIdentifierAnchorFallback(t *testing.T) {
 					if len(items) != 1 || items[0].Outcome != catalog.OutcomeNone || items[0].Detail != DetailIdentifierUnknown {
 						t.Fatalf("admin identifier fell back to the recorded work: %+v", items)
 					}
+					if tc.field == catalog.FieldISBN && items[0].Book.ISBN != tc.value {
+						t.Fatalf("unknown ISBN = %q, want %q", items[0].Book.ISBN, tc.value)
+					}
 					for _, q := range e.matcher.queries {
 						if q.WorkID != "" {
 							t.Errorf("admin identifier triggered a work lookup: %+v", q)
 						}
 					}
-				} else if len(items) != 1 || items[0].Outcome != catalog.OutcomeAuto || !items[0].Changes[scope].Match {
+				} else if len(items) != 1 || items[0].Outcome != catalog.OutcomeAuto || !items[0].IdentifierUnknown || !items[0].Changes[scope].Match {
 					t.Fatalf("unknown identifier did not fall back to the recorded work: %+v", items)
 				}
 				if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: scope}); err != nil {

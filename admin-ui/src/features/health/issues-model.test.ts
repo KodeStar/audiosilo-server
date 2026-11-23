@@ -151,7 +151,11 @@ it('reads a file that is not audio as one plain line, its prober message behind 
   });
   // An ffprobe time-out is no sign of a damaged file: its own line (server#360).
   expect(
-    issueReason('scan_error', { ...probe, scan_error_detail: 'ffprobe timed out after 30s' }),
+    issueReason('scan_error', {
+      ...probe,
+      scan_error_code: 'probe_timeout',
+      scan_error_detail: 'slow network',
+    }),
   ).toEqual({ key: 'health.reason.probe_timeout', values: { file: '07.mp3', detail: '' } });
   // FFmpeg's context addresses go, for a row stored before the server dropped them.
   expect(issueDetail('scan_error', probe)).toBe(

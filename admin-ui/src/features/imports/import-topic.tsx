@@ -234,6 +234,7 @@ function connectErrorField(err: unknown): 'url' | 'token' | undefined {
     case 'invalid_url':
     case 'abs_unreachable':
     case 'abs_certificate':
+    case 'abs_certificate_redirect':
     case 'not_abs':
       return 'url';
     case 'abs_unauthorized':

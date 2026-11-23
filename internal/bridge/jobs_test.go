@@ -828,7 +828,7 @@ func TestMoveJobs(t *testing.T) {
 		t.Fatalf("the key didn't move: %+v %v %v", again, created, err)
 	}
 	move("New", "Taken")
-	if j, _ := q.Job(ctx, old.ID); j.State != StateCancelled || *j.Path != "Taken" {
+	if j, _ := q.Job(ctx, old.ID); j.State != StateCancelled || *j.Path != "Taken" || j.ErrorCode != "server_cancelled" {
 		t.Fatalf("the colliding job = %+v, want cancelled and moved", j)
 	}
 	if j, _ := q.Job(ctx, clash.ID); j.State != StateQueued {
@@ -1041,10 +1041,10 @@ func TestServerCancelReasonOutlivesReports(t *testing.T) {
 	if _, created, err := q.sidecars("", book); err != nil || !created {
 		t.Fatalf("generate = %v, %v", created, err)
 	}
-	if j, _ := q.Job(ctx, desc.ID); !j.CancelRequested || j.Error != reason || j.State != StateRunning {
+	if j, _ := q.Job(ctx, desc.ID); !j.CancelRequested || j.Error != reason || j.ErrorCode != "server_cancelled" || j.State != StateRunning {
 		t.Fatalf("asked to stop = %+v, want the reason recorded on the working job", j)
 	}
-	if j := stop(desc.ID, desc.Attempts); j.Error != reason {
+	if j := stop(desc.ID, desc.Attempts); j.Error != reason || j.ErrorCode != "server_cancelled" {
 		t.Fatalf("server cancel ended with %q, want %q", j.Error, reason)
 	}
 
@@ -1057,7 +1057,7 @@ func TestServerCancelReasonOutlivesReports(t *testing.T) {
 	if _, err := q.Cancel(ctx, admin.ID); err != nil {
 		t.Fatal(err)
 	}
-	if j := stop(admin.ID, admin.Attempts); j.Error != "supervisor: stopped" || !j.CancelRequested {
+	if j := stop(admin.ID, admin.Attempts); j.Error != "supervisor: stopped" || j.ErrorCode != "" || !j.CancelRequested {
 		t.Fatalf("admin cancel ended with %+v", j)
 	}
 

@@ -4,8 +4,7 @@ import { api } from './client';
 import { keys, saveSetup } from './hooks';
 import type { SetupEnvelope, SetupState } from './types';
 
-// The setup envelope is read again for the library locks, so a read begun
-// before a save can answer after it: the save's answer is the one kept.
+// A setup read may complete after a write. Keep the saved state.
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -28,7 +27,7 @@ it('keeps the saved setup state over a read that answers after the save', async 
   const qc = new QueryClient();
   qc.setQueryData(keys.setup, envelope(before));
 
-  // The locks' re-read is still out when the card is dismissed.
+  // The earlier read is still out when the card is dismissed.
   const read = qc.fetchQuery({ queryKey: keys.setup, queryFn: api.setup }).catch(() => undefined);
   await saveSetup(qc, { dismissed: true });
   answerRead({ body: envelope(before) });

@@ -340,6 +340,15 @@ func TestAnchorOfferedIdentifiers(t *testing.T) {
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "the-work" || a.OfferedASIN != "B0OFFERED1" {
 		t.Fatalf("a refused edit changed the anchor: %+v", a)
 	}
+	// A new ASIN for the same recording still remembers the omitted ISBN.
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{
+		Match: &MatchAnchor{WorkID: "the-work", OfferedASIN: "BXNEWWORK1"}, Source: SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "BXNEWWORK1" || a.OfferedISBN != "9780553418026" {
+		t.Fatalf("same recording = %+v, want new ASIN and the earlier ISBN", a)
+	}
 	// Another match offering none replaces them.
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &MatchAnchor{WorkID: "other"}, Source: SourceCommunity}); err != nil {
 		t.Fatal(err)

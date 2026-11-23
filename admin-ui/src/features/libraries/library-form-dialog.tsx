@@ -15,7 +15,6 @@ import {
   useDirs,
   useLibraries,
   useModules,
-  useSetup,
   usersQuery,
 } from '@/api/hooks';
 import {
@@ -40,7 +39,6 @@ import { absoluteBaseName, absoluteCrumbs, isAbsolutePath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import {
   bookRootOverlap,
-  configLibrary,
   everyoneToGrant,
   podcastsHintKey,
   type RootOverlap,
@@ -120,8 +118,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const [browsing, setBrowsing] = useState(false);
   // A library config.yaml declares keeps its name and folder there (the server
   // refuses changing them, 409 config_library): shown, not editable.
-  const setup = useSetup({ locks: true }).data;
-  const fromConfig = !!library && configLibrary(setup, library.name);
+  const fromConfig = library?.from_config;
   const current = splitSchedule(library?.scan_schedule ?? '');
   const form = useForm<Values>({
     resolver: zodResolver(schema),
@@ -137,7 +134,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
     },
   });
   const { errors, isSubmitting } = form.formState;
-  // A lock learned with the form open (a restart since the setup was read: the
+  // A lock learned with the form open (a restart since the library was read: the
   // 409 below, or the next read) puts the stored name and folder back. They are
   // shown, not edited, so a refused edit must not stay in the fields, or in the
   // toast of the save that follows.
@@ -251,11 +248,9 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       });
       onDone();
     } catch (err) {
-      // The config declares it, which the console's copy of the setup didn't
-      // know yet (a restart since): read it again so the form and card lock.
+      // Read the library again after a restart with a changed declaration.
       if (err instanceof ApiError && err.code === 'config_library') {
-        // exact: the folder previews share the key's prefix and haven't changed.
-        void qc.invalidateQueries({ queryKey: keys.setup, exact: true });
+        void qc.invalidateQueries({ queryKey: keys.libraries });
       }
       const field = (err instanceof ApiError && err.code && FIELD_BY_CODE[err.code]) || 'folder';
       form.setError(field, { message: errorMessage(err, t) });

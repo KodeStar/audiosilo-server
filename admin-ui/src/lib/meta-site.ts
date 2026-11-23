@@ -1,3 +1,5 @@
+import { ASIN, ISBN } from './book-identifiers';
+
 /**
  * The community metadata database's own site (audiosilo-meta's site/), where
  * anyone can add a book it doesn't hold yet. Always the public one: a server
@@ -14,9 +16,6 @@ const META_SITE = 'https://meta.audiosilo.app';
  */
 const ADD_PAGE = `${META_SITE}/add`;
 
-/** An Audible ASIN as the site recognises one (site/src/lib/api.ts looksLikeAsin). */
-const AUDIBLE_ASIN = /^B0[A-Z0-9]{8}$/;
-
 /**
  * Half a surrogate pair (a pasted search cut inside an emoji), on which
  * encodeURIComponent throws: the link is built while the dialog renders, so
@@ -29,19 +28,22 @@ const clean = (s: string | undefined) => (s ?? '').replace(LONE_SURROGATE, '').t
 
 /**
  * The "Add a book" link for a book the community database doesn't have,
- * prefilled with the best way to find it there: its ASIN (the caller's pick:
- * one the admin typed, else the book's own), else the words the admin searched
- * with, else its title and author. A book with none of those gets the bare page.
+ * prefilled with its ASIN, then ISBN, search words, or title and author. The
+ * match dialog passes the submitted search when the admin has made one.
  */
 export function addBookUrl(book: {
   asin?: string;
+  isbn?: string;
   query?: string;
   title?: string;
   author?: string;
 }): string {
   const asin = clean(book.asin).toUpperCase();
-  const q = AUDIBLE_ASIN.test(asin)
-    ? asin
-    : clean(book.query) || [book.title, book.author].map(clean).filter(Boolean).join(' ');
+  const isbn = clean(book.isbn).replace(/[- ]/g, '').toUpperCase();
+  const q =
+    (ASIN.test(asin) && asin) ||
+    (ISBN.test(isbn) && isbn) ||
+    clean(book.query) ||
+    [book.title, book.author].map(clean).filter(Boolean).join(' ');
   return q ? `${ADD_PAGE}?q=${encodeURIComponent(q)}` : ADD_PAGE;
 }

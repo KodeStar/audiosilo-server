@@ -11,7 +11,8 @@ import {
   type OverrideField,
 } from '@/api/types';
 import type { MatchBy } from '@/api/client';
-import { ISBN, checkField } from './book-model';
+import { ISBN } from '@/lib/book-identifiers';
+import { checkField } from './book-model';
 
 // Display the server's proposal and collect the admin's choices.
 

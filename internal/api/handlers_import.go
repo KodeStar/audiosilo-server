@@ -104,7 +104,7 @@ func parseImportCutoff(raw json.RawMessage) (importer.Cutoff, bool) {
 // token's own with a non-admin token), each with the AudioSilo user of the same
 // name. 400 invalid_url | invalid_import (a missing or malformed token); 502
 // abs_unreachable | abs_certificate (an https certificate this server doesn't
-// trust) | not_abs | abs_unauthorized.
+// trust) | abs_certificate_redirect (behind an http address) | not_abs | abs_unauthorized.
 func (a *API) handleImportUsers(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		URL   string `json:"url"`

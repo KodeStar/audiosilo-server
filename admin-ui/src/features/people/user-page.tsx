@@ -818,10 +818,12 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
         typeToConfirm={u.username}
         onConfirm={async () => {
           const { keep, remove } = deleteChoice(members, keeping);
-          await api.deleteUser(u.id, remove, keep);
+          const outcome = await api.deleteUser(u.id, remove, keep);
           toast.add({
             title: t('user.danger.deleted', { name: u.username }),
-            description: membersOutcome(remove.length, keep.length, t),
+            description: outcome
+              ? membersOutcome(outcome.members_deleted, outcome.members_kept, t)
+              : undefined,
             type: 'success',
           });
           // Off their page first: refreshing it (or any page of theirs) now

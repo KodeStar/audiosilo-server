@@ -479,6 +479,7 @@ export const api = {
     ),
   stats: () => request<AdminStats>('GET', '/admin/stats'),
   settings: () => request<AdminSettings>('GET', '/admin/settings'),
+  checkUpcoming: () => request<void>('POST', '/admin/upcoming/check'),
   /** Queues a scan (coalesced with one already waiting); answers with the job. */
   scanLibrary: (id: number) =>
     request<{ status: string; job: Job }>('POST', `/admin/libraries/${id}/scan`),
@@ -677,7 +678,7 @@ export const api = {
 
   // Listening import (Settings > Import). The Audiobookshelf token rides in the
   // request body only; the server never stores or returns it.
-  /** Connects to Audiobookshelf and lists its accounts (400 invalid_url; 502 abs_unreachable / abs_certificate / not_abs / abs_unauthorized). */
+  /** Connects to Audiobookshelf and lists its accounts (400 invalid_url; 502 abs_unreachable / abs_certificate / abs_certificate_redirect / not_abs / abs_unauthorized). */
   absUsers: (url: string, token: string) =>
     request<{ version: string; users: AbsUser[] }>('POST', '/admin/imports/abs/users', {
       url,
@@ -769,12 +770,13 @@ export const api = {
    * dialog showed and the admin left ticked); every other member, `keepMembers` and
    * any added since the dialog read the list, becomes an independent account. Always
    * sends `delete_members`, even empty: without it the server deletes every member
-   * not kept (server#222).
+   * not kept (server#222). detail=1 asks for the counts recorded by the delete.
    */
   deleteUser: (id: number, deleteMembers: readonly number[], keepMembers: readonly number[] = []) =>
-    request<void>(
+    request<{ members_deleted: number; members_kept: number } | undefined>(
       'DELETE',
       `/admin/users/${id}?${new URLSearchParams({
+        detail: '1',
         delete_members: deleteMembers.join(','),
         ...(keepMembers.length ? { keep_members: keepMembers.join(',') } : {}),
       }).toString()}`,

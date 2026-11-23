@@ -222,8 +222,8 @@ export function groupDevices(devices: readonly Device[] | undefined) {
  * browsers trust (a proxy's own self-signed one in front of a server with TLS
  * off), else false. `selfSigned` is whether the server runs in self-signed
  * TLS mode (unknown while settings load or a TLS mode change waits for a
- * restart: runsSelfSigned). A reverse proxy in front of a self-signed server
- * (its own certificate on the public name) still reads as self-signed.
+ * restart: runsSelfSigned). An external HTTPS invite uses the certificate at
+ * its public address or proxy.
  * None for a public name, or a link that isn't one.
  */
 export type InviteReach = {
@@ -244,7 +244,11 @@ export function runsSelfSigned(
   return settings.network.tls_mode === 'selfsigned';
 }
 
-export function inviteReach(link: string, selfSigned?: boolean): InviteReach {
+export function inviteReach(
+  link: string,
+  selfSigned?: boolean,
+  externalHTTPS = false,
+): InviteReach {
   let url: URL;
   try {
     url = new URL(link);
@@ -252,7 +256,7 @@ export function inviteReach(link: string, selfSigned?: boolean): InviteReach {
     return { loopback: false, home: false, certificate: false };
   }
   const loopback = isLoopbackHost(url.host);
-  const https = !loopback && url.protocol === 'https:';
+  const https = !loopback && !externalHTTPS && url.protocol === 'https:';
   return {
     loopback,
     home: !loopback && isHomeHost(url.host),

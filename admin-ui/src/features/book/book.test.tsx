@@ -1320,6 +1320,7 @@ describe('match with community metadata', () => {
             match_alone: false,
             cover_url: candidate.cover_url,
             cover: true,
+            records_offered: true,
             values: { asin: 'B0OFFER001' },
             set: { asin: 'B0OFFER001' },
           },
@@ -1355,43 +1356,55 @@ describe('match with community metadata', () => {
     expect(within(compare).getByRole('button', { name: 'Match to this work' })).toBeDisabled();
   });
 
-  it('accepts the recorded match again with nothing ticked, to record the ASIN it offers (server#355)', async () => {
-    const detail = bookDetail();
-    detail.book = { ...detail.book, has_cover: true };
-    detail.community_match = { ...sameWorkMatch, how: 'auto', matched_at: '2026-11-01T00:00:00Z' };
-    const asin = detail.fields.asin.value;
-    const offering: MatchCandidate = {
-      ...sameWork,
-      recordings: [{ id: 'r1', narrators: [], asins: [asin], isbns: [] }],
-    };
-    const calls = mockFetch(
-      matchRoutes(detail, {
-        'GET /admin/libraries/1/book/match': { body: { candidates: [offering] } },
-        'GET /admin/books/match-proposal': {
-          body: {
-            work_id: sameWork.work_id,
-            recording_id: 'r1',
-            match: false,
-            match_alone: false,
-            cover_url: candidate.cover_url,
-            cover: false,
-            values: { asin },
-            set: {},
+  it.each([true, false])(
+    'enables a match-only accept when the offered identifier changes: %s',
+    async (changes) => {
+      const detail = bookDetail();
+      detail.book = { ...detail.book, has_cover: true };
+      detail.community_match = {
+        ...sameWorkMatch,
+        how: 'auto',
+        matched_at: '2026-11-01T00:00:00Z',
+      };
+      const asin = detail.fields.asin.value;
+      const offering: MatchCandidate = {
+        ...sameWork,
+        recordings: [{ id: 'r1', narrators: [], asins: [asin], isbns: [] }],
+      };
+      const calls = mockFetch(
+        matchRoutes(detail, {
+          'GET /admin/libraries/1/book/match': { body: { candidates: [offering] } },
+          'GET /admin/books/match-proposal': {
+            body: {
+              work_id: sameWork.work_id,
+              recording_id: 'r1',
+              match: false,
+              match_alone: false,
+              cover_url: candidate.cover_url,
+              cover: false,
+              records_offered: changes,
+              values: { asin },
+              set: {},
+            },
           },
-        },
-      }),
-    );
-    const { user, compare } = await openCompare();
-    expect(fieldBox(compare)).toBeNull();
-    const accept = within(compare).getByRole('button', { name: 'Match to this work' });
-    expect(accept).toBeEnabled();
-    await user.click(accept);
-    await waitFor(() =>
-      expect(patches(calls).map((c) => c.body)).toEqual([
-        { set: {}, source: 'community', match: { ...sameWorkMatch, asin } },
-      ]),
-    );
-  });
+        }),
+      );
+      const { user, compare } = await openCompare();
+      expect(fieldBox(compare)).toBeNull();
+      const accept = within(compare).getByRole('button', { name: 'Match to this work' });
+      if (!changes) {
+        expect(accept).toBeDisabled();
+        return;
+      }
+      expect(accept).toBeEnabled();
+      await user.click(accept);
+      await waitFor(() =>
+        expect(patches(calls).map((c) => c.body)).toEqual([
+          { set: {}, source: 'community', match: { ...sameWorkMatch, asin } },
+        ]),
+      );
+    },
+  );
 
   it('offers nothing to accept for a book with an ASIN when nothing is ticked', async () => {
     const detail = bookDetail();
@@ -1687,30 +1700,33 @@ describe('match with community metadata', () => {
     );
   });
 
-  it('says a book nothing matches still plays, and links to add it by its ASIN (server#370)', async () => {
-    mockFetch(
-      matchRoutes(bookDetail(), {
-        'GET /admin/libraries/1/book/match': { body: { candidates: [] } },
-      }),
-    );
-    renderApp(URL);
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
-    const dialog = await screen.findByRole('dialog');
-    expect(
-      await within(dialog).findByText(
-        'This book is not in the community database yet. It still plays as normal.',
-      ),
-    ).toBeInTheDocument();
-    const add = within(dialog).getByRole('link', {
-      name: /^Add The Way of Kings to the community/,
-    });
-    expect(add).toHaveAttribute('href', 'https://meta.audiosilo.app/add?q=B003P2WO5E');
-    expect(add).toHaveAttribute('rel', 'noopener noreferrer');
-    expect(
-      within(dialog).getByRole('link', { name: 'Help complete the community database' }),
-    ).toHaveAttribute('href', '/admin/server?topic=metadata');
-  });
+  it.each(['B003P2WO5E', 'BX12OLD123'])(
+    'links an unmatched book to Add it by its ASIN %s',
+    async (asin) => {
+      mockFetch(
+        matchRoutes(bookDetail({ book: adminBook({ path: BOOK_PATH, asin }) }), {
+          'GET /admin/libraries/1/book/match': { body: { candidates: [] } },
+        }),
+      );
+      renderApp(URL);
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(
+        await within(dialog).findByText(
+          'This book is not in the community database yet. It still plays as normal.',
+        ),
+      ).toBeInTheDocument();
+      const add = within(dialog).getByRole('link', {
+        name: /^Add The Way of Kings to the community/,
+      });
+      expect(add).toHaveAttribute('href', `https://meta.audiosilo.app/add?q=${asin}`);
+      expect(add).toHaveAttribute('rel', 'noopener noreferrer');
+      expect(
+        within(dialog).getByRole('link', { name: 'Help complete the community database' }),
+      ).toHaveAttribute('href', '/admin/server?topic=metadata');
+    },
+  );
 
   it('prefills Add it with the words searched for a book with no ASIN', async () => {
     mockFetch(
@@ -1786,8 +1802,14 @@ describe('match with community metadata', () => {
     ).toBeInTheDocument();
   });
 
-  it('waits for unsaved edits before matching', async () => {
-    mockFetch(matchRoutes(bookDetail()));
+  it('waits for unsaved edits before matching or unlinking', async () => {
+    const detail = bookDetail();
+    detail.community_match = {
+      ...sameWorkMatch,
+      how: 'accepted',
+      matched_at: '2026-11-01T00:00:00Z',
+    };
+    mockFetch(matchRoutes(detail));
     renderApp(URL);
     const user = userEvent.setup();
     await user.click(
@@ -1796,6 +1818,9 @@ describe('match with community metadata', () => {
     await user.type(within(row('Author')).getByRole('textbox'), ' Jr{Enter}');
     expect(screen.getByRole('button', { name: 'Compare with community' })).toBeDisabled();
     expect(screen.getByText('Save or discard your changes before matching.')).toBeInTheDocument();
+    const unlink = screen.getByRole('button', { name: 'Unlink' });
+    expect(unlink).toBeDisabled();
+    expect(unlink).toHaveAccessibleDescription('Save or discard your changes before unlinking.');
   });
 
   it('renders no <style> elements with the match dialog open', async () => {
