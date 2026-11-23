@@ -770,10 +770,11 @@ export const api = {
    * dialog showed and the admin left ticked); every other member, `keepMembers` and
    * any added since the dialog read the list, becomes an independent account. Always
    * sends `delete_members`, even empty: without it the server deletes every member
-   * not kept (server#222). detail=1 asks for the counts recorded by the delete.
+   * not kept (server#222). detail=1 asks for the counts recorded by the delete;
+   * undefined when a 2xx carries none (a proxy's page).
    */
   deleteUser: (id: number, deleteMembers: readonly number[], keepMembers: readonly number[] = []) =>
-    request<{ members_deleted: number; members_kept: number }>(
+    request<{ members_deleted: number; members_kept: number } | undefined>(
       'DELETE',
       `/admin/users/${id}?${new URLSearchParams({
         detail: '1',

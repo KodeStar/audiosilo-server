@@ -510,6 +510,26 @@ describe('a person', () => {
     expect(calls.slice(deleted + 1).some((c) => c.path.startsWith('/admin/users/2'))).toBe(false);
   });
 
+  it('deletes an account behind a proxy that answers the delete with a page', async () => {
+    mockFetch(
+      routes({
+        'DELETE /admin/users/2': {
+          raw: '<html>OK</html>',
+          headers: { 'content-type': 'text/html' },
+        },
+      }),
+    );
+    const { router } = renderApp('/people/user/2?tab=account');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Delete account' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete sam?' });
+    await user.type(within(dialog).getByRole('textbox'), 'sam');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
+    // The plain success toast, with no counts to name, and off their page.
+    expect(await screen.findByText('Deleted sam')).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.pathname).toBe('/people'));
+  });
+
   it('disables an account', async () => {
     const calls = mockFetch(
       routes({ 'PATCH /admin/users/2': { body: { ...sam, disabled: true } } }),
