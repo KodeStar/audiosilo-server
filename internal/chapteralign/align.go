@@ -609,8 +609,8 @@ func (f *fit) snap(ctx context.Context, probe Prober) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err != nil {
-			continue
+		if err != nil || len(pauses) != len(windows) {
+			continue // not one answer a window: left unsnapped, as a failed read
 		}
 		for i := range candidates {
 			c := &candidates[i]
