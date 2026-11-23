@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -24,27 +25,18 @@ import (
 // addressed by (library_id, path) like everything else, with the internal book id
 // only ever inside an opaque cursor.
 
-// Probe failures share a category on the existing admin wire. The stored code
-// also distinguishes an ffprobe deadline from a failure to read the file.
+// ProblemProbeFailed is the read problem stored when ffprobe could not read a
+// file (books.scan_error); ProblemProbeTimeout is the admin wire's more specific
+// scan_error_code for one that ran out of time instead.
 const (
 	ProblemProbeFailed  = "probe_failed"
 	ProblemProbeTimeout = "probe_timeout"
 )
 
-// ScanProblemKind returns the original problem category for a stored code.
-func ScanProblemKind(code string) string {
-	if code == ProblemProbeTimeout {
-		return ProblemProbeFailed
-	}
-	return code
-}
-
-// IsProbeTimeout also recognizes books indexed before probe_timeout was stored.
-// Those rows used the deadline's message as their only distinguishing detail.
+// IsProbeTimeout reports whether a stored read problem is an ffprobe time-out:
+// a probe_failed whose detail starts with metadata.ErrProbeTimeout's text.
 func IsProbeTimeout(code, detail string) bool {
-	return code == ProblemProbeTimeout || (code == ProblemProbeFailed &&
-		(detail == "ffprobe timed out" || strings.HasPrefix(detail, "ffprobe timed out after ") ||
-			strings.HasPrefix(detail, "ffprobe timed out: ")))
+	return code == ProblemProbeFailed && strings.HasPrefix(detail, metadata.ErrProbeTimeout.Error())
 }
 
 // AdminBook is one row of the admin book list.
@@ -314,7 +306,6 @@ func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 			if IsProbeTimeout(b.ScanError, b.ScanErrorDetail) {
 				b.ScanErrorCode = ProblemProbeTimeout
 			}
-			b.ScanError = ScanProblemKind(b.ScanError)
 			b.Genres = append([]string{}, ParseLabels(genres)...)
 			b.Tags = append([]string{}, ParseLabels(tags)...)
 			b.Authors = append([]string{}, creditNames(b.Author)...)

@@ -62,8 +62,8 @@ func TestHealthEndpointsRequireAdmin(t *testing.T) {
 	}
 }
 
-// The original probe_failed category remains usable by older consoles. A
-// specific code on both new and legacy timeout rows supplies the translated reason.
+// An ffprobe time-out keeps its probe_failed category and carries the more
+// specific probe_timeout code; another probe failure carries none.
 func TestAdminScanErrorCode(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
@@ -73,8 +73,8 @@ func TestAdminScanErrorCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, b := range []catalog.Book{
-		{RelPath: "new", ScanError: "probe_timeout", ScanErrorDetail: "deadline"},
-		{RelPath: "old", ScanError: "probe_failed", ScanErrorDetail: "ffprobe timed out after 30s"},
+		{RelPath: "new", ScanError: "probe_failed", ScanErrorDetail: "ffprobe timed out after 30s"},
+		{RelPath: "old", ScanError: "probe_failed", ScanErrorDetail: "ffprobe timed out"},
 		{RelPath: "bad", ScanError: "probe_failed", ScanErrorDetail: "invalid data"},
 	} {
 		b.LibraryID = lib.ID

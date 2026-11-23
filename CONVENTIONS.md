@@ -1743,7 +1743,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   sets `Book.ReadCutShort`, and rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
   length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
   its read problem, `unreadable` ("reading it timed out", a `ProbeTimedOut` too, or for a refused read "too many earlier reads
-  from the same drive or share are stuck", with ffprobe or without; `probe_timeout` for an ffprobe
+  from the same drive or share are stuck", with ffprobe or without; `probe_failed` for an ffprobe
   time-out: `noteProblem` records one for every `readCutShort`, a folder book's first part cut short going over an
   earlier part's lasting problem, as the record is what `problemCleared` asks again), so the next scan reads it again (the stored
   mtime and size are the old ones, else `problemCleared`, which a read still cut short, its length
@@ -3231,9 +3231,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that skip every indexed book prune it rather than tripping the unavailable guard.
   `metadata.Extract` reports `OpenErr`/`ProbeErr`
   (ffprobe runs with `-v error` so its message survives, path prefix stripped); `noteProblem`
-  records the first read problem per book (`unreadable|empty_file|probe_failed|probe_timeout`).
-  Admin books report probe timeouts as `scan_error: "probe_failed"` with the more specific
-  `scan_error_code: "probe_timeout"`, including books indexed before the code was stored. A scan
+  records the first read problem per book (`unreadable|empty_file|probe_failed`). Admin books
+  report an ffprobe time-out (a `probe_failed` whose detail starts with `ErrProbeTimeout`'s text,
+  `catalog.IsProbeTimeout`) with the more specific `scan_error_code: "probe_timeout"`. A scan
   re-reads an otherwise unchanged book once the file its problem names opens or probes again
   (`problemCleared`: a fixed permission changes neither mtime nor size). A one-file book with a
   problem counts as unchanged while `problemCleared` finds the problem there (`soleFileProblem`;

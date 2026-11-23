@@ -1304,7 +1304,7 @@ export const ISSUE_KINDS = [
 ] as const;
 export type IssueKind = (typeof ISSUE_KINDS)[number];
 
-/** A read problem's category (catalog.ScanProblemKind). */
+/** A read problem's code (books.scan_error). */
 export type ScanErrorCode = 'unreadable' | 'empty_file' | 'probe_failed';
 
 /** catalog.IssueSample: a book shown on a category card. */

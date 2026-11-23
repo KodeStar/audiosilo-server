@@ -65,3 +65,13 @@ func TestProbeErrorRejected(t *testing.T) {
 		t.Error("a time-out reads as a rejection")
 	}
 }
+
+// The console's Health page tells a time-out from a damaged file by these words
+// at the start of the stored detail (admin-ui issues-model.ts PROBE_TIMEOUT), so
+// a rewording here must change them there too.
+func TestProbeTimeoutWording(t *testing.T) {
+	t.Parallel()
+	if got := ErrProbeTimeout.Error(); got != "ffprobe timed out" {
+		t.Errorf("ErrProbeTimeout = %q: the console's Health page matches \"ffprobe timed out\"", got)
+	}
+}

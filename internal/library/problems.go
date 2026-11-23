@@ -52,8 +52,6 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 		// alone (readCutShort): the stored book is kept, so it needs a problem
 		// that says why, and that the next scan looks at again.
 		b.ScanError, b.ScanErrorDetail = problemUnreadable, tagsUnreadDetail
-	case md != nil && errors.Is(md.ProbeErr, metadata.ErrProbeTimeout):
-		b.ScanError, b.ScanErrorDetail = catalog.ProblemProbeTimeout, md.ProbeErr.Error()
 	case md != nil && md.ProbeErr != nil:
 		b.ScanError, b.ScanErrorDetail = problemProbe, md.ProbeErr.Error()
 	default:
@@ -86,7 +84,7 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 	if !metadata.IsAudio(abs) {
 		return sideAnswers(ctx, lib.Root, abs, s.probeTimeout)
 	}
-	probe := catalog.ScanProblemKind(sig.ScanError) == problemProbe
+	probe := sig.ScanError == problemProbe
 	var at *fileState
 	if probe {
 		// The file's own state, before the read: a book's is a folder's newest
@@ -234,7 +232,7 @@ func (s *Scanner) wasRejected(abs string, at fileState) bool {
 // recheckable reports whether sig records a read problem with one file that
 // problemCleared can look at again.
 func recheckable(sig catalog.Signature) bool {
-	return sig.ScanErrorFile != "" && (sig.ScanError == problemUnreadable || catalog.ScanProblemKind(sig.ScanError) == problemProbe)
+	return sig.ScanErrorFile != "" && (sig.ScanError == problemUnreadable || sig.ScanError == problemProbe)
 }
 
 // soleFileProblem reports whether a book's one audio file is the file its

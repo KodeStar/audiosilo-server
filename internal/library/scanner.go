@@ -490,8 +490,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			if old.ReleasedUnchecked {
 				releasedBackfill[b.RelPath] = md.Released
 			}
-			hadProbeProblem := catalog.ScanProblemKind(old.ScanError) == problemProbe
-			if r.hints && (md.ProbeErr == nil || hadProbeProblem) {
+			if r.hints && (md.ProbeErr == nil || old.ScanError == problemProbe) {
 				hintsBackfill[b.RelPath] = catalog.TagHints{ASIN: md.TagASIN, ISBN: md.TagISBN, Language: md.TagLanguage}
 			}
 			if old.GenresUnchecked {
@@ -499,7 +498,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			}
 			// A title that turns on the last file's tags waits for them too:
 			// unread now (stopped, unopenable, cut short), the next scan reads both.
-			if r.names && (md.ProbeErr == nil || hadProbeProblem) && (!partNamed(b, md) || tagsRead(r.last)) {
+			if r.names && (md.ProbeErr == nil || old.ScanError == problemProbe) && (!partNamed(b, md) || tagsRead(r.last)) {
 				pathBackfill[b.RelPath] = readNames(b, md, r.last)
 			}
 			// A last file that won't open waits the same way as a primary file
@@ -516,7 +515,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// failing to run, or a frame count standing in for it that a read
 			// may yet finish (uncountedForNow: a read error, others read
 			// beside it) may pass, and is read again.
-			if (r.names || r.hints) && !hadProbeProblem && errors.Is(md.ProbeErr, metadata.ErrProbeRejected) &&
+			if (r.names || r.hints) && old.ScanError != problemProbe && errors.Is(md.ProbeErr, metadata.ErrProbeRejected) &&
 				!uncountedForNow(md) {
 				failedBackfill[b.RelPath] = old.IndexedAt
 			}
@@ -593,7 +592,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		if b.ScanError != "" {
 			res.Errors++
 			rl.add("warn", "problem", func(e *catalog.RunEvent) {
-				e.Path, e.Code, e.Detail = b.ScanErrorFile, catalog.ScanProblemKind(b.ScanError), b.ScanErrorDetail
+				e.Path, e.Code, e.Detail = b.ScanErrorFile, b.ScanError, b.ScanErrorDetail
 			})
 		}
 		switch {

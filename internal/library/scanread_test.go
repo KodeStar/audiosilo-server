@@ -471,7 +471,7 @@ func TestScanRecordsProbeTimingOutAlone(t *testing.T) {
 	if err := db.QueryRowContext(context.Background(), `SELECT scan_error, scan_error_detail FROM books`).Scan(&problem, &detail); err != nil {
 		t.Fatal(err)
 	}
-	if res.Errors != 1 || problem != catalog.ProblemProbeTimeout || !strings.Contains(detail, "timed out") {
+	if res.Errors != 1 || problem != problemProbe || !strings.Contains(detail, "timed out") {
 		t.Fatalf("errors %d, problem %q (%q)", res.Errors, problem, detail)
 	}
 }
@@ -496,8 +496,8 @@ func TestProblemCheckTakesTheScansTimeout(t *testing.T) {
 	if err := db.QueryRowContext(context.Background(), `SELECT scan_error FROM books`).Scan(&problem); err != nil {
 		t.Fatal(err)
 	}
-	if problem != catalog.ProblemProbeTimeout {
-		t.Fatalf("problem %q after the check, want %q", problem, catalog.ProblemProbeTimeout)
+	if problem != problemProbe {
+		t.Fatalf("problem %q after the check, want %q", problem, problemProbe)
 	}
 }
 
@@ -524,7 +524,7 @@ func TestScanSkipsRetryOfLoneTimeout(t *testing.T) {
 	if err := db.QueryRowContext(context.Background(), `SELECT scan_error FROM books`).Scan(&problem); err != nil {
 		t.Fatal(err)
 	}
-	if res.Errors != 1 || problem != catalog.ProblemProbeTimeout {
+	if res.Errors != 1 || problem != problemProbe {
 		t.Fatalf("errors %d, problem %q", res.Errors, problem)
 	}
 }
