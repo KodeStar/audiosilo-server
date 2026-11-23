@@ -14,6 +14,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
@@ -34,6 +35,7 @@ type fakeMeta struct {
 	seriesHook func(ctx context.Context, id string) error
 
 	seriesReads []string
+	workReads   map[string]int // WorkSeries calls by work
 	feeds       [][]string
 	workCalls   []time.Time // when each WorkIDs call came
 }
@@ -64,6 +66,10 @@ func (f *fakeMeta) WorkIDs(_ context.Context, books []meta.BookIDs) []meta.WorkI
 func (f *fakeMeta) WorkSeries(_ context.Context, id string) ([]meta.SeriesRef, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.workReads == nil {
+		f.workReads = map[string]int{}
+	}
+	f.workReads[id]++
 	if err := f.workErr[id]; err != nil {
 		return nil, err
 	}
@@ -143,6 +149,7 @@ func (f *fakeMeta) setDate(series, work, date string) {
 // fixture is a catalog with one library, a fake service and a runner on a
 // clock the test moves, switched on until off is set.
 type fixture struct {
+	db        *store.DB
 	cat       *catalog.Catalog
 	lib       *catalog.Library
 	md        *fakeMeta
@@ -155,7 +162,8 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{md: newFakeMeta(), clock: now}
-	f.cat = catalog.New(storetest.Open(t), func() time.Time { return f.clock })
+	f.db = storetest.Open(t)
+	f.cat = catalog.New(f.db, func() time.Time { return f.clock })
 	lib, err := f.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Main", Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -1342,5 +1350,78 @@ func TestRunnerPendingDropsGoneBooks(t *testing.T) {
 	}
 	if refs, err := f.cat.UpcomingPending(ctx); err != nil || len(refs) != 0 {
 		t.Fatalf("stored pending after the book went = %+v, %v; want none", refs, err)
+	}
+}
+
+// A run asks for a work's series once, however many local series hold the
+// work (a copy in each library: server#279).
+func TestRunnerWorkSeriesReadOncePerRun(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	f.book(t, f.library(t, "Second"), "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	f.md.mu.Lock()
+	defer f.md.mu.Unlock()
+	if n := f.md.workReads["e1"]; n != 1 {
+		t.Fatalf("e1's series read %d times in one run, want 1", n)
+	}
+}
+
+// A run that finds a series' items as stored writes none of them again
+// (server#279: every run used to rewrite every local series' items).
+func TestRunnerUnchangedRunWritesNoItems(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2012", "2026-12-01")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.items(t), []string{"e2=missing", "e3=preorder"}; !slices.Equal(got, want) {
+		t.Fatalf("items = %v, want %v", got, want)
+	}
+	// Any write to the items or to the series' classified mark now fails the
+	// run.
+	ctx := context.Background()
+	refuse := map[string]string{
+		"items_in":  `AFTER INSERT ON upcoming_items`,
+		"items_up":  `AFTER UPDATE ON upcoming_items`,
+		"items_del": `AFTER DELETE ON upcoming_items`,
+		"series_up": `AFTER UPDATE OF classified_at ON upcoming_series`,
+	}
+	for name, on := range refuse {
+		if _, err := f.db.ExecContext(ctx, `CREATE TRIGGER `+name+` `+on+` BEGIN SELECT RAISE(ABORT, 'written'); END`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, full := range []bool{false, true} {
+		f.clock = f.clock.Add(time.Hour)
+		if err := f.r.RunOnce(ctx, full); err != nil {
+			t.Fatalf("an unchanged run (full %v) wrote its items: %v", full, err)
+		}
+	}
+	for name := range refuse {
+		if _, err := f.db.ExecContext(ctx, `DROP TRIGGER `+name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A change is still written: the preorder's date moves.
+	f.md.setDate("expanse", "e3", "2026-12-24")
+	f.clock = f.clock.Add(8 * 24 * time.Hour) // the series is due a read again
+	if err := f.r.RunOnce(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := f.cat.UpcomingFor(ctx, []catalog.Scope{{LibraryID: f.lib.ID, AllowAll: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.WorkID == "e3" && e.ReleaseDate != "2026-12-24" {
+			t.Fatalf("e3's moved date wasn't written: %+v", e)
+		}
 	}
 }

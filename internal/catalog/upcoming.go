@@ -368,6 +368,32 @@ type UpcomingItem struct {
 	FirstSeenAt string
 }
 
+// UpcomingItemsAll returns every local series' items as the last run stored
+// them (FirstSeenAt left out). An item whose authors don't decode has no Kind,
+// so it never matches a fresh classification and is written again.
+func (c *Catalog) UpcomingItemsAll(ctx context.Context) ([]UpcomingItem, error) {
+	rows, err := c.db.QueryContext(ctx, `SELECT library_id, series_key, work_id, series_id, kind,
+		release_date, position, title, authors, cover_url FROM upcoming_items`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UpcomingItem
+	for rows.Next() {
+		var it UpcomingItem
+		var authors string
+		if err := rows.Scan(&it.LibraryID, &it.SeriesKey, &it.WorkID, &it.SeriesID, &it.Kind,
+			&it.ReleaseDate, &it.Position, &it.Title, &authors, &it.CoverURL); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal([]byte(authors), &it.Authors) != nil {
+			it.Kind = ""
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
 // ReplaceUpcomingItems makes items a local series' items: a work it had keeps
 // its first_seen_at and announced_at, a new one is first seen at at, and the
 // series' other items go. A released item of a work in baseline (one no series
