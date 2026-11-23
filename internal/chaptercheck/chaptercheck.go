@@ -26,6 +26,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
@@ -52,10 +53,6 @@ const (
 	// checkTimeout bounds one book: the lookup, the chapters and every pause
 	// window a long book needs.
 	checkTimeout = 5 * time.Minute
-	// probeBudget is the share of checkTimeout the pause windows get. Past it the
-	// boundaries left are placed by proportion alone (approximate) and the fit is
-	// still recorded, so a long book on a slow disk can't fail every check.
-	probeBudget = 4 * time.Minute
 	// readyWait bounds how long the first pass after a start (the first with
 	// metadata on) waits for the metadata to answer locally (mirror mode: the
 	// local copy loaded). Past it the pass runs anyway, its lookups going to
@@ -88,13 +85,11 @@ type Runner struct {
 	readyWait, readyPoll time.Duration
 	log                  *slog.Logger
 	now                  func() time.Time
+	timeout              time.Duration
 
-	kick chan struct{}
-	// settle is how long a kick waits before its pass, gathering the kicks behind
-	// it (a scan kicks once per book indexed).
-	settle time.Duration
-	mu     sync.Mutex
-	busy   map[catalog.Ref]bool // books being checked now
+	*pool.PassRunner
+	mu   sync.Mutex
+	busy map[catalog.Ref]bool // books being checked now
 	// failed are the books the background's checks last failed for, and when.
 	failed map[catalog.Ref]time.Time
 	wg     sync.WaitGroup // Start's checks
@@ -109,59 +104,14 @@ func New(cat *catalog.Catalog, src Source, ffmpeg string, enabled, ready func() 
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Runner{cat: cat, src: src, ffmpeg: ffmpeg, enabled: enabled, ready: ready, readyWait: readyWait,
-		readyPoll: readyPoll, log: log, now: time.Now, kick: make(chan struct{}, 1), settle: settleKicks,
+	r := &Runner{cat: cat, src: src, ffmpeg: ffmpeg, enabled: enabled, ready: ready, readyWait: readyWait,
+		readyPoll: readyPoll, log: log, now: time.Now, timeout: checkTimeout,
 		busy: map[catalog.Ref]bool{}, failed: map[catalog.Ref]time.Time{}}
-}
-
-// Run checks the books due a check every interval, and on a Kick, until ctx ends.
-// The first pass waits for the metadata to answer locally (waitReady), so a
-// start in mirror mode sends no lookups to the service while its copy loads.
-// It is the first pass with metadata on: a copy isn't loaded while metadata is
-// off, so the wait starts when the checks do.
-func (r *Runner) Run(ctx context.Context) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	waited := false
-	for {
-		if !waited && r.enabled() {
-			if !r.waitReady(ctx) {
-				return
-			}
-			waited = true
-			// The first pass finds what the kicks sent during the wait were
-			// for, and the next tick is an interval after it.
-			select {
-			case <-r.kick:
-			default:
-			}
-			t.Reset(interval)
-		}
-		failing := false
-		if r.enabled() {
-			failing = r.pass(ctx)
-		}
-		kick := r.kick
-		if failing {
-			kick = nil // the service keeps failing: wait for the tick
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		case <-kick:
-			// Let a burst of kicks (a scan) settle into one pass.
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(r.settle):
-			}
-			select {
-			case <-r.kick:
-			default:
-			}
-		}
-	}
+	// A kick's pass waits settleKicks, gathering the kicks behind it (a scan
+	// kicks once per book indexed).
+	r.PassRunner = pool.NewPassRunner(pool.PassOptions{Interval: interval, Quiet: settleKicks, MaxSettle: settleKicks,
+		Enabled: enabled, WaitReady: r.waitReady}, r.pass)
+	return r
 }
 
 // waitReady waits until r.ready reports true, at most r.readyWait; false when
@@ -177,15 +127,6 @@ func (r *Runner) waitReady(ctx context.Context) bool {
 	return live
 }
 
-// Kick asks the background to look for due books now (a scan, a match or an edit
-// may have made some).
-func (r *Runner) Kick() {
-	select {
-	case r.kick <- struct{}{}:
-	default:
-	}
-}
-
 // Checking reports whether the book is being checked now.
 func (r *Runner) Checking(ref catalog.Ref) bool {
 	r.mu.Lock()
@@ -199,7 +140,7 @@ func (r *Runner) Checking(ref catalog.Ref) bool {
 func (r *Runner) pass(ctx context.Context) bool {
 	tried := map[catalog.Ref]bool{}
 	waiting := r.failedLately()
-	streak := 0
+	streak := pool.NewFailureStreak(maxFailStreak)
 	for {
 		// Ask past the books this pass tried and those waiting out a failure, which
 		// stay due: they can't fill the batch and keep the rest from their turn.
@@ -221,23 +162,16 @@ func (r *Runner) pass(ctx context.Context) bool {
 		if len(todo) == 0 {
 			return false
 		}
-		var mu sync.Mutex
-		more := func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			return streak < maxFailStreak && r.enabled()
-		}
+		more := func() bool { return !streak.AtLimit() && r.enabled() }
 		pool.Each(ctx, workers, todo, more, func(b *catalog.Ref) {
 			_, err := r.Check(ctx, *b)
-			mu.Lock()
-			defer mu.Unlock()
 			switch {
 			case err == nil, errors.Is(err, catalog.ErrNotFound), errors.Is(err, ErrBusy):
-				streak = 0
+				streak.Succeeded()
 				r.noteFailure(*b, false)
 			case ctx.Err() != nil:
 			default:
-				streak++
+				streak.Failed()
 				r.noteFailure(*b, true)
 				r.log.Warn("community chapters: check failed", "library", b.LibraryID, "path", b.Path, "err", err)
 			}
@@ -246,9 +180,7 @@ func (r *Runner) pass(ctx context.Context) bool {
 			return false
 		}
 		if !more() {
-			mu.Lock()
-			defer mu.Unlock()
-			return streak >= maxFailStreak
+			return streak.AtLimit()
 		}
 	}
 }
@@ -345,8 +277,12 @@ func (r *Runner) release(ref catalog.Ref) {
 // check is one book's check (see Check), the book claimed; refit fits it again
 // even when the last check saw the same list for the same audio.
 func (r *Runner) check(ctx context.Context, ref catalog.Ref, refit bool) (*catalog.CommunityChapters, error) {
-	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
+	// Reserve the last fifth of the actual check deadline for placing the
+	// remaining boundaries and saving the fit, including after a slow lookup.
+	deadline, _ := ctx.Deadline()
+	probeDeadline := deadline.Add(-time.Until(deadline) / 5)
 
 	in, err := r.cat.ChapterInputs(ctx, ref.LibraryID, ref.Path)
 	if err != nil {
@@ -370,19 +306,16 @@ func (r *Runner) check(ctx context.Context, ref catalog.Ref, refit bool) (*catal
 		} else if !refit && prev != nil && prev.Basis == cc.Basis && prev.ListHash == cc.ListHash {
 			return prev, r.cat.TouchCommunityChapters(ctx, ref.LibraryID, ref.Path)
 		}
+		probeCtx, stopProbes := context.WithDeadline(ctx, probeDeadline)
+		defer stopProbes()
 		probe, err := r.prober(ctx, ref.LibraryID)
 		if err != nil {
 			return nil, err
 		}
 		if probe != nil {
-			// The pauses run on a budget of their own: a window past it fails, and
-			// chapteralign leaves it unsnapped, rather than the check's deadline
-			// failing the whole fit.
-			budget, cancelBudget := context.WithTimeout(ctx, probeBudget)
-			defer cancelBudget()
-			inner := probe
-			probe = func(_ context.Context, file string, from, to float64) ([]chapteralign.Silence, error) {
-				return inner(budget, file, from, to)
+			detect := probe
+			probe = func(_ context.Context, file string, windows []metadata.TimeRange) ([][]chapteralign.Silence, error) {
+				return detect(probeCtx, file, windows)
 			}
 		}
 		res, err := chapteralign.Align(ctx, catalog.AlignFiles(in.Files), in.Chapters, remotes(rc.Chapters), probe)
@@ -441,20 +374,12 @@ func (r *Runner) prober(ctx context.Context, libraryID int64) (chapteralign.Prob
 	if err != nil {
 		return nil, err
 	}
-	return func(ctx context.Context, file string, from, to float64) ([]chapteralign.Silence, error) {
-		abs, err := library.SafeJoin(lib.Root, file)
+	return func(ctx context.Context, file string, windows []metadata.TimeRange) ([][]chapteralign.Silence, error) {
+		abs, err := library.SafeJoinBounded(ctx, lib.Root, file, media.SilenceTimeout)
 		if err != nil {
 			return nil, err
 		}
-		pauses, err := media.DetectSilences(ctx, r.ffmpeg, lib.Root, abs, from, to)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]chapteralign.Silence, len(pauses))
-		for i, p := range pauses {
-			out[i] = chapteralign.Silence(p)
-		}
-		return out, nil
+		return media.DetectSilences(ctx, r.ffmpeg, lib.Root, abs, windows)
 	}, nil
 }
 

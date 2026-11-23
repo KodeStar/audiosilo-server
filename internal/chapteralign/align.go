@@ -40,12 +40,11 @@ type Remote struct {
 }
 
 // Silence is a pause in one file, in seconds from the file's start.
-type Silence struct{ Start, End float64 }
+type Silence = metadata.TimeRange
 
-// Prober finds the pauses in [from, to] of one file (seconds from the file's
-// start; file is a File.Path). A nil Prober (no ffmpeg) places boundaries by
-// proportion alone; a window it fails on is left unsnapped.
-type Prober func(ctx context.Context, file string, from, to float64) ([]Silence, error)
+// Prober finds pauses in a file, one list per window, all in file seconds.
+// A nil Prober or a failed read leaves the proportional placement in place.
+type Prober func(ctx context.Context, file string, windows []metadata.TimeRange) ([][]Silence, error)
 
 // Status is the outcome of a fit.
 type Status string
@@ -581,53 +580,76 @@ func (f *fit) place() {
 // pause near it, never past its neighbours. One that can't be snapped is
 // approximate when its stretch drifts.
 func (f *fit) snap(ctx context.Context, probe Prober) error {
-	for k := range f.remote {
-		r := &f.remote[k]
+	type candidate struct {
+		index   int
+		drift   float64
+		snapped bool
+	}
+	byFile := make([][]candidate, len(f.files))
+	for k, r := range f.remote {
 		if r.pin || r.t <= 0 || r.t >= f.total {
 			continue
 		}
 		_, drift := f.toLocal(r.m)
-		moved := false
-		if probe != nil {
-			w := min(snapWindow+drift, maxSnapWindow)
-			lo, hi := r.t-w, r.t+w
-			if k > 0 {
-				lo = max(lo, f.remote[k-1].t+minChapter)
-			}
-			if k+1 < len(f.remote) {
-				hi = min(hi, f.remote[k+1].t-minChapter)
-			}
-			fi := f.fileAt(r.t)
-			lo, hi = max(lo, f.cum[fi]), min(hi, f.cum[fi]+f.files[fi].Duration)
-			if hi > lo {
-				pauses, err := probe(ctx, f.files[fi].Path, lo-f.cum[fi], hi-f.cum[fi])
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if p, ok := longest(pauses); err == nil && ok {
-					r.t = f.cum[fi] + max(p.Start, p.End-leadIn)
-					moved = true
-					f.detail.Snapped++
-				}
-			}
+		fi := f.fileAt(r.t)
+		byFile[fi] = append(byFile[fi], candidate{index: k, drift: drift})
+	}
+	for fi, candidates := range byFile {
+		if probe == nil || len(candidates) == 0 {
+			continue
 		}
-		if !moved && drift > approxDrift {
-			f.detail.Approximate++
+		off := f.cum[fi]
+		windows := make([]metadata.TimeRange, len(candidates))
+		for i, c := range candidates {
+			t := f.remote[c.index].t - off
+			w := min(snapWindow+c.drift, maxSnapWindow)
+			windows[i] = metadata.TimeRange{Start: max(0, t-w), End: min(f.files[fi].Duration, t+w)}
+		}
+		pauses, err := probe(ctx, f.files[fi].Path, windows)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil || len(pauses) != len(windows) {
+			continue // not one answer a window: left unsnapped, as a failed read
+		}
+		for i := range candidates {
+			c := &candidates[i]
+			// Clip in playback order. The preceding boundary may itself
+			// have moved since these windows were read.
+			lo, hi := windows[i].Start, windows[i].End
+			if c.index > 0 {
+				lo = max(lo, f.remote[c.index-1].t-off+minChapter)
+			}
+			if c.index+1 < len(f.remote) {
+				hi = min(hi, f.remote[c.index+1].t-off-minChapter)
+			}
+			if p, ok := longest(pauses[i], lo, hi); ok {
+				f.remote[c.index].t = off + max(p.Start, p.End-leadIn)
+				c.snapped = true
+				f.detail.Snapped++
+			}
 		}
 	}
-	return nil
+	for _, candidates := range byFile {
+		for _, c := range candidates {
+			if !c.snapped && c.drift > approxDrift {
+				f.detail.Approximate++
+			}
+		}
+	}
+	return ctx.Err()
 }
 
-// longest is the longest pause of at least minPause.
-func longest(pauses []Silence) (Silence, bool) {
+// longest is the longest pause of at least minPause inside [lo, hi].
+func longest(pauses []Silence, lo, hi float64) (Silence, bool) {
 	var best Silence
-	ok := false
 	for _, p := range pauses {
-		if d := p.End - p.Start; d >= minPause && (!ok || d > best.End-best.Start) {
-			best, ok = p, true
+		p.Start, p.End = max(lo, p.Start), min(hi, p.End)
+		if d := p.End - p.Start; d >= minPause && d > best.End-best.Start {
+			best = p
 		}
 	}
-	return best, ok
+	return best, best.End > best.Start
 }
 
 // fileAt is the file playing at book time t.

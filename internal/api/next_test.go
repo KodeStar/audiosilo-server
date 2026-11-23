@@ -144,6 +144,12 @@ func TestMetaLocalPerCaller(t *testing.T) {
 	t.Parallel()
 	e := newSagaEnv(t, true, sagaBooks()...)
 
+	// Leave the indexed key intact and give the display name a different
+	// spelling that would fold to another key if the handler recomputed it.
+	if _, err := e.db.ExecContext(t.Context(), `UPDATE books SET series = 'display only' WHERE rel_path = 'Saga/3'`); err != nil {
+		t.Fatal(err)
+	}
+
 	// Allowed: the admin owns every entry; Saga/3 is found under its folded
 	// series name, by its index.
 	want := map[string]string{"one": "Saga/1", "two": "Saga/2", "three": "Saga/3", "four": "Private/4"}

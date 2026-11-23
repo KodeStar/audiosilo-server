@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
+	"time"
 )
 
 // The /meta "bundle": what GET /libraries/{id}/meta adds to the cached
@@ -21,6 +21,24 @@ import (
 // listener catching up on a long series without the bundle growing into the
 // whole series' cast lists; older books are a /meta/work call away.
 const maxPrevious = 5
+
+// previousTimeout is how long a /meta waits for its previous works. A lookup
+// still running then goes on, to at most composeTimeout, so it is cached for
+// the next request rather than asked and dropped on every one.
+const previousTimeout = 5 * time.Second
+
+// maxPreviousFlights bounds the previous works' lookups that may run on past
+// their /meta at once, across every request (one a work, however many /meta
+// wait on it). A lookup past the bound runs under its request alone and ends
+// with it, as a /meta/work's does.
+const maxPreviousFlights = 16
+
+// previousFlight is one previous work's lookup (Work) running on the server's
+// lifetime, shared by every /meta asking for that work meanwhile.
+type previousFlight struct {
+	done chan struct{} // closed once work is set
+	work *MetaWork
+}
 
 // previousWorkIDs returns the work ids before the envelope's work, nearest
 // first, at most maxPrevious. They come from each rail's MAIN view only (never
@@ -89,9 +107,11 @@ func parsePosition(s string) (float64, bool) {
 // Previous fetches the works previousWorkIDs names, in that order, each through
 // Work - so each is cached (and persisted) on its own and an uncached one waits
 // on the same workSem bound as any /meta/work call. They are fetched
-// concurrently under the caller's ctx. A work that fails (not found, upstream
-// down) is left out: the previous books are an extra, and the envelope they ride
-// on must not fail with them. nil when there are none.
+// concurrently, and the works in within five seconds are returned; a lookup
+// still running goes on without the caller (previousTimeout, previousLookup).
+// A work that fails (not found, upstream down) or is not in yet is left out:
+// the previous books are an extra, and the envelope they ride on must not fail
+// with them. nil when there are none.
 //
 // The returned works are shared with the cache - treat them as immutable.
 func (s *Service) Previous(ctx context.Context, env *Enrichment) []*MetaWork {
@@ -99,24 +119,60 @@ func (s *Service) Previous(ctx context.Context, env *Enrichment) []*MetaWork {
 	if len(ids) == 0 {
 		return nil
 	}
-	works := make([]*MetaWork, len(ids))
-	var wg sync.WaitGroup
+	flights := make([]*previousFlight, len(ids))
 	for i, id := range ids {
-		wg.Go(func() {
-			// Each goroutine owns its own index.
-			if w, err := s.Work(ctx, id); err == nil {
-				works[i] = w
-			}
-		})
+		flights[i] = s.previousLookup(ctx, id)
 	}
-	wg.Wait()
+	wait, cancel := withBudget(ctx, s.previousBudget)
+	defer cancel()
 	var out []*MetaWork
-	for _, w := range works {
-		if w != nil {
-			out = append(out, w)
+	for _, f := range flights {
+		select {
+		case <-f.done:
+		case <-wait.Done():
+		}
+		// An answer in by the budget's end counts, whichever case select picked.
+		select {
+		case <-f.done:
+			if f.work != nil {
+				out = append(out, f.work)
+			}
+		default:
 		}
 	}
 	return out
+}
+
+// previousLookup is the lookup of previous work id for a /meta (ctx): the one
+// already running for it, else a new one, within composeTimeout. It runs on
+// the server's lifetime (s.base), not ctx, so a lookup the /meta stops waiting
+// for is still cached for the next request, and ends when the server stops.
+// Past maxPreviousFlights of those a new one runs under ctx, unshared.
+func (s *Service) previousLookup(ctx context.Context, id string) *previousFlight {
+	s.flightMu.Lock()
+	defer s.flightMu.Unlock()
+	if f := s.previousFlights[id]; f != nil {
+		return f
+	}
+	f := &previousFlight{done: make(chan struct{})}
+	base, shared := s.base, len(s.previousFlights) < maxPreviousFlights
+	if shared {
+		s.previousFlights[id] = f
+	} else {
+		base = ctx
+	}
+	go func() {
+		lctx, cancel := withBudget(base, composeTimeout)
+		defer cancel()
+		f.work, _ = s.Work(lctx, id)
+		if shared {
+			s.flightMu.Lock()
+			delete(s.previousFlights, id)
+			s.flightMu.Unlock()
+		}
+		close(f.done)
+	}()
+	return f
 }
 
 // ChapterAt is the 1-based number of the chapter holding position, given each

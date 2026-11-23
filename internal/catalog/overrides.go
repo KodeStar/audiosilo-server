@@ -699,6 +699,12 @@ func pathFields(m *metadata.Metadata) bookFields {
 // (setEnrichmentTx) and every edit call it, so the books row can never disagree
 // with what the durable tables say.
 func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
+	return refreshBook(ctx, tx, bookID, nil)
+}
+
+// refreshBook applies the effective metadata and chapter source. A scan supplies
+// its new file chapters in memory so only the selected list is written.
+func refreshBook(ctx context.Context, tx *sql.Tx, bookID int64, scan *Book) error {
 	l, err := loadLayers(ctx, tx, bookID)
 	if err != nil {
 		return err
@@ -731,21 +737,18 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 		return err
 	}
 
-	if err := applyChapterSource(ctx, tx, bookID, l.libID, l.path); err != nil {
+	if err := applyChapterSource(ctx, tx, bookID, l.libID, l.path, scan); err != nil {
 		return err
 	}
+	// A rename applies to a chapter at the same file and start, unless an
+	// edited list supplies its own titles. Write only titles that changed.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE chapters SET title = scanned_title WHERE book_id = ? AND title <> scanned_title`, bookID); err != nil {
-		return err
-	}
-	// The renames, unless an admin's own list stands in (its titles are its
-	// own: the renames are dormant until it is reverted).
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE chapters SET title = (SELECT co.title FROM chapter_overrides co
-		     WHERE co.library_id = ?1 AND co.path = ?2 AND `+chapterOverrideMatch+`)
-		 WHERE book_id = ?3 AND (SELECT chapters_source FROM books WHERE id = ?3) <> '`+ChaptersFromEdited+`'
-		   AND EXISTS(SELECT 1 FROM chapter_overrides co
-		     WHERE co.library_id = ?1 AND co.path = ?2 AND `+chapterOverrideMatch+`)`,
+		`UPDATE chapters AS target SET title = COALESCE(co.title, chapters.scanned_title)
+		   FROM chapters LEFT JOIN chapter_overrides co
+		     ON co.library_id = +?1 AND co.path = +?2 AND `+chapterOverrideMatch+`
+		    AND (SELECT chapters_source FROM books WHERE id = ?3) <> '`+ChaptersFromEdited+`'
+		  WHERE chapters.book_id = ?3 AND target.id = chapters.id
+		    AND target.title <> COALESCE(co.title, chapters.scanned_title)`,
 		l.libID, l.path, bookID); err != nil {
 		return err
 	}

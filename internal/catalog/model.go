@@ -78,6 +78,7 @@ type Book struct {
 	Title       string              `json:"title"`
 	Author      string              `json:"author"`
 	Series      string              `json:"series"`
+	SeriesKey   string              `json:"-"` // stored main series key for placement on community rails
 	SeriesIndex float64             `json:"series_index"`
 	// SeriesIndexEnd is the end of a main series position that is a range (an
 	// omnibus of books 1-3: SeriesIndex 1, SeriesIndexEnd 3); 0, and omitted,

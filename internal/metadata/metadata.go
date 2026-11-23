@@ -29,6 +29,9 @@ import (
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
+// TimeRange is an interval in seconds on an audio file's timeline.
+type TimeRange struct{ Start, End float64 }
+
 // Chapter is one playable unit, normalized so a client can treat embedded m4b
 // chapters and separate multi-file parts identically:
 //

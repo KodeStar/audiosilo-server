@@ -46,11 +46,12 @@ func metaMirror(cfg *config.Config, dataDir string, enabled func() bool, src rel
 		rel = append(rel, release.WithAPIBase(src.apiBase))
 	}
 	m, err := metamirror.New(metamirror.Dir(dataDir), metamirror.Options{
-		Enabled: enabled,
-		Logger:  log,
-		SiteURL: cfg.Metadata.BaseURL,
-		Repo:    src.repo,
-		Release: rel,
+		Interval: cfg.Metadata.MirrorSettings.Interval,
+		Enabled:  enabled,
+		Logger:   log,
+		SiteURL:  cfg.Metadata.BaseURL,
+		Repo:     src.repo,
+		Release:  rel,
 	})
 	if err != nil {
 		log.Error("metadata mirror: can't prepare the local copy; lookups go to the metadata service", "err", err)
