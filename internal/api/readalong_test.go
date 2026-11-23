@@ -446,6 +446,11 @@ func digestCurrent(t *testing.T, cat *catalog.Catalog, libID int64, rel string) 
 func TestReadalongOnAHeldShareAnswers(t *testing.T) {
 	e := newReadalongEnv(t)
 	e.api.fileWait = 200 * time.Millisecond
+	first, _ := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, "")
+	etag := first.Header.Get("ETag")
+	if first.StatusCode != http.StatusOK || etag == "" {
+		t.Fatalf("GET readalong = %d ETag %q", first.StatusCode, etag)
+	}
 	release := metadata.HoldOpensForTests(filepath.Join(e.root, filepath.FromSlash(ebookBook)))
 	t.Cleanup(release)
 	start := time.Now()
@@ -455,6 +460,16 @@ func TestReadalongOnAHeldShareAnswers(t *testing.T) {
 	}
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("GET readalong took %v, want it answered once the read is given up on", took)
+	}
+	// A revalidation is answered from the look at the map given up on
+	// (readalongUnchanged), not by a second wait for the full answer's read.
+	start = time.Now()
+	resp, body = e.doHeaders(t, "GET", e.at("readalong", ebookBook), e.annTok, "", map[string]string{"If-None-Match": etag})
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) {
+		t.Errorf("revalidating readalong on a held share = %d %s, want 503 %s", resp.StatusCode, body, codeShareNotAnswering)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("revalidating readalong took %v, want it answered once the look is given up on", took)
 	}
 	release()
 	e.api.fileWait = 10 * time.Second

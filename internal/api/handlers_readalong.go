@@ -149,7 +149,10 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 // signature) and that head still holds against the ebook (its digest, read
 // from the index while the file is unchanged) and the audio. Anything else
 // (no If-None-Match, a changed map, one the index hasn't read, a look that
-// failed) is left to the full answer, which reads and checks the file itself.
+// failed) is left to the full answer, which reads and checks the file itself;
+// but a look at the map given up on (fileWait: a share that stopped answering)
+// is answered 503 share_not_answering here, as the full answer's read of the
+// same file would only wait it out a second time.
 func (a *API) readalongUnchanged(w http.ResponseWriter, r *http.Request, lib *catalog.Library, book *catalog.Book, gzip bool) bool {
 	inm := r.Header.Get("If-None-Match")
 	if inm == "" {
@@ -164,6 +167,10 @@ func (a *API) readalongUnchanged(w http.ResponseWriter, r *http.Request, lib *ca
 	info, err := metadata.LookBounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(book.RelPath)), a.fileWait, func() (fs.FileInfo, error) {
 		return library.StatReadalongMap(*lib, book.RelPath, book.IsFolder)
 	})
+	if metadata.GaveUp(err) {
+		writeShareNotAnswering(w)
+		return true
+	}
 	if err != nil {
 		return false
 	}
