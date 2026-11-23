@@ -73,4 +73,9 @@ func TestMigration0094CoverColorArt(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkDue("stale palette", "unread", "no identity")
+	// A cleared colour is no reading: the book is due again.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET cover_color = '' WHERE rel_path = 'palette'`); err != nil {
+		t.Fatal(err)
+	}
+	checkDue("palette", "stale palette", "unread", "no identity")
 }

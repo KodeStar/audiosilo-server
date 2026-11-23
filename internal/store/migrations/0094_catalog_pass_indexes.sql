@@ -10,10 +10,13 @@ CREATE INDEX idx_books_cover_color_due ON books(id) WHERE cover_color_art IS NOT
 
 -- Older servers also write cover_art and cover_color together when they read
 -- a thumbnail. Keep their writes usable when the newer server runs again.
+-- A cleared colour is no reading, so a write of '' puts the book back in the
+-- colour pass rather than marking its art read.
 CREATE TRIGGER books_legacy_cover_color AFTER UPDATE OF cover_color ON books
-WHEN NEW.cover_color_art IS NOT NULLIF(NEW.cover_art, '')
+WHEN NEW.cover_color_art IS NOT (CASE WHEN NEW.cover_color = '' THEN NULL ELSE NULLIF(NEW.cover_art, '') END)
 BEGIN
-    UPDATE books SET cover_color_art = NULLIF(NEW.cover_art, '') WHERE id = NEW.id;
+    UPDATE books SET cover_color_art = CASE WHEN NEW.cover_color = '' THEN NULL ELSE NULLIF(NEW.cover_art, '') END
+     WHERE id = NEW.id;
 END;
 
 -- Names with FTS tokens already use books_fts. For other names, check only
