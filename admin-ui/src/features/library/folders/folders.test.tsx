@@ -170,7 +170,12 @@ describe('folders', () => {
       size: 1_000_000,
       duration: 60,
     }));
-    const calls = mockFetch(routes({ 'GET /libraries/1/fs': pagedFolder(dir('Huge'), files) }));
+    const calls = mockFetch(
+      routes({
+        'GET /libraries/1/fs': pagedFolder(dir('Huge'), files),
+        'PUT /admin/libraries/1/folder-override': { body: { status: 'override set' } },
+      }),
+    );
     renderApp('/library/folders?library=1&folder=Huge');
     const card = await screen.findByRole('region', { name: 'Audio files in this folder' });
     expect(within(card).getByText(/10,000 files · 10 GB/)).toBeInTheDocument();
@@ -184,6 +189,9 @@ describe('folders', () => {
       .filter((r) => r.query.get('path') === 'Huge')
       .map((r) => Number(r.query.get('offset') ?? 0));
     expect(Math.max(...offsets)).toBe(9_500);
+    // And so is the toast's.
+    await userEvent.setup().click(screen.getByRole('radio', { name: /Separate books/ }));
+    expect(await screen.findByText('Split into at least 10,000 books')).toBeInTheDocument();
   });
 
   it('counts the disc folders of a very large disc set as at least its first 10,000', async () => {

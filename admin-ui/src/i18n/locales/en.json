@@ -1337,6 +1337,8 @@
   "folders.toast.book": "Pinned as one book",
   "folders.toast.collection_one": "Split into {{formatted}} book",
   "folders.toast.collection_other": "Split into {{formatted}} books",
+  "folders.toast.collectionAtLeast_one": "Split into at least {{formatted}} book",
+  "folders.toast.collectionAtLeast_other": "Split into at least {{formatted}} books",
   "folders.toast.body": "Rescanning {{library}}. Listening progress moves with each file.",
   "folders.toast.joinBody": "Rescanning {{library}}. Listening progress on its disc folders carries over to the one book.",
   "folders.toast.unjoinBody": "Rescanning {{library}}. Each disc folder is its own book again; progress on the one book is kept for it, not split back.",

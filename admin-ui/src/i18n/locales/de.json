@@ -1337,6 +1337,8 @@
   "folders.toast.book": "Als ein Buch festgelegt",
   "folders.toast.collection_one": "In {{formatted}} Buch aufgeteilt",
   "folders.toast.collection_other": "In {{formatted}} Bücher aufgeteilt",
+  "folders.toast.collectionAtLeast_one": "In mindestens {{formatted}} Buch aufgeteilt",
+  "folders.toast.collectionAtLeast_other": "In mindestens {{formatted}} Bücher aufgeteilt",
   "folders.toast.body": "{{library}} wird neu gescannt. Der Hörfortschritt wandert mit jeder Datei mit.",
   "folders.toast.joinBody": "{{library}} wird neu gescannt. Der Hörfortschritt in den CD-Ordnern geht auf das eine Buch über.",
   "folders.toast.unjoinBody": "{{library}} wird neu gescannt. Jeder CD-Ordner ist wieder ein eigenes Buch; der Fortschritt im einen Buch bleibt dort gespeichert und wird nicht zurück aufgeteilt.",

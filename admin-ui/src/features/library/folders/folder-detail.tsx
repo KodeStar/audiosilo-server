@@ -176,7 +176,7 @@ function Detail({
     try {
       await setFolderMode(qc, library.id, entry.path, modeOf(choice));
       toast.add({
-        title: t(`folders.toast.${choice}`, fileCount),
+        title: t(`folders.toast.${choice}${choice === 'collection' ? atLeast : ''}`, fileCount),
         description: t(toastBody(join.joinable, choice, entry.override), { library: library.name }),
         type: 'success',
       });
