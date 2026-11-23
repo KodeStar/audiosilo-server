@@ -161,21 +161,22 @@ func (c *Catalog) RailPositions(ctx context.Context, books []Book) (map[int64][]
 			extra = append(extra, b.ID)
 		}
 	}
-	for ids := range slices.Chunk(extra, 500) {
-		type membership struct {
-			bookID int64
-			SeriesPosition
-		}
+	type membership struct {
+		bookID int64
+		SeriesPosition
+	}
+	err := inChunks(extra, func(in string, args []any) error {
 		rows, err := queryRows(ctx, c.db, func(r *sql.Rows, m *membership) error {
 			return r.Scan(&m.bookID, &m.Key, &m.Start, &m.End)
 		}, `SELECT book_id, series_key, position, position_end FROM book_more_series
-		      WHERE book_id IN (`+placeholders(len(ids))+`) AND position > 0`, anyOf(ids)...)
-		if err != nil {
-			return nil, err
-		}
+		      WHERE book_id IN (`+in+`) AND position > 0`, args...)
 		for _, m := range rows {
 			out[m.bookID] = append(out[m.bookID], m.SeriesPosition)
 		}
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }

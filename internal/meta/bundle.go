@@ -101,7 +101,7 @@ func (s *Service) Previous(ctx context.Context, env *Enrichment) []*MetaWork {
 	if len(ids) == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.previousBudget)
+	ctx, cancel := withBudget(ctx, s.previousBudget)
 	defer cancel()
 	type result struct {
 		index int
