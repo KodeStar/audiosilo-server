@@ -346,9 +346,8 @@ func TestCoverColorsDue(t *testing.T) {
 	if cc, _ := coverState(t, c, lib.ID, "artless.m4b"); cc != nil {
 		t.Fatalf("artless book colour = %+v, want none", cc)
 	}
-	// Read, but not coloured: a thumbnail that does decode still records its colour.
-	if src := coverSource(t, c, lib.ID, "artless.m4b"); src.Colored || !src.ColorRead {
-		t.Fatalf("artless cover source = %+v, want read and not coloured", src)
+	if src := coverSource(t, c, lib.ID, "artless.m4b"); src.Colored {
+		t.Fatalf("artless cover source = %+v, want not coloured", src)
 	}
 
 	var got []string

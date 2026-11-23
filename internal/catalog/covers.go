@@ -279,13 +279,9 @@ type CoverSource struct {
 	// Art is the book's cover art identity (books.cover_art), what a colour read
 	// from a thumbnail is recorded against (CoverColorRecord); Colored is whether
 	// the book holds a colour for that identity already (a thumbnail also checks
-	// the identity is still its art's version). ColorRead is whether anything was
-	// read for it: a colour, or a record that the art has none, which a thumbnail
-	// that does decode still replaces (the background pass's read may have hit a
-	// passing read failure).
-	Art       string
-	Colored   bool
-	ColorRead bool
+	// the identity is still its art's version).
+	Art     string
+	Colored bool
 }
 
 // ArtFiles is the book's own art (no custom cover) as a CoverSource: its sidecar
@@ -332,8 +328,7 @@ func (c *Catalog) CoverSources(ctx context.Context, libraryID int64, paths []str
 		if err := rows.Scan(&path, &src.CustomAt, &src.CoverPath, &src.AudioPath, &src.Art, &color); err != nil {
 			return nil, err
 		}
-		var cc *CoverColor
-		cc, src.ColorRead = storedCoverColor(src.Art, color)
+		cc, _ := storedCoverColor(src.Art, color)
 		src.Colored = cc != nil
 		out[path] = src
 	}
@@ -384,6 +379,8 @@ func (c *Catalog) RecordCoverColors(ctx context.Context, recs []CoverColorRecord
 	return c.db.WithTx(ctx, "RecordCoverColors", func(tx *sql.Tx) error {
 		for _, r := range recs {
 			art := cmp.Or(r.Version, r.Art)
+			// Setting cover_color_art here, not leaving it to 0094's trigger for
+			// older writers, keeps the trigger's WHEN false: no nested UPDATE.
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE books SET cover_art = ?1, cover_color = ?2, cover_color_art = NULLIF(?1, '')
 				  WHERE library_id = ?3 AND rel_path = ?4 AND cover_art = ?5`,
