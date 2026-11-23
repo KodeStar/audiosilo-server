@@ -1,11 +1,12 @@
 import { Button as ButtonPrimitive } from '@base-ui/react/button';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
+import { focusRing } from './focus-ring';
 
 // Shelf button (STYLEGUIDE.md section 8): ink `default`, pink `brand` only for the
 // one key confirm on a view, hairline `outline`. Labels are verb + object.
 const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-[7px] rounded-md border border-transparent text-[13.5px] font-semibold whitespace-nowrap transition-[background-color,border-color,color,transform] duration-(--dur-1) outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background select-none active:translate-y-px disabled:pointer-events-none disabled:opacity-45 aria-disabled:pointer-events-none aria-disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  `${focusRing} inline-flex shrink-0 items-center justify-center gap-[7px] rounded-md border border-transparent text-[13.5px] font-semibold whitespace-nowrap transition-[background-color,border-color,color,transform] duration-(--dur-1) select-none active:translate-y-px disabled:pointer-events-none disabled:opacity-45 aria-disabled:pointer-events-none aria-disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4`,
   {
     variants: {
       variant: {
