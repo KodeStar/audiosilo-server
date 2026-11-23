@@ -184,14 +184,14 @@ func TestHouseListeningDiscPathNamesTheBook(t *testing.T) {
 		t.Fatalf("house = %+v, want sam's row", rows)
 	}
 	r := rows[0]
-	if r.Path != "Joined/Book/CD1" || r.Title != "The Joined Book" || r.Author == nil || *r.Author != "Jo Author" ||
+	if r.CoverUnavailable || r.Path != "Joined/Book/CD1" || r.Title != "The Joined Book" || r.Author == nil || *r.Author != "Jo Author" ||
 		r.Chapter != nil || r.ChapterIndex != nil {
 		t.Fatalf("disc-path row = %+v, want the joined book's title and author, no chapter", r)
 	}
 	// Denied: a caller granted the disc folder alone sees the row, but not the
 	// title of the book above their grant: the path names it.
 	rows = f.house(t, me, []Scope{{LibraryID: f.lib, Paths: []string{"Joined/Book/CD1"}}})
-	if len(rows) != 1 || rows[0].Title != "CD1" || rows[0].Author != nil {
+	if len(rows) != 1 || !rows[0].CoverUnavailable || rows[0].Title != "CD1" || rows[0].Author != nil {
 		t.Fatalf("disc-path row for a disc-only grant = %+v, want it named by its path alone", rows)
 	}
 }

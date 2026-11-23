@@ -15,7 +15,7 @@ import { errorMessage } from '@/lib/errors';
 import { counted } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { chunk } from '@/lib/utils';
-import { isLibraryGrant } from '@/features/people/people-model';
+import { shareLabel, isLibraryGrant } from '@/features/people/people-model';
 
 /**
  * Adds books to a named share (the Books selection, or the book page's one
@@ -100,7 +100,7 @@ function AddToShareForm({
         await api.addSharePaths(share.id, rules);
       }
       toast.add({
-        title: t('books.share.done', { name: share.name }),
+        title: t('books.share.done', { name: shareLabel(share, [], t) }),
         description: t('books.share.doneBody', counted(books.length, lang)),
         type: 'success',
       });
@@ -155,7 +155,7 @@ function AddToShareForm({
             onValueChange={setPicked}
             options={named.map((s) => ({
               value: String(s.id),
-              title: s.name,
+              title: shareLabel(s, [], t),
               description: alreadyIn?.has(s.id)
                 ? t('books.share.already')
                 : [

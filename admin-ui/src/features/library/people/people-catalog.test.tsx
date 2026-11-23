@@ -79,6 +79,36 @@ describe('authors', () => {
     expect(router.state.location.search).toEqual({ author: 'Martha Wells' });
   });
 
+  it('never sends an unknown id from a cold link', async () => {
+    const calls = mockFetch(routes());
+    renderApp('/library/authors?library=999');
+    await screen.findByRole('list', { name: 'Authors' });
+    expect(calls.some((c) => c.query.get('library_id') === '999')).toBe(false);
+  });
+
+  it('recovers when the selected library has been deleted since the library list loaded', async () => {
+    let removed = false;
+    const calls = mockFetch(
+      routes({
+        'GET /admin/libraries': () => ({
+          body: { libraries: removed ? libraries().slice(0, 1) : libraries() },
+        }),
+        'GET /admin/authors': (req) => {
+          if (req.query.get('library_id') !== '2') return { body: authors };
+          removed = true;
+          return { status: 404, body: { code: 'not_found', error: 'library not found' } };
+        },
+      }),
+    );
+    renderApp('/library/authors?library=2');
+    await waitFor(() => expect(removed).toBe(true));
+    await waitFor(() =>
+      expect(calls.filter((r) => r.path === '/admin/libraries').length).toBeGreaterThan(1),
+    );
+    await screen.findByRole('list', { name: 'Authors' });
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
   it('filters by library', async () => {
     const calls = mockFetch(routes());
     const { router } = renderApp('/library/authors');

@@ -39,7 +39,17 @@ function fiction(override?: FolderMode) {
     const path = req.query.get('path') ?? '';
     const entries = fs[path];
     return entries
-      ? { body: { path, entries, total: entries.length, offset: 0 } }
+      ? {
+          body: {
+            path,
+            folder: Object.values(fs)
+              .flat()
+              .find((f) => f.path === path),
+            entries,
+            total: entries.length,
+            offset: 0,
+          },
+        }
       : { status: 404, body: { error: 'not found' } };
   };
 }
@@ -79,11 +89,59 @@ describe('folders', () => {
 
     await userEvent.setup().click(within(tree).getByRole('button', { name: 'Show more' }));
     expect(await within(tree).findByRole('treeitem', { name: 'F619' })).toBeInTheDocument();
+    expect(within(tree).getByRole('treeitem', { name: 'F500' })).toHaveFocus();
     expect(within(tree).getAllByRole('treeitem')).toHaveLength(620);
     expect(within(tree).queryByRole('button', { name: 'Show more' })).toBeNull();
     expect(
       calls.filter((c) => c.path === '/libraries/1/fs').map((c) => c.query.get('offset')),
     ).toEqual([null, '500']);
+  });
+
+  it('opens a folder beyond the first 500 siblings and counts all 600 of its files', async () => {
+    const files = Array.from({ length: 600 }, (_, i) => ({
+      ...audio(`Late/Part ${i + 1}.mp3`),
+      size: 1_000_000,
+      duration: 60,
+    }));
+    const calls = mockFetch(
+      routes({
+        'GET /libraries/1/fs': ({ query }) => {
+          if (!query.get('path')) {
+            return {
+              body: {
+                path: '',
+                entries: Array.from({ length: 500 }, (_, i) => dir(`A${i}`)),
+                total: 501,
+                offset: 0,
+                next_offset: 500,
+              },
+            };
+          }
+          const offset = Number(query.get('offset'));
+          return {
+            body: {
+              path: 'Late',
+              folder: dir('Late'),
+              entries: files.slice(offset, offset + 500),
+              total: 600,
+              offset,
+              next_offset: offset ? undefined : 500,
+            },
+          };
+        },
+      }),
+    );
+    renderApp('/library/folders?library=1&folder=Late');
+    const heading = await screen.findByRole('heading', { name: 'Late' });
+    expect(heading).toBeInTheDocument();
+    const card = await screen.findByRole('region', { name: 'Audio files in this folder' });
+    expect(within(card).getByText(/600 files · 600 MB · 10h/)).toBeInTheDocument();
+    expect(within(card).getByText('Showing the first 500 audio files.')).toBeInTheDocument();
+    expect(within(card).getAllByRole('listitem')).toHaveLength(500);
+    expect(within(card).queryByText('Part 501.mp3')).toBeNull();
+    expect(calls.filter((r) => r.query.get('path') === '' && r.query.has('offset'))).toHaveLength(
+      0,
+    );
   });
 
   it('Show more asks for the next page after a refresh of the first one failed', async () => {
@@ -119,8 +177,10 @@ describe('folders', () => {
     await within(tree).findByText('500 of 620 items listed');
 
     down = true;
-    await act(() => queryClient.refetchQueries({ queryKey: keys.browse(1, 'Big'), exact: true }));
-    expect(queryClient.getQueryState(keys.browse(1, 'Big'))?.status).toBe('error');
+    await act(() =>
+      queryClient.refetchQueries({ queryKey: keys.folderDetail(1, 'Big'), exact: true }),
+    );
+    expect(queryClient.getQueryState(keys.folderDetail(1, 'Big'))?.status).toBe('error');
     await user.click(within(tree).getByRole('button', { name: 'Show more' }));
     expect(await within(tree).findByRole('treeitem', { name: 'F619' })).toBeInTheDocument();
   });
@@ -170,7 +230,17 @@ describe('folders', () => {
             ],
           };
           const entries = fs[path] ?? [];
-          return { body: { path, entries, total: entries.length, offset: 0 } };
+          return {
+            body: {
+              path,
+              folder: Object.values(fs)
+                .flat()
+                .find((f) => f.path === path),
+              entries,
+              total: entries.length,
+              offset: 0,
+            },
+          };
         },
         'PUT /admin/libraries/1/folder-override': (req) => {
           override = (req.body as { mode: FolderMode }).mode;
@@ -263,7 +333,17 @@ describe('folders', () => {
       };
       const entries = fs[path];
       return entries
-        ? { body: { path, entries, total: entries.length, offset: 0 } }
+        ? {
+            body: {
+              path,
+              folder: Object.values(fs)
+                .flat()
+                .find((f) => f.path === path),
+              entries,
+              total: entries.length,
+              offset: 0,
+            },
+          }
         : { status: 404, body: { error: 'not found' } };
     };
     const calls = mockFetch(

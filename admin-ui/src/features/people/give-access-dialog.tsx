@@ -11,7 +11,13 @@ import { errorMessage } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { grantAccess } from './grant-access';
-import { accessValue, isLibraryGrant, parseAccessChoice, wholeLibraryOf } from './people-model';
+import {
+  accessValue,
+  shareLabel,
+  isLibraryGrant,
+  parseAccessChoice,
+  wholeLibraryOf,
+} from './people-model';
 
 /** Give a person a whole library or a share they don't have yet. */
 export function GiveAccessDialog({
@@ -80,7 +86,7 @@ function GiveAccessForm({
       .filter((s) => !isLibraryGrant(s) && !grantedIds.has(s.id))
       .map((s) => ({
         value: accessValue({ kind: 'share', id: s.id }),
-        title: s.name,
+        title: shareLabel(s, [], t),
         description: t('invite.access.shareBody', { count: s.paths?.length ?? 0 }),
       })),
   ];

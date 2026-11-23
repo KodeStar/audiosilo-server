@@ -18,6 +18,7 @@ import {
  */
 export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<string, MockRoute> {
   return {
+    'GET /addresses': { body: {} },
     'GET /server': { body: serverInfo },
     'GET /me': { body: admin },
     'GET /admin/stats': { body: stats() },

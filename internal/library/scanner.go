@@ -2762,6 +2762,17 @@ func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relP
 func (s *Scanner) ReindexPath(ctx context.Context, lib catalog.Library, relPath string) (*catalog.Book, error) {
 	book, err := s.resolveAsked(ctx, lib, relPath, nil)
 	if err != nil {
+		// A read can time out before discovery reaches the audio. Preserve the
+		// indexed book and give Health a problem to recheck after the share returns.
+		if metadata.GaveUp(err) {
+			detail := tagsUnreadDetail
+			if errors.Is(err, metadata.ErrReadRefused) {
+				detail = readRefusedDetail
+			}
+			if saveErr := s.cat.NoteUnreadablePath(ctx, lib, relPath, detail); saveErr != nil {
+				s.log.Warn("record re-read problem failed", "library", lib.Name, "path", relPath, "err", saveErr)
+			}
+		}
 		return nil, err
 	}
 	return s.readOwn(ctx, lib, book, func(ctx context.Context) (string, error) { return s.movedFrom(ctx, lib, book) })

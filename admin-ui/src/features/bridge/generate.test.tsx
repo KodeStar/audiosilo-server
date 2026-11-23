@@ -4,7 +4,7 @@ import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type { BridgeEstimate, BridgeJob, BridgeStatus } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
-import { serverInfo } from '@/test/fixtures';
+import { libraries, serverInfo } from '@/test/fixtures';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -99,6 +99,29 @@ beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('generate characters and recaps', () => {
+  it('waits for the library kind and skips estimates and chapter editing for an episode', async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const calls = mockFetch(
+      routes({
+        'GET /admin/libraries': async () => {
+          await pending;
+          return { body: { libraries: libraries([{ id: 1, kind: 'podcasts' }]) } };
+        },
+      }),
+    );
+    const { queryClient } = renderApp(URL);
+    await screen.findByRole('heading', { name: 'Chapters' });
+    expect(screen.queryByRole('button', { name: 'Edit chapters' })).toBeNull();
+    expect(estimates(calls, true)).toHaveLength(0);
+    await act(async () => finish());
+    await waitFor(() => expect(queryClient.getQueryState(keys.libraries)?.status).toBe('success'));
+    expect(screen.queryByRole('button', { name: 'Edit chapters' })).toBeNull();
+    expect(estimates(calls, true)).toHaveLength(0);
+  });
+
   it('stays hidden without an online Bridge offering it, and asks nothing', async () => {
     const calls = mockFetch(routes({ 'GET /server': { body: serverInfo } }));
     renderApp(URL);

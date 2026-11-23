@@ -271,6 +271,24 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 // again, and the whole book once that file reads.
 const ProblemUnreadable = "unreadable"
 
+// NoteUnreadablePath records an explicit re-read that failed before its book
+// could be resolved. Only update an existing book at that path in the same
+// library root. Keep a more specific problem from an earlier read.
+func (c *Catalog) NoteUnreadablePath(ctx context.Context, lib Library, relPath, detail string) error {
+	res, err := c.db.ExecContext(ctx, `UPDATE books SET scan_error = ?, scan_error_file = rel_path, scan_error_detail = ?
+      WHERE library_id = ? AND rel_path = ? AND scan_error = ''
+        AND EXISTS (SELECT 1 FROM libraries WHERE id = books.library_id AND root = ?)`,
+		ProblemUnreadable, detail, lib.ID, relPath, lib.Root)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if n > 0 {
+		c.changed()
+	}
+	return err
+}
+
 // recordReadProblem records b's read problem (ScanError, ScanErrorFile,
 // ScanErrorDetail) on the stored row at b's path and nothing else: every field
 // a scan wrote (names, duration, codec, chapters, cover flag, mtime and size,

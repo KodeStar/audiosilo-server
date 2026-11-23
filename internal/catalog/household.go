@@ -45,18 +45,20 @@ const HouseRecent = "recent"
 // title names nothing, where ChapterIndex still says which; a book with one
 // chapter has neither). UpdatedAt is the newest save, fixed-width millisecond UTC.
 type HouseListeningRow struct {
-	UserID       int64    `json:"user_id"`
-	Username     string   `json:"username"`
-	LibraryID    int64    `json:"library_id"`
-	Path         string   `json:"path"`
-	Title        string   `json:"title"`
-	Author       *string  `json:"author"`
-	State        string   `json:"state"`
-	Position     float64  `json:"position"`
-	Duration     *float64 `json:"duration"`
-	Chapter      *string  `json:"chapter"`
-	ChapterIndex *int     `json:"chapter_index"`
-	UpdatedAt    string   `json:"updated_at"`
+	// The path names no indexed book whose artwork this caller can read.
+	CoverUnavailable bool     `json:"cover_unavailable,omitempty"`
+	UserID           int64    `json:"user_id"`
+	Username         string   `json:"username"`
+	LibraryID        int64    `json:"library_id"`
+	Path             string   `json:"path"`
+	Title            string   `json:"title"`
+	Author           *string  `json:"author"`
+	State            string   `json:"state"`
+	Position         float64  `json:"position"`
+	Duration         *float64 `json:"duration"`
+	Chapter          *string  `json:"chapter"`
+	ChapterIndex     *int     `json:"chapter_index"`
+	UpdatedAt        string   `json:"updated_at"`
 }
 
 // HouseholdSharing reports whether userID shares their listening.
@@ -198,6 +200,7 @@ type houseRow struct {
 func (c *Catalog) nameFromHolding(ctx context.Context, r *HouseListeningRow, callerScopes []Scope) {
 	id, book, err := c.bookHolding(ctx, r.LibraryID, r.Path, false)
 	if err != nil || !ScopesAllow(callerScopes, Ref{LibraryID: r.LibraryID, Path: book}) {
+		r.CoverUnavailable = true
 		return
 	}
 	var (

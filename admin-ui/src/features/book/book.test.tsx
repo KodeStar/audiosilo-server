@@ -58,6 +58,27 @@ beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('book page', () => {
+  it('refreshes Health when an explicit re-read records a problem and returns 503', async () => {
+    const calls = mockFetch(
+      routes(bookDetail(), {
+        'POST /admin/libraries/1/book/rescan': {
+          status: 503,
+          body: { code: 'share_not_answering', error: 'share unavailable' },
+        },
+      }),
+    );
+    const { queryClient } = renderApp(URL);
+    queryClient.setQueryData(keys.bookList({ issue: 'scan_error' }), { pages: [] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'More book actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Read the files again' }));
+    await screen.findByText("Couldn't read the files");
+    expect(calls.find((r) => r.path.endsWith('/book/rescan'))?.query.get('path')).toBe(BOOK_PATH);
+    expect(queryClient.getQueryState(keys.bookList({ issue: 'scan_error' }))?.isInvalidated).toBe(
+      true,
+    );
+  });
+
   it('leaves a credit naming nobody out of the byline', async () => {
     const detail = bookDetail();
     detail.book = { ...detail.book, narrator: ',', narrators: [] };

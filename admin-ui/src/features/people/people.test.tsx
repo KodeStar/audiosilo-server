@@ -358,7 +358,7 @@ describe('a person', () => {
     );
     renderApp('/people/user/2?tab=access');
     const access = await screen.findByRole('region', { name: 'What sam can listen to' });
-    expect(await within(access).findByText('Library: Fiction')).toBeInTheDocument();
+    expect(await within(access).findByText('Folder share (Fiction)')).toBeInTheDocument();
     expect(within(access).getByText('Fiction › Agatha Christie')).toBeInTheDocument();
     expect(within(access).queryByText('Whole library')).not.toBeInTheDocument();
 

@@ -96,14 +96,14 @@ describe('access', () => {
       // Still the server's grant share: listed with the grants, changed from a person's page.
       expect(isLibraryGrant(s)).toBe(true);
     }
-    // It goes by its own name, not its library's.
-    expect(shareLabel(narrowed, libs)).toBe('Library: Kids');
+    // Its generated name identifies a folder share once its whole-library rule is gone.
+    expect(shareLabel(narrowed, libs, i18n.t)).toBe('Folder share (Kids)');
   });
 
   it('names whole-library grants after their library', () => {
-    expect(shareLabel(whole, libs)).toBe('Kids');
-    expect(shareLabel(named, libs)).toBe('Cosy mysteries');
-    expect(shareLabel(whole, [])).toBe('Library: Kids');
+    expect(shareLabel(whole, libs, i18n.t)).toBe('Kids');
+    expect(shareLabel(named, libs, i18n.t)).toBe('Cosy mysteries');
+    expect(shareLabel(whole, [], i18n.t)).toBe('Library: Kids');
   });
 
   it('round-trips access choices', () => {

@@ -2,6 +2,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from '@/lib/zod';
 import { useQueryClient } from '@tanstack/react-query';
+import { shareLabel } from '@/features/people/people-model';
 import { useTranslation } from 'react-i18next';
 import { Share2 } from 'lucide-react';
 import { api } from '@/api/client';
@@ -44,7 +45,9 @@ export function ShareNameDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         icon={Share2}
-        title={share ? t('shares.renameTitle', { name: share.name }) : t('shares.newTitle')}
+        title={
+          share ? t('shares.renameTitle', { name: shareLabel(share, [], t) }) : t('shares.newTitle')
+        }
         description={share ? undefined : t('shares.newDescription')}
       >
         {open ? (

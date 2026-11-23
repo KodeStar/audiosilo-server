@@ -285,21 +285,21 @@ describe('overview', () => {
   it("shows the server's configured addresses, not the browser's host", async () => {
     mockFetch(
       signedInRoutes({
-        'GET /admin/settings': {
-          body: settingsWith({
-            general: {
-              ...settingsWith().general,
-              public_url: 'https://books.example.com',
-              lan_url: 'http://192.168.1.20:8080',
-            },
-          }),
+        'GET /admin/settings': { status: 500, body: { error: 'unavailable' } },
+        'GET /addresses': {
+          body: { away: 'https://books.example.com', home: 'http://192.168.1.20:8080' },
         },
       }),
     );
     renderApp();
     const server = await screen.findByRole('region', { name: 'Server' });
     expect(await within(server).findByText('https://books.example.com')).toBeInTheDocument();
-    expect(within(server).getByText('http://192.168.1.20:8080')).toBeInTheDocument();
+    expect(within(server).getByText('http://192.168.1.20:8080').parentElement).toHaveClass(
+      'flex-wrap',
+    );
+    expect(server.closest('aside')?.parentElement).toHaveClass(
+      'grid-cols-1 xl:grid-cols-[minmax(0,3fr)_minmax(400px,2fr)]',
+    );
     expect(within(server).getByText(/home network/)).toBeInTheDocument();
     expect(within(server).queryByText(window.location.host)).toBeNull();
   });
@@ -308,11 +308,7 @@ describe('overview', () => {
     const url = 'http://192.168.1.20:8080';
     mockFetch(
       signedInRoutes({
-        'GET /admin/settings': {
-          body: settingsWith({
-            general: { ...settingsWith().general, public_url: url, lan_url: url },
-          }),
-        },
+        'GET /addresses': { body: { home: url, away: url } },
       }),
     );
     renderApp();
@@ -323,6 +319,14 @@ describe('overview', () => {
 
   it("falls back to the browser's host, saying so, when no address is set", async () => {
     mockFetch(signedInRoutes());
+    renderApp();
+    const server = await screen.findByRole('region', { name: 'Server' });
+    expect(await within(server).findByText(window.location.host)).toBeInTheDocument();
+    expect(within(server).getByText(/This browser's address/)).toBeInTheDocument();
+  });
+
+  it('shows the browser address when the address request fails', async () => {
+    mockFetch(signedInRoutes({ 'GET /addresses': { status: 503, body: {} } }));
     renderApp();
     const server = await screen.findByRole('region', { name: 'Server' });
     expect(await within(server).findByText(window.location.host)).toBeInTheDocument();

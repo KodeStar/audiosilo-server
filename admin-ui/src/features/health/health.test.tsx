@@ -1129,6 +1129,22 @@ describe('library health', () => {
     );
   });
 
+  it('ignores an across-libraries link when there is only one book library', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/libraries': { body: { libraries: libraries().slice(0, 1) } },
+        'GET /admin/issues/duplicates': { body: { groups: [] } },
+      }),
+    );
+    const { router } = renderApp('/health?issue=duplicate&across=1');
+    await waitFor(() =>
+      expect(calls.some((r) => r.path === '/admin/issues/duplicates')).toBe(true),
+    );
+    await waitFor(() => expect(router.state.location.search).toEqual({ issue: 'duplicate' }));
+    expect(screen.queryByRole('switch', { name: 'Include other libraries' })).toBeNull();
+    expect(calls.some((r) => r.query.has('across'))).toBe(false);
+  });
+
   it('keeps "Include other libraries" in the URL, so a reload keeps it (ADMIN-11)', async () => {
     const calls = mockFetch(routes({ 'GET /admin/issues/duplicates': { body: { groups: [] } } }));
     renderApp('/health?issue=duplicate&across=1');

@@ -33,6 +33,7 @@ function applyTheme(pref: ThemePref): 'light' | 'dark' {
 
 /** Stores and applies `pref`; returns the theme now on screen. */
 export function setThemePref(pref: ThemePref): 'light' | 'dark' {
+  document.documentElement.setAttribute('data-theme-pref', pref);
   writeStorage(THEME_KEY, pref);
   return applyTheme(pref);
 }

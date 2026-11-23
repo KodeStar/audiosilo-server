@@ -432,6 +432,7 @@ export const WORKS_LIMIT = 100;
 export const SHARE_RULES_LIMIT = 1000;
 
 export const api = {
+  addresses: () => request<{ home?: string; away?: string }>('GET', '/addresses'),
   serverInfo: () => request<ServerInfo>('GET', '/server'),
   login: (username: string, password: string) =>
     request<LoginResponse>('POST', LOGIN_PATH, {
@@ -741,12 +742,13 @@ export const api = {
    * A folder of a library, as the player browses it (books annotated, overrides
    * shown): 500 entries from `offset`, `next_offset` set when there are more.
    */
-  browse: (libraryId: number, path: string, offset = 0) =>
+  browse: (libraryId: number, path: string, offset = 0, detail = false) =>
     request<FsListing>(
       'GET',
       `/libraries/${libraryId}/fs?${new URLSearchParams({
         path,
         limit: '500',
+        ...(detail ? { detail: '1' } : {}),
         ...(offset > 0 ? { offset: String(offset) } : {}),
       }).toString()}`,
     ),

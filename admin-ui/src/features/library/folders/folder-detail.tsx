@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, FileAudio, FolderOpen, FolderX, RefreshCw } from 'lucide-react';
-import { invalidateLibraryBooks, keys, rescanBook, setFolderMode, useBrowse } from '@/api/hooks';
+import { api, ApiError } from '@/api/client';
+import { invalidateLibraryBooks, keys, rescanBook, setFolderMode } from '@/api/hooks';
 import type { AdminLibrary, FsEntry, FsListing } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Notice } from '@/components/notice';
@@ -14,34 +15,45 @@ import { RadioCards } from '@/components/ui/radio-cards';
 import { bookRoute } from '@/lib/book-route';
 import { toastError } from '@/lib/errors';
 import { counted, formatBytes, formatDuration } from '@/lib/format';
-import { joinLibraryPath, relBaseName, relParent } from '@/lib/paths';
+import { joinLibraryPath, relBaseName } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { FOLDER_CHOICES, choiceOf, modeOf, type FolderChoice } from './folder-modes';
-import { audioFilesOf, entryIn, foldersIn, joinChoices } from './folders-model';
+import { audioFilesOf, foldersIn, joinChoices } from './folders-model';
 
 /**
  * The selected folder: what it is, how AudioSilo reads it (each choice saved
- * at once, then the library rescans) and the audio files it holds. Its own
- * entry (override, whether it is a book) comes from its parent's listing, its
- * files from its own; the tree has usually loaded both already, and gives the
- * parent's with the pages Show more added (`parentListing`).
+ * at once, then the library rescans) and the audio files it holds.
+ * The listing identifies the folder even when its parent has many pages.
  */
 export function FolderDetail({
   library,
   path,
-  parentListing,
+  own,
 }: {
   library: AdminLibrary;
   path: string;
-  parentListing?: FsListing;
+  own: UseQueryResult<FsListing>;
 }) {
   const { t } = useTranslation();
-  const parent = useBrowse(library.id, relParent(path));
-  const own = useBrowse(library.id, path);
-  const entry = entryIn(parentListing ?? parent.data, path);
-  const name = entry?.name ?? relBaseName(path);
+  const next = own.data?.next_offset;
+  const rest = useQuery({
+    queryKey: [...keys.browse(library.id, path), 'remaining', next],
+    enabled: !!next,
+    queryFn: async ({ signal }) => {
+      let offset = next;
+      const entries: FsEntry[] = [];
+      while (offset) {
+        signal.throwIfAborted();
+        const page = await api.browse(library.id, path, offset, true);
+        entries.push(...page.entries);
+        offset = page.next_offset;
+      }
+      return entries;
+    },
+  });
+  const name = own.data?.folder?.name ?? relBaseName(path);
 
-  if (parent.data && !entry) {
+  if (own.error instanceof ApiError && own.error.status === 404) {
     return (
       <Notice
         tone="info"
@@ -53,7 +65,7 @@ export function FolderDetail({
       </Notice>
     );
   }
-  const failed = parent.isError ? parent : own.isError ? own : undefined;
+  const failed = own.isError ? own : next && rest.isError ? rest : undefined;
   if (failed) {
     return (
       <QueryError
@@ -63,7 +75,7 @@ export function FolderDetail({
       />
     );
   }
-  if (!entry || !own.data) {
+  if (!own.data?.folder || (next && !rest.data)) {
     return (
       <div className="flex flex-col gap-4" role="status" aria-label={t('common.loading')}>
         <span className="skel h-[220px] rounded-xl" />
@@ -71,7 +83,11 @@ export function FolderDetail({
       </div>
     );
   }
-  const files = audioFilesOf(own.data);
+  const listing: FsListing = next
+    ? { ...own.data, entries: own.data.entries.concat(rest.data ?? []) }
+    : own.data;
+  const entry = own.data.folder;
+  const files = audioFilesOf(listing);
   return (
     <Detail
       key={path}
@@ -79,7 +95,7 @@ export function FolderDetail({
       entry={entry}
       files={files}
       // A folder with no audio of its own can still be joined from its disc folders.
-      join={joinChoices(files.files.length, entry, foldersIn(own.data))}
+      join={joinChoices(files.files.length, entry, foldersIn(listing))}
     />
   );
 }
@@ -249,8 +265,11 @@ function Detail({
               </span>
             }
           />
+          {count > 500 ? (
+            <p className="px-5 py-2 text-muted-foreground">{t('folders.files.first500')}</p>
+          ) : null}
           <ul className="divide-y">
-            {files.map((f) => (
+            {files.slice(0, 500).map((f) => (
               <li key={f.path} className="flex min-h-11 items-center gap-3 px-5 py-2.5">
                 <FileAudio className="size-4 shrink-0 text-subtle-foreground" aria-hidden="true" />
                 {f.is_book ? (

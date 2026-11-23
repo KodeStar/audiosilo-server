@@ -39,6 +39,7 @@ import {
   isLibraryGrant,
   ruleLabel,
   shareLabel,
+  grantSummary,
   wholeLibraryOf,
 } from '@/features/people/people-model';
 import { AddFolderDialog } from './add-folder-dialog';
@@ -143,7 +144,7 @@ function ShareTile({
   // the avatars and the chip always add up to the share's count.
   const more = s.member_ids.length - Math.min(members.length, MAX_AVATARS);
   const isLibrary = wholeLibraryOf(s) !== undefined;
-  const name = shareLabel(s, libraries.data ?? []);
+  const name = shareLabel(s, libraries.data ?? [], t);
   return (
     <button
       type="button"
@@ -164,7 +165,7 @@ function ShareTile({
         <b className="truncate text-[15px]">{name}</b>
         <span className="text-[12.5px] text-muted-foreground">
           {isLibrary
-            ? t('shares.wholeLibrary')
+            ? grantSummary(s, libraries.data ?? [], t)
             : t('shares.folderCount', { count: s.paths?.length ?? 0 })}
           {' · '}
           {t('shares.peopleCount', { count: s.member_ids.length })}
@@ -210,7 +211,7 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
   const people = users.data ?? [];
   const members = people.filter((u) => s.member_ids.includes(u.id));
   const others = people.filter((u) => !s.member_ids.includes(u.id) && u.role !== 'admin');
-  const name = shareLabel(s, libs);
+  const name = shareLabel(s, libs, t);
 
   const run = async (work: () => Promise<void>, done: string) => {
     try {
@@ -242,7 +243,7 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
           <DropdownMenu>
             <DropdownMenuTrigger
               className={buttonVariants({ variant: 'ghost', size: 'icon-sm' })}
-              aria-label={t('shares.actions', { name: s.name })}
+              aria-label={t('shares.actions', { name })}
             >
               <Ellipsis className="size-4" aria-hidden="true" />
             </DropdownMenuTrigger>
@@ -382,13 +383,13 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
         open={dialog === 'delete'}
         onOpenChange={(o) => setDialog(o ? 'delete' : null)}
         icon={Trash2}
-        title={t('shares.deleteTitle', { name: s.name })}
+        title={t('shares.deleteTitle', { name })}
         description={t('shares.deleteBody', { count: s.member_ids.length })}
         confirmLabel={t('shares.delete')}
         onConfirm={async () => {
           await api.deleteShare(s.id);
           invalidatePeople(qc);
-          toast.add({ title: t('shares.toast.deleted', { name: s.name }), type: 'success' });
+          toast.add({ title: t('shares.toast.deleted', { name }), type: 'success' });
           void navigate({ to: '.', search: {}, replace: true });
         }}
       />

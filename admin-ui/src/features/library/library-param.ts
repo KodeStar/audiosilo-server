@@ -38,14 +38,13 @@ export function offersLibraryChoice(bookLibraries: readonly unknown[]): boolean 
  * `?library=` as the Library screens take it: a podcast library's id, or one no
  * library has (an old link, one typed, a library deleted since), reads as all
  * libraries, so the page doesn't sit on an empty list or on the 404 the
- * aggregates answer for an unknown library. Until the libraries load, the id
- * stands.
+ * aggregates answer for an unknown library. Only an id present in the loaded list can filter a request.
  */
 export function bookLibraryOf(
   id: number | undefined,
   libraries: readonly Pick<AdminLibrary, 'id' | 'kind'>[] | undefined,
 ): number | undefined {
-  if (id === undefined || !libraries) return id;
+  if (id === undefined || !libraries) return undefined;
   const l = libraries.find((x) => x.id === id);
   return l && isBookLibrary(l) ? id : undefined;
 }

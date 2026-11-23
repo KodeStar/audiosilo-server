@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path"
 )
 
 // ErrInvalidOverrideMode marks a folder override whose mode is outside the
@@ -74,4 +75,25 @@ func (c *Catalog) DeleteFolderOverride(ctx context.Context, libraryID int64, pat
 	_, err := c.db.ExecContext(ctx,
 		`DELETE FROM folder_overrides WHERE library_id = ? AND path = ?`, libraryID, CleanRelPath(path))
 	return err
+}
+
+// FolderFileLengths returns indexed part lengths for a folder or one disc of a joined book.
+func (c *Catalog) FolderFileLengths(ctx context.Context, libraryID int64, folder string) (map[string]float64, error) {
+	rows, err := c.db.QueryContext(ctx, `SELECT f.rel_path, f.duration FROM books b
+        JOIN book_files f ON f.book_id = b.id WHERE b.library_id = ? AND b.is_folder = 1
+        AND b.rel_path IN (?, ?) ORDER BY length(b.rel_path)`, libraryID, folder, path.Dir(folder))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	lengths := make(map[string]float64)
+	for rows.Next() {
+		var file string
+		var duration float64
+		if err := rows.Scan(&file, &duration); err != nil {
+			return nil, err
+		}
+		lengths[file] = duration
+	}
+	return lengths, rows.Err()
 }

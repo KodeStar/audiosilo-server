@@ -14,8 +14,8 @@ describe('bookLibraryOf', () => {
     expect(bookLibraryOf(9, all)).toBeUndefined();
   });
 
-  it('keeps the id while the libraries load', () => {
-    expect(bookLibraryOf(3, undefined)).toBe(3);
+  it('uses all libraries until the requested id can be checked', () => {
+    expect(bookLibraryOf(3, undefined)).toBeUndefined();
   });
 });
 

@@ -13,6 +13,7 @@ import {
   Users,
 } from 'lucide-react';
 import {
+  useAddresses,
   useIssues,
   useLiveSessions,
   useOfflineLibraries,
@@ -179,7 +180,7 @@ export function OverviewPage() {
         />
       </div>
 
-      <div className="mt-10 grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mt-10 grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(400px,2fr)]">
         <section aria-labelledby="recent-heading" className="min-w-0">
           <h2 id="recent-heading" className="h2 mb-3.5">
             {t('home.recent.title')}
@@ -466,6 +467,7 @@ function ServerCard() {
   const server = useServerInfo();
   const settings = useSettings();
   const update = useUpdateStatus();
+  const addresses = useAddresses();
   const latest = update.data?.update_available ? update.data.latest : null;
   const rows: [string, React.ReactNode][] = [
     [
@@ -485,7 +487,12 @@ function ServerCard() {
         </span>
       ),
     ],
-    [t('home.server.address'), settings.data && <ServerAddress general={settings.data.general} />],
+    [
+      t('home.server.address'),
+      addresses.data || addresses.isError ? (
+        <ServerAddress home={addresses.data?.home} away={addresses.data?.away} />
+      ) : undefined,
+    ],
     [
       t('home.server.transcoding'),
       <CapabilityStatus status={capability(server.data, 'transcode')} />,
@@ -524,12 +531,12 @@ function ServerCard() {
  * network one; this browser's host only when neither is set, and said so (it
  * may be an address only this machine uses, a tunnel or localhost).
  */
-function ServerAddress({ general }: { general: AdminSettings['general'] }) {
+function ServerAddress({ home, away }: { home?: string; away?: string }) {
   const { t } = useTranslation();
   const addresses: { url: string; note?: string }[] = [];
-  if (general.public_url) addresses.push({ url: general.public_url });
-  if (general.lan_url && general.lan_url !== general.public_url) {
-    addresses.push({ url: general.lan_url, note: t('home.server.addressHome') });
+  if (away) addresses.push({ url: away });
+  if (home && home !== away) {
+    addresses.push({ url: home, note: t('home.server.addressHome') });
   }
   if (addresses.length === 0) {
     return (
@@ -544,7 +551,7 @@ function ServerAddress({ general }: { general: AdminSettings['general'] }) {
   return (
     <span className="flex flex-col">
       {addresses.map((a) => (
-        <span key={a.url}>
+        <span key={a.url} className="flex flex-wrap items-baseline gap-x-1">
           <span className="font-mono text-[12.5px]">{a.url}</span>
           {a.note ? <span className="text-muted-foreground"> · {a.note}</span> : null}
         </span>
