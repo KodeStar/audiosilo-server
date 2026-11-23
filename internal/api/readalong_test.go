@@ -478,6 +478,36 @@ func TestReadalongOnAHeldShareAnswers(t *testing.T) {
 	}
 }
 
+// A revalidation whose map answers but whose ebook's look is given up on is
+// 503 share_not_answering at once (readalongUnchanged), not left to the full
+// answer, which would read the map and wait on the same ebook a second time.
+// Not parallel: metadata.HoldReadsForTests swaps the mount lookup.
+func TestReadalongRevalidationEbookGivenUpIs503(t *testing.T) {
+	e := newReadalongEnv(t)
+	e.api.fileWait = 200 * time.Millisecond
+	var reads atomic.Int32
+	e.api.readalongRead = func(lib catalog.Library, bookPath string, folder bool) ([]byte, fs.FileInfo, error) {
+		reads.Add(1)
+		return library.ReadReadalongMap(lib, bookPath, folder)
+	}
+	first, _ := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, "")
+	etag := first.Header.Get("ETag")
+	if first.StatusCode != http.StatusOK || etag == "" {
+		t.Fatalf("GET readalong = %d ETag %q", first.StatusCode, etag)
+	}
+	before := reads.Load()
+	release := metadata.HoldReadsForTests(filepath.Join(e.root, filepath.FromSlash(ebookFile)))
+	t.Cleanup(release)
+	resp, body := e.doHeaders(t, "GET", e.at("readalong", ebookBook), e.annTok, "", map[string]string{"If-None-Match": etag})
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) {
+		t.Errorf("revalidating with the ebook held = %d %s, want 503 %s", resp.StatusCode, body, codeShareNotAnswering)
+	}
+	if n := reads.Load() - before; n != 0 {
+		t.Errorf("the map was read %d times after the ebook's look was given up on, want 0", n)
+	}
+	release()
+}
+
 // A map or an ebook refused for good (a permission: metadata.LastingFault) is
 // 404 no_readalong, as for a file gone, never a 500: a retry would only meet
 // the refusal again. The ebook is hashed now (its digest cleared), so its

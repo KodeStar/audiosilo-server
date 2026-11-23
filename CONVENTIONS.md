@@ -1270,7 +1270,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the map when its ETag names the file as it is now and the index read that very file (its
   `metadata.AttachmentSignature` in `books.attachments_sig`, `library.StatReadalongMap`): the indexed
   head is then checked against the book now as below and the 304 goes (`readalongUnchanged`; a look at
-  the map given up on is 503 `share_not_answering` there, not a second wait in the full path); else the
+  the map or the ebook given up on is 503 `share_not_answering` there, not a second wait in the full path); else the
   full path answers it. **Header auth only**, as
   `/ebook` (`requireAuth`; `?token=` is never read; it stays under the request timeout: a map is
   at most 16 MiB, no media route). Each request reads the map from disk (`library.ReadReadalongMap`:
