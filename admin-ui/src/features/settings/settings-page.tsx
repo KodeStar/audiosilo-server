@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate, useSearch } from '@tanstack/react-router';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -58,8 +58,8 @@ import {
   certificateLook,
   lockOf,
   METADATA_MODES,
+  awaitingRun,
   pollsReport,
-  REPORT_WATCH_MS,
   SESSION_DAYS_RANGE,
   SETTINGS_PAGES,
   visiblePages,
@@ -627,30 +627,31 @@ function JobRow({
 function CheckUpcoming({ lastRun }: { lastRun?: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const check = useMutation({
-    mutationFn: async () => {
-      await api.checkUpcoming();
-      return lastRun;
-    },
-    onSuccess: () => {
-      toast.add({ title: t('settings.metadata.upcomingQueued'), type: 'success' });
-    },
-    onError: (err) =>
-      toastError(t('health.toast.checkFailed'), err, {
-        upcoming_off: 'settings.metadata.upcomingOff',
-      }),
-    onSettled: () => void qc.invalidateQueries({ queryKey: keys.settings }),
-  });
+  const [busy, setBusy] = useState(false);
+  const [watch, setWatch] = useState<ReportWatch | null>(null);
   useSettings(
     (s) =>
-      check.isSuccess &&
       s.metadata.enabled &&
       !!s.metadata.upcoming &&
-      s.metadata.upcoming_status?.last_run_at === check.data &&
-      Date.now() - check.submittedAt < REPORT_WATCH_MS,
+      awaitingRun(watch, s.metadata.upcoming_status?.last_run_at, Date.now()),
   );
+  const check = async () => {
+    setBusy(true);
+    try {
+      await api.checkUpcoming();
+      setWatch({ at: Date.now(), lastRun });
+      toast.add({ title: t('settings.metadata.upcomingQueued'), type: 'success' });
+    } catch (err) {
+      toastError(t('health.toast.checkFailed'), err, {
+        upcoming_off: 'settings.metadata.upcomingOff',
+      });
+    } finally {
+      setBusy(false);
+      void qc.invalidateQueries({ queryKey: keys.settings });
+    }
+  };
   return (
-    <Button variant="outline" size="sm" disabled={check.isPending} onClick={() => check.mutate()}>
+    <Button variant="outline" size="sm" disabled={busy} onClick={() => void check()}>
       {t('common.checkNow')}
     </Button>
   );

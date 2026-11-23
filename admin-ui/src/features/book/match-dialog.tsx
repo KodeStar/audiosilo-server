@@ -245,7 +245,10 @@ function MatchBody({
           pickedRef={pickId === undefined && !search.isFetching ? scrollToInitialPick : undefined}
           bookSeconds={b.duration}
           addUrl={addBookUrl({
-            ...(by.asin || by.isbn || by.q ? { ...by, query: by.q } : b),
+            // A submitted search names the book; else the book's own identifiers.
+            ...(by.asin || by.isbn || by.q
+              ? { asin: by.asin, isbn: by.isbn, query: by.q }
+              : { asin: b.asin, isbn: b.isbn }),
             title: b.title,
             author: b.author,
           })}

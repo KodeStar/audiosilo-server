@@ -486,7 +486,11 @@ describe('a person', () => {
   });
 
   it('deletes an account after its name is typed, offering to disable instead', async () => {
-    const calls = mockFetch(routes({ 'DELETE /admin/users/2': { status: 204 } }));
+    const calls = mockFetch(
+      routes({
+        'DELETE /admin/users/2': { body: { members_deleted: 0, members_kept: 0 } },
+      }),
+    );
     const { router } = renderApp('/people/user/2?tab=account');
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Delete account' }));

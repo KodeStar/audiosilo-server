@@ -773,7 +773,7 @@ export const api = {
    * not kept (server#222). detail=1 asks for the counts recorded by the delete.
    */
   deleteUser: (id: number, deleteMembers: readonly number[], keepMembers: readonly number[] = []) =>
-    request<{ members_deleted: number; members_kept: number } | undefined>(
+    request<{ members_deleted: number; members_kept: number }>(
       'DELETE',
       `/admin/users/${id}?${new URLSearchParams({
         detail: '1',

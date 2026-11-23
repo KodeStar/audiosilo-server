@@ -15,7 +15,7 @@ import { SessionState } from '@/components/session-state';
 import { StatusText } from '@/components/status-text';
 import { bookRoute } from '@/lib/book-route';
 import { formatClock, formatDuration, formatRelative, progressFraction } from '@/lib/format';
-import { clientKind } from './activity-model';
+import { watchDownload } from './activity-model';
 import { chapterLabel, liveSummary, sortLive } from './live-model';
 import { useClientName } from './use-client-name';
 
@@ -82,18 +82,12 @@ function LiveSession({ s }: { s: ListeningSession }) {
   const frac = progressFraction(s.position, s.duration);
   const title = s.title || s.path;
   const chapter = chapterLabel(s, t);
-  // The AudioSilo watch apps play their downloaded AAC copy. The session's
-  // codec describes the indexed book, which can be in a different format.
-  const watchDownload =
-    !s.transcoded &&
-    s.client?.app.toLowerCase() === 'audiosilo-watch' &&
-    clientKind(s.client) === 'watch';
   const rows: [string, React.ReactNode][] = [
     [t('live.device'), s.device_name || t('live.unnamed')],
     [t('live.app'), clientName(s.client)],
     [
       t('live.playback'),
-      watchDownload ? (
+      watchDownload(s) ? (
         <StatusText>{t('live.watchDownload')}</StatusText>
       ) : (
         <PlaybackStatus direct={!s.transcoded} codec={s.codec} />

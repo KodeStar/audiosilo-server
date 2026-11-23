@@ -821,9 +821,7 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
           const outcome = await api.deleteUser(u.id, remove, keep);
           toast.add({
             title: t('user.danger.deleted', { name: u.username }),
-            description: outcome
-              ? membersOutcome(outcome.members_deleted, outcome.members_kept, t)
-              : undefined,
+            description: membersOutcome(outcome.members_deleted, outcome.members_kept, t),
             type: 'success',
           });
           // Off their page first: refreshing it (or any page of theirs) now

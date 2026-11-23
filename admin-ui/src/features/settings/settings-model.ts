@@ -218,6 +218,15 @@ export interface ReportWatch {
 /** How long a switch-on is watched: its run starts at once unless one ran within the day. */
 export const REPORT_WATCH_MS = 10 * 60_000;
 
+/** Whether a watched run is still awaited: no run recorded since, within REPORT_WATCH_MS. */
+export function awaitingRun(
+  watch: ReportWatch | null,
+  lastRun: string | undefined,
+  now: number,
+): boolean {
+  return watch !== null && now - watch.at < REPORT_WATCH_MS && lastRun === watch.lastRun;
+}
+
 /**
  * Whether the Metadata topic asks again for the report's status: only while
  * it is on and a run is near. One that never ran (its first run is due about
@@ -232,9 +241,5 @@ export function pollsReport(
 ): boolean {
   if (!m.enabled || !m.report_unknown) return false;
   if ((m.report_status?.state ?? 'never') === 'never') return true;
-  return (
-    watch !== null &&
-    now - watch.at < REPORT_WATCH_MS &&
-    m.report_status?.last_run_at === watch.lastRun
-  );
+  return awaitingRun(watch, m.report_status?.last_run_at, now);
 }

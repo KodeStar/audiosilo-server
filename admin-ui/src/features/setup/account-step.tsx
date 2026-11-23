@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { CircleCheck, KeyRound } from 'lucide-react';
+import { CircleCheck } from 'lucide-react';
 import { ApiError, WRONG_CURRENT_PASSWORD, api } from '@/api/client';
 import { invalidatePeople, notePasswordChosen, saveSetup } from '@/api/hooks';
 import { MIN_PASSWORD } from '@/api/types';
@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
 import { useCurrentUser, useSession } from '@/lib/session';
+import { PrintedPasswordNotice } from './printed-password-notice';
 import { accountPlan, type AccountDraft, type AccountField } from './setup-model';
 import { StepFooter } from './step-parts';
 import { StepStop, type StepProps } from './step-actions';
@@ -130,9 +131,7 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
             {t('setup.account.passwordChangedBody', { name: me.username })}
           </Notice>
         ) : printed ? (
-          <Notice tone="warn" icon={KeyRound} role="status" title={t('setup.account.printed')}>
-            {t('setup.account.printedBody')}
-          </Notice>
+          <PrintedPasswordNotice />
         ) : null}
         {field(
           'setup-username',

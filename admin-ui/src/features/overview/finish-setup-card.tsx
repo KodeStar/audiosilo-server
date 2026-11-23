@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight, KeyRound, ListChecks } from 'lucide-react';
+import { ChevronRight, ListChecks } from 'lucide-react';
 import { saveSetup, useLibraries, useSetup } from '@/api/hooks';
-import { Notice } from '@/components/notice';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { PrintedPasswordNotice } from '@/features/setup/printed-password-notice';
 import { hasBookLibrary, showFinishCard, skippedSteps } from '@/features/setup/setup-model';
 import { toastError } from '@/lib/errors';
 import { useCurrentUser } from '@/lib/session';
@@ -29,11 +29,7 @@ export function FinishSetupCard() {
   // still uses the password printed in the log needs a way to replace it.
   if (state?.finished && state.dismissed && setup?.printed_password) {
     return (
-      <Notice
-        tone="warn"
-        icon={KeyRound}
-        role="status"
-        title={t('setup.account.printed')}
+      <PrintedPasswordNotice
         actions={
           <Link
             to="/people/user/$userId"
@@ -44,9 +40,7 @@ export function FinishSetupCard() {
             {t('user.signIn.change')}
           </Link>
         }
-      >
-        {t('setup.account.printedBody')}
-      </Notice>
+      />
     );
   }
   if (!libraries.data || !showFinishCard(state, hasLibraries)) return null;
