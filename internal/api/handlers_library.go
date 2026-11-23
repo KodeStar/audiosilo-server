@@ -661,10 +661,10 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	} else {
 		a.annotateWithBooks(r, lib, scope, ignore, listing.Entries)
 	}
+	// Best-effort like the annotations: without them the files list with no length.
 	if detail && len(listing.Entries) > 0 && listing.Entries[len(listing.Entries)-1].IsAudio {
 		if err := a.folderFileLengths(r.Context(), lib.ID, listing); err != nil {
-			a.writeCatalogError(w, err, "read folder file lengths failed", "Could not read the folder.")
-			return
+			a.log.Warn("annotate fs file lengths failed", "library", lib.ID, "err", err)
 		}
 	}
 	writeJSON(w, http.StatusOK, listing)
