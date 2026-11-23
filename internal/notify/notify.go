@@ -274,7 +274,7 @@ func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
 }
 
 // Flush returns once every event emitted or delivered before it is recorded
-// and its deliveries queued (a test reads the feed after it; Close).
+// and its deliveries queued (a test reads the feed after it).
 func (s *Service) Flush() {
 	if s == nil {
 		return
