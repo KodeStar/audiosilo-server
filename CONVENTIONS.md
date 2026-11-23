@@ -51,8 +51,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
   The executor sorts filenames and skips exact recorded names, allowing a missing lower-numbered
   migration to arrive later. Phase F1 owns 0053 and podcast downloads own 0054; neither depends on the other.
+  A start that applied any migration truncates the WAL file afterwards (`truncateWAL`), so a backfill that
+  rewrites most rows (0082, 0095) leaves no WAL of that size on disk.
   `Open` still starts on a database recording migrations this server doesn't ship (a newer server ran on
   it: a rollback) and warns once, naming them; a restore refuses one (`Inspect`, `ErrNewerDatabase`).
+  Some tables carry triggers (derived columns, guards) that a rolled-back server's writes fire too: a
+  migration rebuilding one recreates them (`books`: 0094, 0095; `book_matches`: 0095;
+  `progress`: 0066, 0085; `audible_titles`: 0066, 0071, 0093). It also drops first, and recreates
+  after, the triggers on other tables that name the rebuilt one (those on `books` and `book_matches`
+  name each other's table; those on `progress` and `audible_titles` name `progress_change_counter`,
+  and those on `audible_titles` also `progress` and `audible_accounts`). Left in place, they fail
+  the rebuild: the new table's rename fails while one names the dropped table, and renaming the old
+  table first rewrites them to name it, so once it is dropped every write that fires them fails
+  (`no such table`).
 - **Secrets** (tokens, auth codes) are stored only as SHA-256 hashes; passwords
   use argon2id (`auth/hash.go`). Never log or persist plaintext secrets; the
   first-run banner prints them once and is the only place they appear (`reset-admin` prints a
@@ -2798,11 +2809,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   was fetched keeps what the book has. The item reads detail `cover_superseded` (`DetailCoverSuperseded`:
   applied when its fields went in, else skipped; final, never turned into `cover_pending`).
   `SetCover` (uploads, the dialog's explicit cover tick) stays unconditional.
-  No Undo: the cleared values aren't kept. A store listing the
-  community holds with no ASIN or ISBN (Guild books) is matched by this row alone: `catalog.matchedExpr`
-  (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
-  facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
-  name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
+  No Undo: the cleared values aren't kept. `catalog.matchedExpr` reads `books.matched`. A book with an
+  effective ASIN, ISBN or recorded community match counts as matched. This includes a store listing
+  the community holds without an identifier (Guild books). Migration 0095 backfills the flag. Triggers
+  on `books` and `book_matches` maintain it even when an older server writes to the database. A migration
+  rebuilding either table recreates the triggers on both (Migrations are append-only). The flag
+  supplies the list's `matched` field and facet, Health's Not matched (and a run's `UnmatchedBooks`),
+  Activity's `identified`, series naming and a refresh's `MatchedBooks`. What needs an identifier tests
   asin/isbn itself and stays identifier-only: community chapters (due only with one, though
   the recording they come from is then the match's, `chaptercheck`'s `chapters`), the unknown-ASIN report,
   a repick (`CommunityASINBooks`) and the console's chapter check,

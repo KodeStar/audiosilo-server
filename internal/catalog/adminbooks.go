@@ -152,12 +152,9 @@ const (
 		WHERE ch.library_id = b.library_id AND ch.path = b.rel_path), '')`
 	// A single-file book has no book_files rows; it is one file.
 	fileCountExpr = `MAX(1, (SELECT COUNT(*) FROM book_files bf WHERE bf.book_id = b.id))`
-	// matchedExpr is "matched": an ASIN or ISBN, or a community match recorded
-	// without one (book_matches, a store-listing match: LibraForge E6). Callers
-	// that need an identifier (the unknown-ASIN report, community chapters,
-	// upcoming releases, a repick) test asin/isbn themselves.
-	matchedExpr = `(b.asin <> '' OR b.isbn <> '' OR EXISTS(SELECT 1 FROM book_matches m
-		WHERE m.library_id = b.library_id AND m.path = b.rel_path))`
+	// Migration 0095 maintains matched for books with an effective ASIN or
+	// ISBN or a recorded community match. Identifier-only reads use asin/isbn.
+	matchedExpr = `b.matched`
 	// A chapter override counts only while the book has that chapter: one whose
 	// chapter a rescan dropped is dormant (it reapplies if the chapter comes back) and
 	// shows nowhere on the book page, so it can't mark the book edited. An edited

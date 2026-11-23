@@ -506,6 +506,7 @@ func (db *DB) migrateFrom(ctx context.Context, source fs.FS) error {
 	}
 	// unknown ends holding the recorded names this source does not ship.
 	unknown := nameSet(applied)
+	ran := 0
 	for _, name := range names {
 		if unknown[name] {
 			delete(unknown, name)
@@ -533,6 +534,10 @@ func (db *DB) migrateFrom(ctx context.Context, source fs.FS) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit migration %s: %w", name, err)
 		}
+		ran++
+	}
+	if ran > 0 {
+		db.truncateWAL(ctx)
 	}
 	// A newer AudioSilo ran on this database (a rollback). This server still
 	// starts, but it does not know the newer tables and can lose what they hold
@@ -542,6 +547,23 @@ func (db *DB) migrateFrom(ctx context.Context, source fs.FS) error {
 			"unknown_migrations", strings.Join(slices.Sorted(maps.Keys(unknown)), ","))
 	}
 	return nil
+}
+
+// truncateWAL empties the write-ahead log file after migrations applied
+// anything. A migration that rewrites most rows in one transaction (0082's and
+// 0095's backfills) grows the WAL to about that size; the auto-checkpoint copies
+// the pages into the database but never shrinks the file (no journal_size_limit),
+// so an upgrade would otherwise leave as much again on disk for good. It runs
+// before the reader pool opens, so only another process can be in its way; a
+// failure only leaves the file as large as it was, so it logs and Open goes on.
+// An in-memory database has no WAL, and the pragma answers without doing anything.
+func (db *DB) truncateWAL(ctx context.Context) {
+	var busy, logFrames, checkpointed int
+	err := db.writer.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointed)
+	if err != nil || busy != 0 {
+		db.log.Warn("could not truncate the database's write-ahead log after applying migrations; the file keeps its size",
+			"err", err, "busy", busy != 0)
+	}
 }
 
 // appliedMigrations lists the migrations a database records as applied, in order.
