@@ -140,6 +140,34 @@ func TestRejectedMatchKeepsBackupPlan(t *testing.T) {
 	}
 }
 
+// A backup's match marked "Not this book" is no kept import match: a poll
+// that names none stores the title's plan, and the match stays for Undo.
+func TestRejectedImportMatchKeepsBackupPlan(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib.ID, RelPath: "Author/Book", Title: "Book"}); err != nil {
+		t.Fatal(err)
+	}
+	ti := avail("B000000001", "")
+	book := AudibleMatch{LibraryID: f.lib.ID, Path: "Author/Book", How: "asin"}
+	ti.Match = &book
+	f.poll(t, "p1", ti)
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET match_how = ? WHERE asin = ?`,
+		AudibleMatchImport, ti.ASIN); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	ti.Match, ti.Planned = nil, planned(f, "Own edition/Book.m4b")
+	f.poll(t, "p2", ti)
+	book.How = AudibleMatchImport
+	if got := f.title(t, ti.ASIN); !got.Rejected || got.Match == nil || *got.Match != book ||
+		got.Planned == nil || *got.Planned != *ti.Planned {
+		t.Fatalf("after the poll: %+v", got)
+	}
+}
+
 // An older Bridge still claims a rejected title and can leave it contested:
 // Undo accepts the kept match, so the contest goes with it.
 func TestRejectedMatchUndoDropsContest(t *testing.T) {

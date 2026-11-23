@@ -552,7 +552,8 @@ type AudibleTitleInput struct {
 	Reason      string          `json:"reason"`
 	Match       *AudibleMatch   `json:"match"`
 	// Planned is where a backup of the unmatched title would go, as the
-	// Bridge planned it during this poll (nil for none; dropped with a match).
+	// Bridge planned it during this poll (nil for none; dropped with the
+	// poll's match, and not shown beside an accepted one).
 	Planned *AudiblePlan `json:"planned"`
 	// ContestedPath is the book in the account's library another title
 	// claimed as well, for a title left unmatched as contested ("" for none;
@@ -774,8 +775,8 @@ func bridgeBookPath(p string) bool {
 
 // PutAudibleTitles stores titles (at most MaxAudibleTitles) of one poll of
 // account (pollID, the Bridge's), each replacing what an earlier poll said of
-// it (its planned destination and contested book too, both dropped for an
-// accepted match) but keeping the console's and an import's columns
+// it (its planned destination and contested book too, both dropped when the
+// poll matches it or a backup's match is kept) but keeping the console's and an import's columns
 // (rejected, ignored, no_sync, dest_path, import_job_id, first_seen) and a
 // rejected title's match (the book the import fold refuses, and Undo's). A match to a library that is gone or
 // not a books library is stored as none. A backup's match (how "import",
@@ -1042,7 +1043,8 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 
 // fillContests lists, for each contested title of titles, the other titles of
 // its account on the same book: matched to it, or left contested over it too
-// (never a gone one: the poll that contested it didn't have it). By title, at
+// (never a gone one: the poll that contested it didn't have it; never one
+// marked "Not this book": its match isn't its own). By title, at
 // most maxAudibleContest each. One query for the page.
 func (c *Catalog) fillContests(ctx context.Context, titles []AudibleTitle) error {
 	type key struct {
