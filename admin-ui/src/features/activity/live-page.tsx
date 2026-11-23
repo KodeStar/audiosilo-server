@@ -12,8 +12,10 @@ import { PlaybackStatus } from '@/components/playback-status';
 import { ProgressBar } from '@/components/progress-bar';
 import { QueryError } from '@/components/query-error';
 import { SessionState } from '@/components/session-state';
+import { StatusText } from '@/components/status-text';
 import { bookRoute } from '@/lib/book-route';
 import { formatClock, formatDuration, formatRelative, progressFraction } from '@/lib/format';
+import { watchDownload } from './activity-model';
 import { chapterLabel, liveSummary, sortLive } from './live-model';
 import { useClientName } from './use-client-name';
 
@@ -83,7 +85,14 @@ function LiveSession({ s }: { s: ListeningSession }) {
   const rows: [string, React.ReactNode][] = [
     [t('live.device'), s.device_name || t('live.unnamed')],
     [t('live.app'), clientName(s.client)],
-    [t('live.playback'), <PlaybackStatus direct={!s.transcoded} codec={s.codec} />],
+    [
+      t('live.playback'),
+      watchDownload(s) ? (
+        <StatusText>{t('live.watchDownload')}</StatusText>
+      ) : (
+        <PlaybackStatus direct={!s.transcoded} codec={s.codec} />
+      ),
+    ],
   ];
   if (s.ip) rows.push([t('live.address'), <span className="font-mono">{s.ip}</span>]);
   rows.push([t('live.started'), formatRelative(s.started_at, lang)]);

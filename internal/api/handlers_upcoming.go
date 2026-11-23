@@ -18,6 +18,15 @@ import (
 // live upcoming.enabled. The job, the route and the capability gate on it.
 func (a *API) upcomingOn() bool { return a.metadataOn() && a.config().Upcoming.Enabled }
 
+// handleCheckUpcoming asks the daily job for a full run without changing its settings.
+func (a *API) handleCheckUpcoming(w http.ResponseWriter, _ *http.Request) {
+	if a.upcomingOff(w) {
+		return
+	}
+	a.upcoming.RequestRun()
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // handleMyUpcoming answers GET /me/upcoming (requireAuth, notKid): 404
 // metadata_off while metadata is off, 404 upcoming_off while the job is
 // switched off.

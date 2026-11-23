@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -37,6 +38,25 @@ func TestUpdateConfigLibrary(t *testing.T) {
 	own, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Own", Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The list reports the same source that protects a library's name and folder.
+	resp, raw := e.do(t, "GET", "/api/v1/admin/libraries", adminTok, "")
+	var list struct {
+		Libraries []struct {
+			Name       string
+			FromConfig *bool `json:"from_config"`
+		}
+	}
+	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(raw), &list) != nil || len(list.Libraries) != 2 {
+		t.Fatalf("list libraries = %d %s", resp.StatusCode, raw)
+	}
+	for _, l := range list.Libraries {
+		if l.FromConfig == nil || *l.FromConfig != (l.Name == "Kids") {
+			t.Errorf("wrong from_config flag for %s in %s", l.Name, raw)
+		}
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/admin/libraries", memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("listener list = %d, want 403", resp.StatusCode)
 	}
 	patch := func(tok string, id int64, body string) (int, string) {
 		t.Helper()

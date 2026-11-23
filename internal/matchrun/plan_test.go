@@ -973,3 +973,32 @@ func TestPreviewMatchAlone(t *testing.T) {
 		}
 	}
 }
+
+func TestPreviewRecordsOffered(t *testing.T) {
+	rec := &martian.Recordings[0]
+	st := state(nil, nil, false)
+	st.Anchor = catalog.MatchAnchor{WorkID: martian.WorkID, RecordingID: rec.ID}
+	if !Preview(st, &martian, rec).RecordsOffered {
+		t.Fatal("newly offered identifiers cannot be accepted")
+	}
+	st.Anchor.OfferedASIN, st.Anchor.OfferedISBN = "B0UK000001", "9780553418026"
+	if Preview(st, &martian, rec).RecordsOffered {
+		t.Fatal("already offered identifiers are offered again")
+	}
+	st.Anchor.OfferedASIN = ""
+	st.Fields[catalog.FieldASIN] = catalog.FieldValue{Value: "B0UK000001", Source: catalog.SourceTag}
+	if Preview(st, &martian, rec).RecordsOffered {
+		t.Fatal("the book's own ASIN is offered again")
+	}
+	onlyASIN := *rec
+	onlyASIN.ISBNs = nil
+	st.Fields[catalog.FieldASIN] = catalog.FieldValue{}
+	st.Anchor.OfferedASIN = "B0UK000001"
+	if Preview(st, &martian, &onlyASIN).RecordsOffered {
+		t.Fatal("missing ISBN made an unchanged ASIN available to accept")
+	}
+	st.Anchor.OfferedASIN = "B0OUTDATED"
+	if !Preview(st, &martian, &onlyASIN).RecordsOffered {
+		t.Fatal("a changed ASIN must be available to accept even without an ISBN")
+	}
+}

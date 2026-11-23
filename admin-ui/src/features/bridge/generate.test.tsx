@@ -692,6 +692,7 @@ describe('the Bridge page', () => {
                 state: 'cancelled',
                 cancel_requested: true,
                 error: 'the book moved onto another job of this kind',
+                error_code: 'server_cancelled',
               }),
             ],
           },
@@ -802,6 +803,7 @@ describe('the Bridge page', () => {
                 state: 'cancelled',
                 cancel_requested: true,
                 error: reason,
+                error_code: 'server_cancelled',
               }),
               // The Bridge ended a parked job itself: a plain "Cancelled" and the park.
               job({
@@ -821,6 +823,7 @@ describe('the Bridge page', () => {
                 state: 'running',
                 cancel_requested: true,
                 error: reason,
+                error_code: 'server_cancelled',
               }),
             ],
           },

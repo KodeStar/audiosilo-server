@@ -256,11 +256,7 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                 )}
                 {kind === 'unknown_asin' && !ignored ? (
                   // Add it to the community database, by its ASIN (server#370).
-                  <AddItLink
-                    button
-                    title={b.title || b.path}
-                    href={addBookUrl({ asin: b.asin, title: b.title, author: b.author })}
-                  />
+                  <AddItLink button title={b.title || b.path} href={addBookUrl(b)} />
                 ) : null}
                 {ownFix ? (
                   <FixButton

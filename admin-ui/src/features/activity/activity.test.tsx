@@ -172,6 +172,35 @@ describe('live now', () => {
     expect(within(items[1]).getByText('Chapter 24')).toBeInTheDocument();
   });
 
+  it.each(['watchos', 'wearos'])(
+    'names the AAC download on %s when the book is MP3',
+    async (platform) => {
+      mockFetch(
+        routes({
+          'GET /admin/sessions/live': {
+            body: {
+              sessions: [
+                liveSession({
+                  id: 1,
+                  codec: 'mp3',
+                  client: { app: 'audiosilo-watch', version: '2.6', platform },
+                }),
+                liveSession({
+                  id: 2,
+                  codec: 'mp3',
+                  client: { app: 'Other', version: '1', platform },
+                }),
+              ],
+            },
+          },
+        }),
+      );
+      renderApp('/activity/live');
+      expect(await screen.findByText('Watch download · AAC')).toBeInTheDocument();
+      expect(screen.getByText('Direct · MP3')).toBeInTheDocument();
+    },
+  );
+
   it('says when nobody is listening', async () => {
     mockFetch(routes());
     renderApp('/activity/live');
@@ -225,6 +254,28 @@ describe('sessions', () => {
         ),
       ).toBe(true),
     );
+  });
+
+  it('names a watch session by its AAC download, as Live now does (fe#217)', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/sessions': {
+          body: {
+            sessions: [
+              liveSession({
+                id: 3,
+                codec: 'mp3',
+                client: { app: 'audiosilo-watch', version: '2.6', platform: 'watchos' },
+              }),
+            ],
+            next_before: null,
+          },
+        },
+      }),
+    );
+    renderApp('/activity/sessions');
+    expect(await screen.findByText('Watch download · AAC')).toBeInTheDocument();
+    expect(screen.queryByText('Direct')).toBeNull();
   });
 
   it('has an empty state', async () => {

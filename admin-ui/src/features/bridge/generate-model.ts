@@ -535,46 +535,10 @@ export function parkHint(
   return hint ?? (error || undefined);
 }
 
-/**
- * The reasons the server writes on a job it cancels itself, in plain words
- * (internal/bridge/jobs.go `cancelReasons`; also on a working job it asked to
- * stop, kept through the Bridge's reports): shown as a sentence. Any other
- * error on a cancelled job is the park's or the Bridge's own text (a
- * supervisor's, say), never shown (BRIDGE-02). The server's
- * TestCancelReasonsMatchConsole (internal/bridge) fails when the two lists differ.
- */
-const SERVER_CANCEL_REASONS: readonly string[] = [
-  'a generate job for the book replaced it',
-  'a generate job for the book replaced it; it finds the chapters itself',
-  'a generate job for the book replaced what it was sharing',
-  'a generate job for the book replaced it; make the read-along again after',
-  'the book moved onto another job of this kind',
-  'a newer request replaced it',
-  'its module was turned off',
-  "the book's chapters were edited in the console",
-  'a chapter source was chosen for the book',
-  'the Audible account was removed',
-  "the Audible account's library was deleted",
-  'sync with Audible was turned off for the account',
-];
-
-/**
- * A sentence that ends in a value already ending in a full stop ("Tries again
- * in 29 min." from "in 29 min."): the one stop, not two.
- */
-export function oneStop(sentence: string): string {
-  return /[^.]\.\.$/.test(sentence) ? sentence.slice(0, -1) : sentence;
-}
-
 /** A lower-case phrase as a sentence: from a capital, with a closing full stop. */
 function asSentence(phrase: string): string {
   const s = phrase.charAt(0).toUpperCase() + phrase.slice(1);
   return /[.!?]$/.test(s) ? s : `${s}.`;
-}
-
-/** Whether a job's error is one of the server's own cancel reasons (SERVER_CANCEL_REASONS). */
-export function isServerCancelReason(error: string): boolean {
-  return SERVER_CANCEL_REASONS.includes(error);
 }
 
 /** How a cancelled job reads: who cancelled it, the server's reason, and the park it was cancelled from. */
@@ -587,10 +551,15 @@ export interface CancelledView {
   park?: { code: string; hint?: string };
 }
 
+/** Whether the server cancelled the job (or asked it to stop) for the reason in its error. */
+export function isServerCancelled(job: Pick<BridgeJob, 'error_code'>): boolean {
+  return job.error_code === 'server_cancelled';
+}
+
 export function cancelledView(
-  job: Pick<BridgeJob, 'error' | 'cancel_requested' | 'progress'>,
+  job: Pick<BridgeJob, 'error' | 'error_code' | 'cancel_requested' | 'progress'>,
 ): CancelledView {
-  if (isServerCancelReason(job.error)) return { byAdmin: false, reason: asSentence(job.error) };
+  if (isServerCancelled(job)) return { byAdmin: false, reason: asSentence(job.error) };
   const park = generateProgress(job.progress).park;
   const hint = park ? parkHint(park.code, park.hint, '') : undefined;
   return {

@@ -2226,8 +2226,14 @@ func TestMembers_DeleteListedMembersOnly(t *testing.T) {
 	}
 	// The page read Evie and Ellis; Gus joins before the admin confirms.
 	_, gusTok := m.grownup(t, m.adamTok, "Gus", "all")
-	if s := m.status(t, "DELETE", fmt.Sprintf("%s?delete_members=%d&keep_members=%d", userURL, evie.ID, ellis.ID), m.adminTok, ""); s != http.StatusNoContent {
-		t.Fatalf("delete adam = %d", s)
+	target := fmt.Sprintf("%s?detail=1&delete_members=%d&keep_members=%d", userURL, evie.ID, ellis.ID)
+	if s := m.status(t, "DELETE", target, m.bobTok, ""); s != http.StatusForbidden {
+		t.Fatalf("listener delete = %d, want 403", s)
+	}
+	resp, b := m.do(t, "DELETE", target, m.adminTok, "")
+	var counts map[string]int
+	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(b), &counts) != nil || counts["members_deleted"] != 1 || counts["members_kept"] != 2 {
+		t.Fatalf("delete adam = %d %s, want 1 deleted and 2 kept", resp.StatusCode, b)
 	}
 	if s := m.status(t, "GET", "/api/v1/me", evieTok, ""); s != http.StatusUnauthorized {
 		t.Error("the member the admin chose to delete survived")

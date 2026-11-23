@@ -1,5 +1,5 @@
 import { DESTINATIONS } from '@/components/shell/destinations';
-import { LANGUAGES } from '.';
+import i18n, { LANGUAGES } from '.';
 
 // Every locale file, as the console would load it (non-English ones are lazy chunks).
 const resources = Object.fromEntries(
@@ -65,4 +65,16 @@ describe('navigation labels', () => {
     ]);
     expect(needed.filter((k) => !(k in en))).toEqual([]);
   });
+});
+
+it('uses one full stop after an interpolated abbreviation and preserves ellipses', () => {
+  expect(i18n.t('bridge.generate.retryAt', { when: 'in 29 min.' })).toBe('Tries again in 29 min.');
+  expect(i18n.t('backups.nextAt', { when: 'in 29 min.' })).toBe('Next: in 29 min.');
+  expect(i18n.t('backups.nextAt', { when: 'Wait...' })).toBe('Next: Wait...');
+});
+
+it('preserves punctuation inside a different interpolated value', () => {
+  expect(i18n.t('user.household.independentDescription', { name: 'Vol..dir', owner: 'Vol.' })).toBe(
+    'Vol..dir keeps their progress and any access you gave them directly, and stops getting books through Vol. Vol. can no longer manage the account.',
+  );
 });

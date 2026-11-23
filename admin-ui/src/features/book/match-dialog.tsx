@@ -245,8 +245,10 @@ function MatchBody({
           pickedRef={pickId === undefined && !search.isFetching ? scrollToInitialPick : undefined}
           bookSeconds={b.duration}
           addUrl={addBookUrl({
-            asin: by.asin || b.asin,
-            query: by.q,
+            // A submitted search names the book; else the book's own identifiers.
+            ...(by.asin || by.isbn || by.q
+              ? { asin: by.asin, isbn: by.isbn, query: by.q }
+              : { asin: b.asin, isbn: b.isbn }),
             title: b.title,
             author: b.author,
           })}
@@ -315,18 +317,15 @@ function MatchCompare({
   const coverTick =
     coverChoice ?? (proposal?.cover === true && cachedCommunityCover(qc, coverUrl) !== null);
   const taking = ticks.size + Number(coverTick);
-  const isRecorded = proposal?.match === false;
-  const recordsMatch = proposal?.match_alone === true;
-  const recordsOffered = isRecorded && !!(proposal?.values.asin || proposal?.values.isbn);
+  const recordAlone = proposal?.match_alone || proposal?.records_offered;
 
   const accept = async () => {
     if (!proposal) return;
     setBusy(true);
     // The work and recording go with the ticked fields (acceptRequest's match),
     // before the cover. With no field ticked the cover goes first, then the match
-    // alone when the server's plan records it by itself (match_alone) or it is
-    // the book's recorded match already (isRecorded: its offered ASIN and ISBN are recorded again, so one
-    // unticked is never filled back by a refresh, server#330), so a cover that
+    // alone when the plan records a new match or a changed offered identifier.
+    // A refresh keeps an unticked offered identifier out (server#330). A cover that
     // fails still leaves nothing changed. Another work beside the book's own
     // ASIN or ISBN leaves the recorded match as it is.
     const edit = () =>
@@ -356,9 +355,7 @@ function MatchCompare({
       return;
     }
     const matchErr: unknown =
-      !ticks.size && (recordsMatch || isRecorded)
-        ? await edit().then(() => undefined, failed)
-        : undefined;
+      !ticks.size && recordAlone ? await edit().then(() => undefined, failed) : undefined;
     // The cover's reads wait for the match: a read of the book racing it could land
     // after it, and show the book unmatched.
     if (coverTick) invalidateBookCover(qc, b);
@@ -433,11 +430,7 @@ function MatchCompare({
         <Button
           onClick={() => void accept()}
           disabled={
-            busy ||
-            !proposal ||
-            query.isFetching ||
-            query.isError ||
-            (taking === 0 && !recordsMatch && !recordsOffered)
+            busy || !proposal || query.isFetching || query.isError || (taking === 0 && !recordAlone)
           }
         >
           {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}

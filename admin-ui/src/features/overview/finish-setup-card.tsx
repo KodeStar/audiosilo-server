@@ -4,9 +4,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, ListChecks } from 'lucide-react';
 import { saveSetup, useLibraries, useSetup } from '@/api/hooks';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { PrintedPasswordNotice } from '@/features/setup/printed-password-notice';
 import { hasBookLibrary, showFinishCard, skippedSteps } from '@/features/setup/setup-model';
 import { toastError } from '@/lib/errors';
+import { useCurrentUser } from '@/lib/session';
 
 /**
  * The Overview's "Finish setting up" card (FIRST-RUN-PLAN.md decision 4):
@@ -17,10 +19,30 @@ import { toastError } from '@/lib/errors';
 export function FinishSetupCard() {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const state = useSetup().data?.state;
+  const me = useCurrentUser();
+  const setup = useSetup().data;
+  const state = setup?.state;
   const libraries = useLibraries();
   const [busy, setBusy] = useState(false);
   const hasLibraries = hasBookLibrary(libraries.data ?? []);
+  // setup.skip finishes the flow and dismisses its card, but the admin who
+  // still uses the password printed in the log needs a way to replace it.
+  if (state?.finished && state.dismissed && setup?.printed_password) {
+    return (
+      <PrintedPasswordNotice
+        actions={
+          <Link
+            to="/people/user/$userId"
+            params={{ userId: String(me.id) }}
+            search={{ tab: 'sign-in' }}
+            className={buttonVariants({ variant: 'outline' })}
+          >
+            {t('user.signIn.change')}
+          </Link>
+        }
+      />
+    );
+  }
   if (!libraries.data || !showFinishCard(state, hasLibraries)) return null;
   const skipped = skippedSteps(state, hasLibraries);
 

@@ -83,6 +83,9 @@ export function holdReasons(item: Pick<MatchRunItem, 'detail' | 'holds'>): HoldR
   return all.filter((d): d is HoldReason => (HOLD_REASONS as readonly string[]).includes(d));
 }
 
+/** A held recording's plain length band, the server's meta.PlausibleRuntimeOff. */
+const LENGTH_TOLERANCE = 0.1;
+
 /**
  * The book's length now and its proposed recording's, in seconds, for an item
  * held for its length (among its reasons or alone). Undefined when either is
@@ -92,7 +95,10 @@ export function heldLengths(
   item: Pick<MatchRunItem, 'detail' | 'holds' | 'proposal' | 'book'>,
 ): { book: number; recording: number } | undefined {
   const book = item.book.duration ?? 0;
-  if (runtimeOff(item.proposal.runtime_min, book) === undefined) return undefined;
+  const off = runtimeOff(item.proposal.runtime_min, book);
+  // Older items lack the run's tolerance: the plain band then.
+  if (off === undefined || off <= (item.proposal.length_tolerance ?? LENGTH_TOLERANCE))
+    return undefined;
   return holdReasons(item).includes('length_differs')
     ? { book, recording: (item.proposal.runtime_min ?? 0) * 60 }
     : undefined;

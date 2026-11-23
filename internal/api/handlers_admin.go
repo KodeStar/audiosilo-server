@@ -398,6 +398,7 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 // only those members go and every other is kept, so a member added after the
 // console read the list is never deleted unseen (server#222; an id that isn't
 // one of theirs, or one keep_members names, is 400 invalid_delete_members).
+// With detail=1 the reply includes counts of the members deleted and kept.
 // Their Audible accounts go too, and those accounts' open jobs are cancelled.
 // Two guards: an admin cannot delete their
 // own account (disable it instead - prevents self-lockout and fat-finger loss),
@@ -450,6 +451,10 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		details = map[string]any{"members_deleted": done.MembersDeleted, "members_kept": done.MembersKept}
 	}
 	a.audit(r, "user.delete", target.Username, details)
+	if query.Get("detail") == "1" {
+		writeJSON(w, http.StatusOK, map[string]int{"members_deleted": done.MembersDeleted, "members_kept": len(done.MembersKept)})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -663,6 +668,9 @@ func (a *API) mintedInvite(r *http.Request, m auth.Minted) map[string]any {
 		"invite_url": a.inviteURL(r, m.Code),
 		"max_uses":   m.MaxUses,
 	}
+	if a.externalHTTPS(r) {
+		out["external_https"] = true
+	}
 	if m.ExpiresAt != "" {
 		out["expires_at"] = m.ExpiresAt
 	}
@@ -752,6 +760,7 @@ type adminLibrary struct {
 	Scan      library.ScanProgress `json:"scan"`
 	// The admin-only settings (off the player's library wire) and, with a schedule,
 	// when the next scheduled scan is due.
+	FromConfig     bool     `json:"from_config"`
 	ScanSchedule   string   `json:"scan_schedule"`
 	IgnorePatterns []string `json:"ignore_patterns"`
 	MetadataSource string   `json:"metadata_source"`
@@ -791,6 +800,7 @@ func (a *API) adminLibraries(ctx context.Context) ([]adminLibrary, error) {
 			BookCount:      counts[l.ID],
 			Available:      available[l.ID],
 			Scan:           a.scanner.Progress(l.ID),
+			FromConfig:     a.configLibrary(l.Name),
 			ScanSchedule:   l.ScanSchedule,
 			IgnorePatterns: l.IgnorePatterns,
 			MetadataSource: l.MetadataSource,

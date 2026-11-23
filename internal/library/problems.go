@@ -21,9 +21,9 @@ import (
 
 // Read problem codes (books.scan_error).
 const (
-	problemUnreadable = catalog.ProblemUnreadable // a file couldn't be opened
-	problemEmptyFile  = "empty_file"              // a file is 0 bytes
-	problemProbe      = "probe_failed"            // ffprobe couldn't read a file
+	problemUnreadable = catalog.ProblemUnreadable  // a file couldn't be opened
+	problemEmptyFile  = "empty_file"               // a file is 0 bytes
+	problemProbe      = catalog.ProblemProbeFailed // ffprobe couldn't read a file
 )
 
 // noteProblem records the first read problem found among a book's files: file is
@@ -185,7 +185,7 @@ func cutShort(detail string) bool { return detail == tagsUnreadDetail || detail 
 // every scan.
 func keptAsStored(sig catalog.Signature) bool {
 	return sig.ScanError == problemUnreadable ||
-		(sig.ScanError == problemProbe && strings.HasPrefix(sig.ScanErrorDetail, metadata.ErrProbeTimeout.Error()))
+		catalog.IsProbeTimeout(sig.ScanError, sig.ScanErrorDetail)
 }
 
 // fileState is a file's mtime (Unix seconds) and size: with its absolute path,

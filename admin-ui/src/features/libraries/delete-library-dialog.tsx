@@ -39,13 +39,9 @@ export function DeleteLibraryDialog({
         try {
           await api.deleteLibrary(l.id);
         } catch (err) {
-          // The config declares it, which the console's copy of the setup (read
-          // up to a minute ago) didn't know yet. Retrying can't help, so close
-          // the dialog, say why in the delete's own words (the code's usual copy
-          // is about a rename), and read the setup again so the card locks its
-          // Delete (exact: the folder previews share the key's prefix).
+          // A restart may have changed the declaration since the last listing.
           if (err instanceof ApiError && err.code === 'config_library') {
-            void qc.invalidateQueries({ queryKey: keys.setup, exact: true });
+            void qc.invalidateQueries({ queryKey: keys.libraries });
             toast.add({ title: t('libraries.menu.deleteConfigLocked'), type: 'error' });
             return;
           }

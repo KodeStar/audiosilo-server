@@ -320,6 +320,65 @@ func TestErrorCodes(t *testing.T) {
 	}
 }
 
+// The invite card needs to know whose certificate a visitor reaches. The
+// hint changes neither the invite address nor who may mint or rotate an invite.
+func TestInviteExternalHTTPS(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	admin, member, id := adminAndMember(t, e)
+	for _, tc := range []struct {
+		name, publicURL, trusted, header, value string
+		external                                bool
+	}{
+		{"direct self-signed", "", "", "", "", false},
+		{"trusted https", "", "127.0.0.1/32", "X-Forwarded-Proto", "https", true},
+		{"trusted forwarded", "", "127.0.0.1/32", "Forwarded", `for=192.0.2.1;proto="https"`, true},
+		{"untrusted header", "", "192.0.2.0/24", "X-Forwarded-Proto", "https", false},
+		{"trusted http", "", "127.0.0.1/32", "X-Forwarded-Proto", "http", false},
+		{"ambiguous chain", "", "127.0.0.1/32", "X-Forwarded-Proto", "https, http", false},
+		{"public https", "https://books.example.com", "", "", "", true},
+		{"public http", "http://books.example.com", "127.0.0.1/32", "X-Forwarded-Proto", "https", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := *e.cfg
+			cfg.PublicURL = tc.publicURL
+			if tc.trusted != "" {
+				cfg.TrustedProxies = []string{tc.trusted}
+			}
+			e.api.live.Store(newLiveConfig(&cfg, &cfg))
+			headers := map[string]string{}
+			if tc.header != "" {
+				headers[tc.header] = tc.value
+			}
+			check := func(path string, want int) {
+				t.Helper()
+				if resp, _ := e.doHeaders(t, "POST", path, member, "", headers); resp.StatusCode != http.StatusForbidden {
+					t.Fatalf("member %s: %d", path, resp.StatusCode)
+				}
+				resp, body := e.doHeaders(t, "POST", path, admin, "", headers)
+				var invite struct {
+					External bool `json:"external_https"`
+				}
+				if resp.StatusCode != want || json.Unmarshal([]byte(body), &invite) != nil || invite.External != tc.external {
+					t.Fatalf("admin %s: status %d, external_https %t, want %d, %t", path, resp.StatusCode, invite.External, want, tc.external)
+				}
+			}
+			check(fmt.Sprintf("/api/v1/admin/users/%d/authcode", id), http.StatusCreated)
+			invites, err := e.auth.ListInvites(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, invite := range invites {
+				if invite.UserID == id {
+					check(fmt.Sprintf("/api/v1/admin/authcodes/%d/rotate", invite.ID), http.StatusOK)
+					return
+				}
+			}
+			t.Fatal("created invite missing")
+		})
+	}
+}
+
 // TestInviteResponsesCarryLifetime: minting and rotating say how many devices
 // the invite pairs and when it expires, so the console shows the server's values.
 func TestInviteResponsesCarryLifetime(t *testing.T) {

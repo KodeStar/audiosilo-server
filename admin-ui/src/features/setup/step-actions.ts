@@ -22,8 +22,8 @@ export interface StepProps {
   /** The library to create after the metadata step (this browser's draft). */
   draft: SetupDraft | null;
   setDraft: (d: SetupDraft | null) => void;
-  /** Records the step as done or skipped and moves on (throws when the save failed). */
-  leave: (mark: SetupMark) => Promise<void>;
+  /** Moves on, saving the mark unless the step already recorded it. */
+  leave: (mark?: SetupMark) => Promise<void>;
   /** Goes to the step before; null on the first. */
   back: (() => void) | null;
   /** This is where the flow ends (Continue reads Finish). */

@@ -47,8 +47,11 @@ func TestSetupWizardAccountOnly(t *testing.T) {
 	}
 
 	code, page := do("GET", "/setup", "")
-	if code != http.StatusOK || !strings.Contains(page, `id="password"`) || !strings.Contains(page, `href="/admin">Continue setup`) {
-		t.Fatalf("GET /setup = %d, want the account form and a Continue setup link to /admin", code)
+	if code != http.StatusOK || !strings.Contains(page, `id="password"`) || !strings.Contains(page, `href="/admin">Open admin console`) {
+		t.Fatalf("GET /setup = %d, want the account form and an Open admin console link to /admin", code)
+	}
+	if !strings.Contains(page, "Sign in to the admin console with the username and password you just chose.") {
+		t.Error("the closing card must also work when setup.skip finished the console flow")
 	}
 	if strings.Contains(page, "library-root") || strings.Contains(page, "library-name") {
 		t.Error("the setup page still asks for the library")

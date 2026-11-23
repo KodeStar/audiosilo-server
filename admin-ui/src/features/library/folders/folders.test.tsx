@@ -36,6 +36,27 @@ function listingOf(fs: Record<string, FsEntry[]>, path: string) {
   return { path, folder, entries, total: entries.length, offset: 0 };
 }
 
+// One folder at the root whose own listing comes in the server's pages of 500.
+function pagedFolder(folder: FsEntry, entries: readonly FsEntry[]) {
+  return ({ query }: MockRequest) => {
+    if (!query.get('path')) {
+      return { body: { path: '', entries: [folder], total: 1, offset: 0 } };
+    }
+    const offset = Number(query.get('offset') ?? 0);
+    const end = Math.min(offset + 500, entries.length);
+    return {
+      body: {
+        path: folder.path,
+        folder,
+        entries: entries.slice(offset, end),
+        total: entries.length,
+        offset,
+        ...(end < entries.length ? { next_offset: end } : {}),
+      },
+    };
+  };
+}
+
 // Fiction: A/ holds the book B/ (three files); Other/ is empty.
 function fiction(override?: FolderMode) {
   const fs: Record<string, FsEntry[]> = {
@@ -133,6 +154,9 @@ describe('folders', () => {
     const card = await screen.findByRole('region', { name: 'Audio files in this folder' });
     expect(within(card).getByText(/600 files · 600 MB · 10h/)).toBeInTheDocument();
     expect(within(card).getByText('Showing the first 500 audio files.')).toBeInTheDocument();
+    // Every page was read, so the choices count exactly.
+    expect(screen.getByText(/Here: one book with 600 files\./)).toBeInTheDocument();
+    expect(screen.getByText(/Here: 600 books\./)).toBeInTheDocument();
     expect(within(card).getAllByRole('listitem')).toHaveLength(500);
     expect(within(card).queryByText('Part 501.mp3')).toBeNull();
     expect(calls.filter((r) => r.query.get('path') === '' && r.query.has('offset'))).toHaveLength(
@@ -148,23 +172,8 @@ describe('folders', () => {
     }));
     const calls = mockFetch(
       routes({
-        'GET /libraries/1/fs': ({ query }) => {
-          if (!query.get('path')) {
-            return { body: { path: '', entries: [dir('Huge')], total: 1, offset: 0 } };
-          }
-          const offset = Number(query.get('offset') ?? 0);
-          const end = Math.min(offset + 500, files.length);
-          return {
-            body: {
-              path: 'Huge',
-              folder: dir('Huge'),
-              entries: files.slice(offset, end),
-              total: files.length,
-              offset,
-              ...(end < files.length ? { next_offset: end } : {}),
-            },
-          };
-        },
+        'GET /libraries/1/fs': pagedFolder(dir('Huge'), files),
+        'PUT /admin/libraries/1/folder-override': { body: { status: 'override set' } },
       }),
     );
     renderApp('/library/folders?library=1&folder=Huge');
@@ -173,10 +182,31 @@ describe('folders', () => {
     expect(
       within(card).getByText('Totals cover the first 10,000 items in this folder.'),
     ).toBeInTheDocument();
+    // The choices' counts are floors too.
+    expect(screen.getByText(/Here: one book with at least 10,000 files\./)).toBeInTheDocument();
+    expect(screen.getByText(/Here: at least 10,000 books\./)).toBeInTheDocument();
     const offsets = calls
       .filter((r) => r.query.get('path') === 'Huge')
       .map((r) => Number(r.query.get('offset') ?? 0));
     expect(Math.max(...offsets)).toBe(9_500);
+    // And so is the toast's.
+    await userEvent.setup().click(screen.getByRole('radio', { name: /Separate books/ }));
+    expect(await screen.findByText('Split into at least 10,000 books')).toBeInTheDocument();
+  });
+
+  it('counts the disc folders of a very large disc set as at least its first 10,000', async () => {
+    const discs = Array.from({ length: 10_600 }, (_, i) =>
+      dir(`Discs/CD${i + 1}`, { is_book: true }),
+    );
+    mockFetch(
+      routes({ 'GET /libraries/1/fs': pagedFolder(dir('Discs', { split_discs: true }), discs) }),
+    );
+    renderApp('/library/folders?library=1&folder=Discs');
+    expect(
+      await screen.findByText(
+        /Here: at least 10,000 disc folders become one book, in disc order\./,
+      ),
+    ).toBeInTheDocument();
   });
 
   it('keeps the selected folder shown when a refresh of its listing fails', async () => {

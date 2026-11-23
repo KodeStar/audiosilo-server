@@ -234,10 +234,21 @@ func TestMatchRunsUnknownASIN(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("start = %d %s", resp.StatusCode, body)
 	}
-	if run := decodeRun(t, body); run.Total != 1 || run.Mode != catalog.MatchModeUnknownASIN {
+	run := decodeRun(t, body)
+	if run.Total != 1 || run.Mode != catalog.MatchModeUnknownASIN {
 		t.Fatalf("started = %+v", run)
 	}
 	e.api.matchRuns.Wait()
+	// The Not found review links to Add a book using the current identifier.
+	items := "/api/v1/admin/match-runs/" + strconv.FormatInt(run.ID, 10) + "/items?outcome=none"
+	resp, body = e.do(t, "GET", items, adminTok, "")
+	var page struct {
+		Items []matchrun.ItemView `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(body), &page); err != nil || resp.StatusCode != http.StatusOK ||
+		len(page.Items) != 1 || page.Items[0].Book.ASIN != "B0NOPE0001" {
+		t.Fatalf("items = %d %s, want the book's unknown ASIN", resp.StatusCode, body)
+	}
 	if _, body := e.do(t, "GET", "/api/v1/admin/audit", adminTok, ""); !strings.Contains(body, "book.match_unknown_asin") {
 		t.Errorf("audit = %s, want the run logged as one", body)
 	}

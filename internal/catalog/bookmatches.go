@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -147,6 +148,20 @@ var ErrMatchedSince = errors.New("the book's community match changed since it wa
 // check left stale out of its chapters. with is the field edit the caller
 // writes beside the match, after this (withoutOwnOffered).
 func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, bookID int64, a, was *MatchAnchor, with BookEdit, editor any, now string) error {
+	// A hand match to the same recording keeps an earlier offer when the
+	// community no longer lists that identifier, as a refresh does.
+	if was == nil && (a.OfferedASIN == "" || a.OfferedISBN == "") {
+		var asin, isbn string
+		err := tx.QueryRowContext(ctx, `SELECT offered_asin, offered_isbn FROM book_matches
+			WHERE library_id = ? AND path = ? AND work_id = ? AND recording_id = ?`,
+			ref.LibraryID, ref.Path, a.WorkID, a.RecordingID).Scan(&asin, &isbn)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		merged := *a
+		merged.OfferedASIN, merged.OfferedISBN = cmp.Or(a.OfferedASIN, asin), cmp.Or(a.OfferedISBN, isbn)
+		a = &merged
+	}
 	a, err := withoutOwnOffered(ctx, tx, bookID, a, with)
 	if err != nil {
 		return err
@@ -183,13 +198,18 @@ func withoutOwnOffered(ctx context.Context, tx *sql.Tx, bookID int64, a *MatchAn
 	fields := l.edited(with).resolve()
 	out := *a
 	for field, offered := range map[string]*string{FieldASIN: &out.OfferedASIN, FieldISBN: &out.OfferedISBN} {
-		fv := fields[field]
-		if *offered != "" && !(fv.Locked && fv.Source == SourceCommunity) &&
-			CleanOverride(field, fv.Value) == *offered {
-			*offered = ""
-		}
+		*offered = fields[field].OfferedIdentifier(field, *offered)
 	}
 	return &out, nil
+}
+
+// OfferedIdentifier returns the ASIN or ISBN a match would record as offered.
+// An identifier the book already holds outside a community override is its own.
+func (fv FieldValue) OfferedIdentifier(field, offered string) string {
+	if !(fv.Locked && fv.Source == SourceCommunity) && CleanOverride(field, fv.Value) == offered {
+		return ""
+	}
+	return offered
 }
 
 // storeAnchor is writeAnchor's write of the book_matches row. A write with was

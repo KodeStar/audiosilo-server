@@ -128,9 +128,12 @@ type MatchProposal struct {
 	Authors     string `json:"authors,omitempty"`
 	Narrators   string `json:"narrators,omitempty"`
 	RuntimeMin  int    `json:"runtime_min,omitempty"`
-	WebURL      string `json:"web_url,omitempty"`
-	CoverURL    string `json:"cover_url,omitempty"`
-	ASINRegion  string `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
+	// LengthTolerance is the fractional difference allowed when the run held
+	// this recording for its length. The review compares it to the current files.
+	LengthTolerance float64 `json:"length_tolerance,omitempty"`
+	WebURL          string  `json:"web_url,omitempty"`
+	CoverURL        string  `json:"cover_url,omitempty"`
+	ASINRegion      string  `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
 	// FoundBy is the book's own identifier a refresh found the record by, or
 	// the ASIN a repick looked up, "asin:<ASIN>" or "isbn:<ISBN>", or for a
 	// refresh by its recorded match, "work:<work id>"

@@ -86,7 +86,7 @@ describe('readalongJobShown (S265-CARD)', () => {
         'none',
         job({
           state: 'cancelled',
-          error: 'a generate job for the book replaced it; make the read-along again after',
+          error_code: 'server_cancelled',
         }),
       ),
     ).toBe(true);

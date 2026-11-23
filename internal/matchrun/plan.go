@@ -726,7 +726,14 @@ func PlanRepick(st *catalog.MatchState, p catalog.MatchProposal) map[string]stri
 // (Classify, a refresh).
 func lengthFits(p catalog.MatchProposal, seconds float64, narrated bool) bool {
 	off, known := meta.RuntimeOff(p.RuntimeMin, seconds)
-	return !known || off <= meta.PlausibleRuntimeOff || (narrated && off <= meta.NarratedRuntimeOff)
+	return !known || off <= lengthTolerance(narrated)
+}
+
+func lengthTolerance(narrated bool) float64 {
+	if narrated {
+		return meta.NarratedRuntimeOff
+	}
+	return meta.PlausibleRuntimeOff
 }
 
 // narratorReads reports whether the book's narrators read p's recording, one of

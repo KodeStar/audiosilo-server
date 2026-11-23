@@ -136,12 +136,14 @@ function Detail({
   const [saving, setSaving] = useState<FolderChoice>();
   const count = files.length;
   const fileCount = counted(count, lang);
+  // Counts from a partial listing are floors: "at least" them.
+  const atLeast = partial ? 'AtLeast' : '';
   /** What a choice means for a folder joined from its disc folders. */
   const joinHere = (c: FolderChoice) => {
     if (c === 'auto') return t('folders.mode.autoJoinHere');
     if (c !== 'book') return undefined;
     return join.subBooks
-      ? t('folders.mode.bookJoinCount', counted(join.subBooks, lang))
+      ? t(`folders.mode.bookJoinCount${atLeast}`, counted(join.subBooks, lang))
       : t('folders.mode.bookJoinHere');
   };
 
@@ -174,7 +176,7 @@ function Detail({
     try {
       await setFolderMode(qc, library.id, entry.path, modeOf(choice));
       toast.add({
-        title: t(`folders.toast.${choice}`, fileCount),
+        title: t(`folders.toast.${choice}${choice === 'collection' ? atLeast : ''}`, fileCount),
         description: t(toastBody(join.joinable, choice, entry.override), { library: library.name }),
         type: 'success',
       });
@@ -256,7 +258,7 @@ function Detail({
               // audio, its files; for one joined from its disc folders, those.
               description: [
                 t(`folders.mode.${c}Body`),
-                count > 0 && c !== 'book' && t(`folders.mode.${c}Here`, fileCount),
+                count > 0 && c !== 'book' && t(`folders.mode.${c}Here${atLeast}`, fileCount),
                 join.joinable && joinHere(c),
               ]
                 .filter(Boolean)

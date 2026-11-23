@@ -229,9 +229,7 @@ export function FolderStep({
           </Field>
         ) : null}
 
-        {libraries.length > 0 ? (
-          <AlreadyAdded libraries={libraries} configNames={env.config_libraries} />
-        ) : null}
+        {libraries.length > 0 ? <AlreadyAdded libraries={libraries} /> : null}
       </div>
       <StepFooter back={back} onSkip={onSkip} onContinue={onContinue} last={last} />
     </>
@@ -280,13 +278,7 @@ function PreviewFound({ preview: p, lang }: { preview: LibraryPreview; lang: str
 }
 
 /** The libraries the server already has, config-declared ones marked as such. */
-function AlreadyAdded({
-  libraries,
-  configNames,
-}: {
-  libraries: AdminLibrary[];
-  configNames: string[];
-}) {
+function AlreadyAdded({ libraries }: { libraries: AdminLibrary[] }) {
   const { t } = useTranslation();
   return (
     <section aria-labelledby="setup-added" className="flex flex-col gap-2">
@@ -304,7 +296,7 @@ function AlreadyAdded({
             </div>
             <div className="flex flex-wrap gap-1.5">
               <Badge variant="secondary">{t(`libraries.kind.${l.kind}`)}</Badge>
-              {configNames.includes(l.name) ? (
+              {l.from_config ? (
                 <Badge variant="outline">{t('setup.folder.fromConfig')}</Badge>
               ) : null}
             </div>
