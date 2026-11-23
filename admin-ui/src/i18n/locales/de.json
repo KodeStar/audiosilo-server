@@ -1322,6 +1322,7 @@
   "folders.mode.collectionHere_one": "Hier: {{formatted}} Buch.",
   "folders.mode.collectionHere_other": "Hier: {{formatted}} Bücher.",
   "folders.files.first500": "Die ersten 500 Audiodateien werden angezeigt.",
+  "folders.files.partial": "Die Summen umfassen die ersten {{number}} Einträge dieses Ordners.",
   "folders.files.title": "Audiodateien in diesem Ordner",
   "folders.files.summary_one": "{{formatted}} Datei · {{size}}",
   "folders.files.summary_other": "{{formatted}} Dateien · {{size}}",

@@ -140,6 +140,45 @@ describe('folders', () => {
     );
   });
 
+  it('totals a very large folder over its first 10,000 items and says so', async () => {
+    const files = Array.from({ length: 10_600 }, (_, i) => ({
+      ...audio(`Huge/Part ${i + 1}.mp3`),
+      size: 1_000_000,
+      duration: 60,
+    }));
+    const calls = mockFetch(
+      routes({
+        'GET /libraries/1/fs': ({ query }) => {
+          if (!query.get('path')) {
+            return { body: { path: '', entries: [dir('Huge')], total: 1, offset: 0 } };
+          }
+          const offset = Number(query.get('offset') ?? 0);
+          const end = Math.min(offset + 500, files.length);
+          return {
+            body: {
+              path: 'Huge',
+              folder: dir('Huge'),
+              entries: files.slice(offset, end),
+              total: files.length,
+              offset,
+              ...(end < files.length ? { next_offset: end } : {}),
+            },
+          };
+        },
+      }),
+    );
+    renderApp('/library/folders?library=1&folder=Huge');
+    const card = await screen.findByRole('region', { name: 'Audio files in this folder' });
+    expect(within(card).getByText(/10,000 files · 10 GB/)).toBeInTheDocument();
+    expect(
+      within(card).getByText('Totals cover the first 10,000 items in this folder.'),
+    ).toBeInTheDocument();
+    const offsets = calls
+      .filter((r) => r.query.get('path') === 'Huge')
+      .map((r) => Number(r.query.get('offset') ?? 0));
+    expect(Math.max(...offsets)).toBe(9_500);
+  });
+
   it('Show more asks for the next page after a refresh of the first one failed', async () => {
     // Big/ holds 620 folders. Its first page stays listed through a failed
     // refresh, so Show more still means the page after it.

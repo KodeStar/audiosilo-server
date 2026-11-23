@@ -1404,6 +1404,7 @@
   "folders.mode.collectionHere_other": "Aquí: {{formatted}} libros.",
   "folders.mode.collectionHere_many": "Aquí: {{formatted}} libros.",
   "folders.files.first500": "Se muestran los primeros 500 archivos de audio.",
+  "folders.files.partial": "Los totales cubren los primeros {{number}} elementos de esta carpeta.",
   "folders.files.title": "Archivos de audio de esta carpeta",
   "folders.files.summary_one": "{{formatted}} archivo · {{size}}",
   "folders.files.summary_other": "{{formatted}} archivos · {{size}}",

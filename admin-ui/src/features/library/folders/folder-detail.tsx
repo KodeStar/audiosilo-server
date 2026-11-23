@@ -14,11 +14,14 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { bookRoute } from '@/lib/book-route';
 import { toastError } from '@/lib/errors';
-import { counted, formatBytes, formatDuration } from '@/lib/format';
+import { counted, formatBytes, formatDuration, formatNumber } from '@/lib/format';
 import { joinLibraryPath, relBaseName } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { FOLDER_CHOICES, choiceOf, modeOf, type FolderChoice } from './folder-modes';
 import { audioFilesOf, foldersIn, joinChoices } from './folders-model';
+
+/** How many of a folder's entries its totals read (20 pages of 500). */
+const TOTALLED = 10_000;
 
 /**
  * The selected folder: what it is, how AudioSilo reads it (each choice saved
@@ -36,19 +39,24 @@ export function FolderDetail({
 }) {
   const { t } = useTranslation();
   const next = own.data?.next_offset;
+  // The later pages up to TOTALLED entries, read once: they are read again only
+  // when something changes the library (an invalidation) or the first page counts
+  // another total, never on each focus of the window. A bigger folder is totalled
+  // over its first TOTALLED entries and says so, rather than paging for minutes.
   const rest = useQuery({
-    queryKey: keys.folderRest(library.id, path, next ?? 0),
+    queryKey: keys.folderRest(library.id, path, next ?? 0, own.data?.total ?? 0),
     enabled: !!next,
+    staleTime: Infinity,
     queryFn: async ({ signal }) => {
       let offset = next;
       const entries: FsEntry[] = [];
-      while (offset) {
+      while (offset && offset < TOTALLED) {
         signal.throwIfAborted();
         const page = await api.browse(library.id, path, offset, true);
         entries.push(...page.entries);
         offset = page.next_offset;
       }
-      return entries;
+      return { entries, more: !!offset };
     },
   });
   const name = own.data?.folder?.name ?? relBaseName(path);
@@ -69,7 +77,8 @@ export function FolderDetail({
       </Notice>
     );
   }
-  const failed = own.isError ? own : rest.isError ? rest : undefined;
+  // A later page's failed refresh keeps the totals there are, as the tree keeps its pages.
+  const failed = own.isError ? own : rest.isError && !rest.data ? rest : undefined;
   if (failed) {
     return (
       <QueryError
@@ -87,7 +96,10 @@ export function FolderDetail({
       </div>
     );
   }
-  const listing: FsListing = { ...own.data, entries: own.data.entries.concat(rest.data ?? []) };
+  const listing: FsListing = {
+    ...own.data,
+    entries: own.data.entries.concat(rest.data?.entries ?? []),
+  };
   const entry = own.data.folder;
   const files = audioFilesOf(listing);
   return (
@@ -96,6 +108,7 @@ export function FolderDetail({
       library={library}
       entry={entry}
       files={files}
+      partial={!!rest.data?.more}
       // A folder with no audio of its own can still be joined from its disc folders.
       join={joinChoices(files.files.length, entry, foldersIn(listing))}
     />
@@ -106,11 +119,14 @@ function Detail({
   library,
   entry,
   files: { files, size, duration },
+  partial,
   join,
 }: {
   library: AdminLibrary;
   entry: FsEntry;
   files: ReturnType<typeof audioFilesOf>;
+  /** Whether the totals cover only the folder's first TOTALLED entries. */
+  partial: boolean;
   join: ReturnType<typeof joinChoices>;
 }) {
   const { t, i18n } = useTranslation();
@@ -267,6 +283,11 @@ function Detail({
               </span>
             }
           />
+          {partial ? (
+            <p className="px-5 py-2 text-muted-foreground">
+              {t('folders.files.partial', { number: formatNumber(TOTALLED, lang) })}
+            </p>
+          ) : null}
           {count > 500 ? (
             <p className="px-5 py-2 text-muted-foreground">{t('folders.files.first500')}</p>
           ) : null}
