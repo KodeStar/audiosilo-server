@@ -155,15 +155,20 @@ func (a *API) readalongUnchanged(w http.ResponseWriter, r *http.Request, lib *ca
 	if inm == "" {
 		return false
 	}
+	// The index first: a book it holds no head for touches no share.
 	ctx := r.Context()
-	info, err := metadata.Bounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(book.RelPath)), a.fileWait, func() (fs.FileInfo, error) {
-		return library.StatReadalongMap(*lib, book.RelPath, book.IsFolder)
-	}, nil)
-	if err != nil || !spa.ETagListMatches(inm, readalongETag(info, gzip)) {
+	idx, err := a.cat.BookReadalongAt(ctx, lib.ID, book.RelPath)
+	if err != nil || idx.Head == nil {
 		return false
 	}
-	idx, err := a.cat.BookReadalongAt(ctx, lib.ID, book.RelPath)
-	if err != nil || idx.Head == nil ||
+	info, err := metadata.LookBounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(book.RelPath)), a.fileWait, func() (fs.FileInfo, error) {
+		return library.StatReadalongMap(*lib, book.RelPath, book.IsFolder)
+	})
+	if err != nil {
+		return false
+	}
+	c := conditional{etag: readalongETag(info, gzip), cacheControl: readalongCache}
+	if !spa.ETagListMatches(inm, c.etag) ||
 		!slices.Contains(strings.Split(idx.AttachmentsSig, ","), metadata.AttachmentSignature(metadata.AttachmentReadalong, info)) {
 		return false
 	}
@@ -176,7 +181,7 @@ func (a *API) readalongUnchanged(w http.ResponseWriter, r *http.Request, lib *ca
 		return false
 	}
 	w.Header().Add("Vary", "Accept-Encoding")
-	return conditional{etag: readalongETag(info, gzip), cacheControl: readalongCache}.notModified(w, r)
+	return c.notModified(w, r)
 }
 
 // readalongETag is the map's ETag as the file info has it. The gzip answer is
