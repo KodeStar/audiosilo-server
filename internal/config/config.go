@@ -369,9 +369,7 @@ type MetadataConfig struct {
 	// interval, and asks BaseURL only while that copy can't answer.
 	Mode string `yaml:"mode"`
 	// MirrorSettings controls the local copy's schedule, read at startup.
-	MirrorSettings struct {
-		Interval time.Duration `yaml:"interval,omitempty"`
-	} `yaml:"mirror,omitempty"`
+	MirrorSettings MetadataMirrorConfig `yaml:"mirror,omitempty"`
 	// ReportUnknown sends the metadata service, once a day, the Audible ASINs of
 	// this server's books the community database doesn't know (internal/coverage),
 	// and nothing else. Off by default; applies at once.
@@ -381,6 +379,43 @@ type MetadataConfig struct {
 // MinMirrorInterval is the shortest metadata.mirror.interval: the mirror's
 // retry after a failed check.
 const MinMirrorInterval = time.Hour
+
+// MetadataMirrorConfig is metadata.mirror, the local copy's schedule.
+type MetadataMirrorConfig struct {
+	// Interval is the time between successful release checks: 0 for one week,
+	// else at least MinMirrorInterval.
+	Interval time.Duration `yaml:"interval,omitempty"`
+}
+
+// UnmarshalYAML reads interval as a duration ("168h", "0s", "0") or as a bare
+// 0, the one-week default: yaml.v3 refuses any number for a time.Duration, and
+// a bare number other than 0 has no unit, so it is refused with the key named.
+func (m *MetadataMirrorConfig) UnmarshalYAML(n *yaml.Node) error {
+	var raw struct {
+		Interval yaml.Node `yaml:"interval"`
+	}
+	if err := n.Decode(&raw); err != nil {
+		return err
+	}
+	iv := &raw.Interval
+	if iv.Kind == 0 { // no interval key
+		return nil
+	}
+	if iv.Kind == yaml.AliasNode && iv.Alias != nil { // "interval: *name": read the anchored value
+		iv = iv.Alias
+	}
+	if iv.ShortTag() == "!!int" {
+		if v, err := strconv.ParseInt(iv.Value, 0, 64); err != nil || v != 0 {
+			// A TypeError, as yaml.v3's own, so the message reads like the others.
+			return &yaml.TypeError{Errors: []string{fmt.Sprintf(
+				"line %d: metadata.mirror.interval must be a duration such as 168h, or 0 for one week, got %s",
+				raw.Interval.Line, iv.Value)}}
+		}
+		m.Interval = 0
+		return nil
+	}
+	return iv.Decode(&m.Interval)
+}
 
 // The metadata.mode values.
 const (

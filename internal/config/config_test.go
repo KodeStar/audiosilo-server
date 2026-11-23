@@ -317,3 +317,56 @@ func TestLoadUpcomingWindow(t *testing.T) {
 		}
 	}
 }
+
+// metadata.mirror.interval loads as config.example.yaml describes it: a bare 0
+// (which yaml.v3 alone refuses for a duration), "0" and 0s all mean one week,
+// a duration of an hour or more is kept, and a shorter or unitless one refuses
+// to start.
+func TestLoadMirrorInterval(t *testing.T) {
+	for _, tc := range []struct {
+		interval string
+		want     time.Duration
+		wantErr  string
+	}{
+		{"0", 0, ""},
+		{"0s", 0, ""},
+		{`"0"`, 0, ""},
+		{"48h", 48 * time.Hour, ""},
+		{"168h", 168 * time.Hour, ""},
+		{"30m", 0, "metadata.mirror.interval must be 0 (one week) or at least 1h0m0s, got 30m0s"},
+		{"3600", 0, "metadata.mirror.interval must be a duration such as 168h, or 0 for one week, got 3600"},
+		{"*zero", 0, ""},
+		{"*hour", 0, "line 4: metadata.mirror.interval must be a duration such as 168h, or 0 for one week, got 3600"},
+	} {
+		dir := t.TempDir()
+		// The anchor lets a test read an alias: "*zero" is the bare 0, "*hour" 3600.
+		yml := "x: [&zero 0, &hour 3600]\nmetadata:\n  mirror:\n    interval: " + tc.interval + "\n"
+		if err := os.WriteFile(Path(dir), []byte(yml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, _, err := Load(dir)
+		if tc.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("interval %s: err = %v, want %q", tc.interval, err, tc.wantErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("interval %s: %v", tc.interval, err)
+		}
+		if got := cfg.Metadata.MirrorSettings.Interval; got != tc.want {
+			t.Fatalf("interval %s: got %v, want %v", tc.interval, got, tc.want)
+		}
+		// Save writes it back in a form the next start reads the same.
+		if err := cfg.Save(); err != nil {
+			t.Fatal(err)
+		}
+		again, _, err := Load(dir)
+		if err != nil {
+			t.Fatalf("interval %s after a save: %v", tc.interval, err)
+		}
+		if got := again.Metadata.MirrorSettings.Interval; got != tc.want {
+			t.Fatalf("interval %s after a save: got %v, want %v", tc.interval, got, tc.want)
+		}
+	}
+}
