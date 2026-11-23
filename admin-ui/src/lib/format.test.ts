@@ -81,7 +81,17 @@ describe('format', () => {
     expect(formatBytes(1_310_000_000, 'en')).toBe('1.3 GB');
     expect(formatBytes(48_000_000, 'en')).toBe('48 MB');
     expect(formatBytes(245_000_000, 'en')).toBe('245 MB');
-    expect(formatBytes(512, 'en')).toBe('512 byte');
+    expect(formatBytes(512, 'en')).toBe('512 bytes');
+    expect(formatBytes(1, 'en')).toBe('1 byte');
+    // Plain bytes agree in number in every console language (French spaces with U+202F).
+    const bytes = (n: number, lang: string) => formatBytes(n, lang).replace(/\s/gu, ' ');
+    expect(bytes(895, 'pt')).toBe('895 bytes');
+    expect(bytes(1, 'pt')).toBe('1 byte');
+    expect(bytes(895, 'fr')).toBe('895 octets');
+    expect(bytes(1, 'fr')).toBe('1 octet');
+    expect(bytes(895, 'de')).toBe('895 Byte');
+    expect(bytes(895, 'es')).toBe('895 bytes');
+    expect(bytes(895, 'it')).toBe('895 byte');
   });
 
   it('formats a clock position', () => {
