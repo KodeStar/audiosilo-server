@@ -241,8 +241,8 @@ var noLanguage = func() map[string]bool {
 var yearRE = regexp.MustCompile(`^\d{4}`)
 
 // Propose is what candidate c offers a book as recording rec (nil = none): the
-// match dialog's community values, each
-// in stored form, a value an override would refuse left out. The ASIN is the
+// match dialog's community values (Preview), each in stored form, a value an
+// override would refuse left out. The ASIN is the
 // recording's best for this server (meta.MatchRecording.ASINs is ordered by the
 // preferred marketplace), named with its marketplace. The series are the ones a
 // book that is rec is in (meta.MatchRecording.Series): an edition named for that
@@ -398,10 +398,11 @@ type seriesOffer struct {
 // lists the series a book of the work is in (its main one first, then p.Values'
 // more_series: meta.SeriesFor's rules) and offers one as the book's main series:
 // the book's own when the work is in it, else the work's first. Even overwrite
-// keeps a book filed under another of the work's series. The book keeps one main series - its own, or the
-// one being set - so its position is the community's position in THAT series
-// (its first listing; none when the community doesn't list it), and the work's
-// other series become its more_series. A main series the community doesn't list
+// keeps a book filed under another of the work's series. The book keeps one
+// main series - its own, or the one being set - so its position is the
+// community's position in THAT series (its first listing; none when the
+// community doesn't list it), and the work's other series become its
+// more_series. A main series the community doesn't list
 // at all is most likely the work's main series spelled the book's own way
 // ("Stormlight Archive" for "The Stormlight Archive"), so that one isn't added
 // beside it as another.

@@ -882,7 +882,10 @@ func TestPreviewUsesOverwritePlan(t *testing.T) {
 		}
 		switch st.Fields[catalog.FieldSeries].Value {
 		case "":
-			if got.Values["series_index"] != "8" || got.AlternateSeries.Values["series_index"] != "" {
+			// Declining the offered series leaves the book none: Discworld is
+			// not listed among its other series either.
+			if got.Values["series_index"] != "8" || got.AlternateSeries.Values["series_index"] != "" ||
+				got.AlternateSeries.Values["more_series"] != `[{"name":"City Watch","position":1,"position_end":3}]` {
 				t.Fatalf("series-less book = %+v", got)
 			}
 		case "My series":

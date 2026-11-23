@@ -5,6 +5,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // ProposalFields are the community values to compare and the default writes.
@@ -54,8 +55,14 @@ func Preview(st *catalog.MatchState, c *meta.MatchCandidate, rec *meta.MatchReco
 		return result
 	}
 	if alternate != main {
+		work := series.work
+		if alternate == "" {
+			// A book with no series that declines the one offered keeps none:
+			// the declined series isn't listed among its other series either.
+			work = slices.DeleteFunc(slices.Clone(work), func(s catalog.SeriesRef) bool { return match.SameSeries(s.Name, series.name) })
+		}
 		other := Writes{Set: map[string]string{}}
-		pos, more := planSeriesDetails(ScopeOverwrite, st, series.work, alternate, &other)
+		pos, more := planSeriesDetails(ScopeOverwrite, st, work, alternate, &other)
 		fields := &ProposalFields{Values: map[string]string{}, Set: other.Set, Revert: other.Revert}
 		fields.offer(catalog.FieldSeriesIndex, pos)
 		fields.offer(catalog.FieldMoreSeries, more)
