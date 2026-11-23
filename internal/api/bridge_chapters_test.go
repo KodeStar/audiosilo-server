@@ -422,6 +422,7 @@ func TestBridgeDetectFinishedSaysWhereTheChaptersGo(t *testing.T) {
 		`{"attempt":1,"state":"done","result":{"chapters":12}}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("done: %d %s", resp.StatusCode, out)
 	}
+	b.notify.Flush() // events are recorded in the background
 	evs, _, err := b.cat.ListServerEvents(ctx, 0, 10, notify.KindBridgeJobFinished)
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("events = %v, %v", evs, err)

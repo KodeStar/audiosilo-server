@@ -1460,6 +1460,7 @@ func TestOIDCPendingNotifies(t *testing.T) {
 	tok := e.session(t, e.adminID)
 	pending := func() []catalog.ServerEvent {
 		t.Helper()
+		e.notify.Flush() // events are recorded in the background
 		events, _, err := e.cat.ListServerEvents(ctx, 0, 20, "oidc_pending")
 		if err != nil {
 			t.Fatal(err)

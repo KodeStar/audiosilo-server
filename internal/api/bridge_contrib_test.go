@@ -387,6 +387,7 @@ func TestBridgeContributeSharedNothing(t *testing.T) {
 		`{"attempt":1,"state":"done","result":{"work_id":"mistborn","contributed":{},"covered":["characters","recaps"]}}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("done: %d %s", resp.StatusCode, body)
 	}
+	b.notify.Flush() // events are recorded in the background
 	evs, _, err := b.cat.ListServerEvents(context.Background(), 0, 10, notify.KindBridgeJobFinished)
 	if err != nil || len(evs) != 1 || evs[0].Data["shared_nothing"] != true {
 		t.Fatalf("events = %+v, %v; want one saying nothing was shared", evs, err)

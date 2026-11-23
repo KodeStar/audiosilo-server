@@ -486,6 +486,7 @@ func TestSignInFromAKnownBrowserIsNotANewDevice(t *testing.T) {
 	}
 	newDevices := func() int {
 		t.Helper()
+		e.notify.Flush() // events are recorded in the background
 		_, body := e.do(t, "GET", "/api/v1/admin/events?limit=50", adminTok, "")
 		return strings.Count(body, `"kind":"new_device"`)
 	}
