@@ -411,17 +411,21 @@ func TestSplitCreditsEdges(t *testing.T) {
 	}
 }
 
-func TestNarratorFilterPlan(t *testing.T) {
+func TestCreditFilterPlan(t *testing.T) {
 	t.Parallel()
 	c, _ := newTestCatalog(t)
-	for _, tc := range []struct{ name, index string }{
-		{"Kate Reading", "books_fts VIRTUAL TABLE INDEX"},
-		{"???", "idx_books_narrator (library_id=? AND narrator>?)"},
+	for _, tc := range []struct {
+		filter BookFilter
+		index  string
+	}{
+		{BookFilter{LibraryID: 1, Narrator: "Kate Reading"}, "books_fts VIRTUAL TABLE INDEX"},
+		{BookFilter{LibraryID: 1, Narrator: "???"}, "idx_books_narrator (library_id=? AND narrator>?)"},
+		{BookFilter{LibraryID: 1, Author: "???"}, "(library_id=? AND author>?)"},
 	} {
-		where, args := (BookFilter{LibraryID: 1, Narrator: tc.name}).where("")
+		where, args := tc.filter.where("")
 		plan := strings.Join(queryPlan(t, c, "SELECT b.id FROM books b WHERE "+where+" ORDER BY "+keyTitle.expr+", b.id LIMIT ?", append(args, 61)), "\n")
 		if !strings.Contains(plan, tc.index) {
-			t.Errorf("narrator %q: expected %s in plan:\n%s", tc.name, tc.index, plan)
+			t.Errorf("%+v: expected %s in plan:\n%s", tc.filter, tc.index, plan)
 		}
 	}
 }
