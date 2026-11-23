@@ -256,6 +256,28 @@ describe('sessions', () => {
     );
   });
 
+  it('names a watch session by its AAC download, as Live now does (fe#217)', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/sessions': {
+          body: {
+            sessions: [
+              liveSession({
+                id: 3,
+                codec: 'mp3',
+                client: { app: 'audiosilo-watch', version: '2.6', platform: 'watchos' },
+              }),
+            ],
+            next_before: null,
+          },
+        },
+      }),
+    );
+    renderApp('/activity/sessions');
+    expect(await screen.findByText('Watch download · AAC')).toBeInTheDocument();
+    expect(screen.queryByText('Direct')).toBeNull();
+  });
+
   it('has an empty state', async () => {
     mockFetch(routes({ 'GET /admin/sessions': { body: { sessions: [], next_before: null } } }));
     renderApp('/activity/sessions');
