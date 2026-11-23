@@ -924,7 +924,8 @@ func (a *API) adminMatchCandidates(w http.ResponseWriter, r *http.Request, libra
 //
 // Responses: metadata off -> 404 (code metadata_off); no library_id, or a work
 // or recording id that isn't one -> 400; no book -> 404 (code book_not_found);
-// the work or recording not found -> 404; upstream down -> 502; otherwise 200.
+// the work or recording not found -> 404 (code not_found); upstream down -> 502;
+// otherwise 200.
 func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return
@@ -965,7 +966,7 @@ func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(named) == 0 || named[0].WorkID != work {
-			writeError(w, http.StatusNotFound, "match candidate not found")
+			writeErrorCode(w, http.StatusNotFound, codeNotFound, "match candidate not found")
 			return
 		}
 		c = &named[0]
@@ -974,7 +975,7 @@ func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
 	if recording != "" {
 		i := slices.IndexFunc(c.Recordings, func(m meta.MatchRecording) bool { return m.ID == recording })
 		if i < 0 {
-			writeError(w, http.StatusNotFound, "recording not found")
+			writeErrorCode(w, http.StatusNotFound, codeNotFound, "recording not found")
 			return
 		}
 		rec = &c.Recordings[i]

@@ -557,25 +557,29 @@ func TestMatchProposalAPI(t *testing.T) {
 	for _, tc := range []struct {
 		url, token string
 		status     int
+		code       string
 	}{
-		{book, member, 403},
-		{book, "", 401},
-		{route + "work_id=the-martian&path=Andy%20Weir%2FThe%20Martian", admin, 400},
-		{strings.Replace(book, "work_id=the-martian", "work_id=", 1), admin, 400},
-		{strings.Replace(book, "work_id=the-martian", "work_id=%01", 1), admin, 400},
-		{book + "&recording_id=%01", admin, 400},
-		{strings.Replace(book, "library_id="+strconv.FormatInt(lib, 10), "library_id=9999", 1), admin, 404},
-		{base + "&path=gone", admin, 404},
-		{base + "&path=" + url.QueryEscape("Émile/The Martian"), admin, 200},
-		{strings.Replace(book, "work_id=the-martian", "work_id=missing", 1), admin, 404},
-		{book + "&recording_id=gone", admin, 404},
-		{book, admin, 200},
-		{base + "&path=Someone%2FObscure", admin, 200},
-		{book + "&recording_id=bray", admin, 200},
+		{book, member, 403, ""},
+		{book, "", 401, ""},
+		{route + "work_id=the-martian&path=Andy%20Weir%2FThe%20Martian", admin, 400, ""},
+		{strings.Replace(book, "work_id=the-martian", "work_id=", 1), admin, 400, ""},
+		{strings.Replace(book, "work_id=the-martian", "work_id=%01", 1), admin, 400, ""},
+		{book + "&recording_id=%01", admin, 400, ""},
+		{strings.Replace(book, "library_id="+strconv.FormatInt(lib, 10), "library_id=9999", 1), admin, 404, ""},
+		{base + "&path=gone", admin, 404, "book_not_found"},
+		{base + "&path=" + url.QueryEscape("Émile/The Martian"), admin, 200, ""},
+		{strings.Replace(book, "work_id=the-martian", "work_id=missing", 1), admin, 404, "not_found"},
+		{book + "&recording_id=gone", admin, 404, "not_found"},
+		{book, admin, 200, ""},
+		{base + "&path=Someone%2FObscure", admin, 200, ""},
+		{book + "&recording_id=bray", admin, 200, ""},
 	} {
 		resp, body := e.do(t, "GET", tc.url, tc.token, "")
 		if resp.StatusCode != tc.status {
 			t.Fatalf("GET %s = %d %s, want %d", tc.url, resp.StatusCode, body, tc.status)
+		}
+		if tc.code != "" && !strings.Contains(body, `"code":"`+tc.code+`"`) {
+			t.Fatalf("GET %s = %s, want code %s", tc.url, body, tc.code)
 		}
 		if tc.status == 200 {
 			var p matchrun.BookProposal
