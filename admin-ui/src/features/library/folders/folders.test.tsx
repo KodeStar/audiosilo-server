@@ -133,6 +133,9 @@ describe('folders', () => {
     const card = await screen.findByRole('region', { name: 'Audio files in this folder' });
     expect(within(card).getByText(/600 files · 600 MB · 10h/)).toBeInTheDocument();
     expect(within(card).getByText('Showing the first 500 audio files.')).toBeInTheDocument();
+    // Every page was read, so the choices count exactly.
+    expect(screen.getByText(/Here: one book with 600 files\./)).toBeInTheDocument();
+    expect(screen.getByText(/Here: 600 books\./)).toBeInTheDocument();
     expect(within(card).getAllByRole('listitem')).toHaveLength(500);
     expect(within(card).queryByText('Part 501.mp3')).toBeNull();
     expect(calls.filter((r) => r.query.get('path') === '' && r.query.has('offset'))).toHaveLength(
@@ -173,10 +176,53 @@ describe('folders', () => {
     expect(
       within(card).getByText('Totals cover the first 10,000 items in this folder.'),
     ).toBeInTheDocument();
+    // The choices' counts are floors too.
+    expect(screen.getByText(/Here: one book with at least 10,000 files\./)).toBeInTheDocument();
+    expect(screen.getByText(/Here: at least 10,000 books\./)).toBeInTheDocument();
     const offsets = calls
       .filter((r) => r.query.get('path') === 'Huge')
       .map((r) => Number(r.query.get('offset') ?? 0));
     expect(Math.max(...offsets)).toBe(9_500);
+  });
+
+  it('counts the disc folders of a very large disc set as at least its first 10,000', async () => {
+    const discs = Array.from({ length: 10_600 }, (_, i) =>
+      dir(`Discs/CD${i + 1}`, { is_book: true }),
+    );
+    mockFetch(
+      routes({
+        'GET /libraries/1/fs': ({ query }) => {
+          if (!query.get('path')) {
+            return {
+              body: {
+                path: '',
+                entries: [dir('Discs', { split_discs: true })],
+                total: 1,
+                offset: 0,
+              },
+            };
+          }
+          const offset = Number(query.get('offset') ?? 0);
+          const end = Math.min(offset + 500, discs.length);
+          return {
+            body: {
+              path: 'Discs',
+              folder: dir('Discs', { split_discs: true }),
+              entries: discs.slice(offset, end),
+              total: discs.length,
+              offset,
+              ...(end < discs.length ? { next_offset: end } : {}),
+            },
+          };
+        },
+      }),
+    );
+    renderApp('/library/folders?library=1&folder=Discs');
+    expect(
+      await screen.findByText(
+        /Here: at least 10,000 disc folders become one book, in disc order\./,
+      ),
+    ).toBeInTheDocument();
   });
 
   it('keeps the selected folder shown when a refresh of its listing fails', async () => {
