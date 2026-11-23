@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
 // Bounds on the background pass: it shares the disk with the scan and the art
@@ -59,8 +60,7 @@ type Runner struct {
 	color Colorer
 	log   *slog.Logger
 
-	kick   chan struct{}
-	settle time.Duration
+	*pool.PassRunner
 }
 
 // New returns a Runner; Run starts its background pass.
@@ -68,59 +68,10 @@ func New(cat *catalog.Catalog, color Colorer, log *slog.Logger) *Runner {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Runner{cat: cat, color: color, log: log, kick: make(chan struct{}, 1), settle: settleKicks}
-}
-
-// Kick asks the background to look for books due a colour once the kicks settle
-// (a scan or an edit may have made some).
-func (r *Runner) Kick() {
-	select {
-	case r.kick <- struct{}{}:
-	default:
-	}
-}
-
-// Run reads the colours of the books due one shortly after it starts, then every
-// interval and after a Kick, until ctx ends.
-func (r *Runner) Run(ctx context.Context) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		if !r.settled(ctx) {
-			return
-		}
-		kick := r.kick
-		if r.pass(ctx) {
-			kick = nil // the art keeps failing to read: wait for the tick
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		case <-kick:
-		}
-	}
-}
-
-// settled waits until no Kick has come for r.settle, at most maxSettle; false
-// when ctx ended first.
-func (r *Runner) settled(ctx context.Context) bool {
-	quiet := time.NewTimer(r.settle)
-	defer quiet.Stop()
-	limit := time.NewTimer(maxSettle)
-	defer limit.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-quiet.C:
-			return true
-		case <-limit.C:
-			return true
-		case <-r.kick:
-			quiet.Reset(r.settle)
-		}
-	}
+	r := &Runner{cat: cat, color: color, log: log}
+	r.PassRunner = pool.NewPassRunner(interval, settleKicks, maxSettle, r.pass)
+	r.SettleOnTick = true
+	return r
 }
 
 // pass reads the colour of every due book once and records them a batch at a
@@ -138,7 +89,8 @@ func (r *Runner) pass(ctx context.Context) bool {
 		byID[libs[i].ID] = &libs[i]
 	}
 	var after int64
-	read, streak := 0, 0
+	read := 0
+	streak := pool.NewFailureStreak(maxFailStreak)
 	defer func() {
 		if read > 0 {
 			r.log.Info("cover colours read", "books", read)
@@ -153,37 +105,34 @@ func (r *Runner) pass(ctx context.Context) bool {
 			return false
 		}
 		var recs []catalog.CoverColorRecord
-		for _, d := range due {
-			if ctx.Err() != nil || streak >= maxFailStreak {
-				break
-			}
+		pool.Each(ctx, 1, due, func() bool { return !streak.AtLimit() }, func(d *catalog.CoverColorDue) {
 			lib := byID[d.LibraryID]
 			if lib == nil {
-				continue // a library added since the pass began waits for the next
+				return // a library added since the pass began waits for the next
 			}
-			rec, err := r.color(ctx, lib, d)
+			rec, err := r.color(ctx, lib, *d)
 			switch {
 			case errors.Is(err, ErrArtMissing):
-				continue // left due: read again next pass
+				return // left due: read again next pass
 			case err != nil:
 				if ctx.Err() == nil {
-					streak++
+					streak.Failed()
 					r.log.Debug("cover colours: read art failed", "library", d.LibraryID, "path", d.Path, "err", err)
 				}
-				continue
+				return
 			}
-			streak = 0
+			streak.Succeeded()
 			recs = append(recs, rec)
 			if rec.Color.Bg != "" {
 				read++
 			}
-		}
+		})
 		r.record(ctx, recs)
 		switch {
 		case ctx.Err() != nil:
 			return false
-		case streak >= maxFailStreak:
-			r.log.Warn("cover colours: the art keeps failing to read; trying again later", "failures", streak)
+		case streak.AtLimit():
+			r.log.Warn("cover colours: the art keeps failing to read; trying again later", "failures", maxFailStreak)
 			return true
 		case next == 0:
 			return false

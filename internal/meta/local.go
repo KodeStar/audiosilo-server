@@ -30,7 +30,7 @@ type MetaLocal struct {
 // Abridged decide which of a work's recordings is the pick (pickRank).
 type LocalBook struct {
 	MetaLocal
-	Series         string
+	SeriesKey      string
 	SeriesIndex    float64
 	SeriesIndexEnd float64
 	ASIN, ISBN     string
@@ -293,8 +293,8 @@ func (p *placer) index(b LocalBook) {
 	if b.SeriesIndex <= 0 {
 		return
 	}
-	if k := match.SeriesKey(b.Series); k != "" {
-		p.byIndex[k] = append(p.byIndex[k], b)
+	if b.SeriesKey != "" {
+		p.byIndex[b.SeriesKey] = append(p.byIndex[b.SeriesKey], b)
 	}
 }
 

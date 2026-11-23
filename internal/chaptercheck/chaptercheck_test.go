@@ -19,8 +19,10 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // fakeSource answers RecordingChapters from a map by ASIN, and MatchChapters
@@ -33,11 +35,19 @@ type fakeSource struct {
 	gone    map[string]bool
 	err     error
 	failing map[string]bool
+	delay   time.Duration
 	calls   atomic.Int32
 }
 
-func (f *fakeSource) RecordingChapters(_ context.Context, asin, _ string) (*meta.RecordingChapters, error) {
+func (f *fakeSource) RecordingChapters(ctx context.Context, asin, _ string) (*meta.RecordingChapters, error) {
 	f.calls.Add(1)
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -475,11 +485,11 @@ func TestProberStaysInTheLibrary(t *testing.T) {
 	if err != nil || probe == nil {
 		t.Fatalf("prober %v", err)
 	}
-	if _, err := probe(ctx, "../outside.m4a", 0, 5); !errors.Is(err, library.ErrOutsideRoot) {
+	if _, err := probe(ctx, "../outside.m4a", []metadata.TimeRange{{Start: 0, End: 5}}); !errors.Is(err, library.ErrOutsideRoot) {
 		t.Fatalf("outside the root: %v, want ErrOutsideRoot", err)
 	}
 	// Inside the root the path is allowed: what fails is the (missing) ffmpeg.
-	if _, err := probe(ctx, "A/Book.m4a", 0, 5); err == nil || errors.Is(err, library.ErrOutsideRoot) {
+	if _, err := probe(ctx, "A/Book.m4a", []metadata.TimeRange{{Start: 0, End: 5}}); err == nil || errors.Is(err, library.ErrOutsideRoot) {
 		t.Fatalf("inside the root: %v, want ffmpeg's error", err)
 	}
 }
@@ -512,7 +522,9 @@ func TestProberHandsFFmpegTheFileItOpened(t *testing.T) {
 	}
 	ffmpeg := filepath.Join(t.TempDir(), "ffmpeg")
 	script := `#!/bin/sh
-while [ $# -gt 0 ]; do [ "$1" = "-i" ] && in=$2; shift; done
+echo '  Duration: 00:01:00, start: 0.000000, bitrate: N/A' >&2
+in=$(sed -n "s/^file 'file:\(.*\)'$/\1/p")
+[ -n "$in" ] || exit 1
 [ -L '` + book + `' ] || { mv '` + book + `' '` + book + `.aside' && ln -s '` + outside + `' '` + book + `'; }
 if [ "$(head -c 7 "$in")" = "outside" ]; then echo "[silencedetect @ 0x1] silence_start: 1" >&2; echo "[silencedetect @ 0x1] silence_end: 2 | silence_duration: 1" >&2; fi
 `
@@ -524,8 +536,8 @@ if [ "$(head -c 7 "$in")" = "outside" ]; then echo "[silencedetect @ 0x1] silenc
 	if err != nil || probe == nil {
 		t.Fatalf("prober %v", err)
 	}
-	pauses, err := probe(ctx, "A/Book.m4a", 0, 5)
-	if err != nil || len(pauses) != 0 {
+	pauses, err := probe(ctx, "A/Book.m4a", []metadata.TimeRange{{Start: 0, End: 5}})
+	if err != nil || len(pauses) != 1 || len(pauses[0]) != 0 {
 		t.Errorf("pauses %v, %v; want ffmpeg to read the file opened, never the one through the link", pauses, err)
 	}
 }
@@ -607,5 +619,44 @@ func TestRunWaitsForReady(t *testing.T) {
 	stop()
 	if logged.Len() != 0 {
 		t.Errorf("metadata off: waited for the local copy anyway:\n%s", logged.String())
+	}
+}
+
+// A 48 hour recording on a slow share can use every second left after the
+// lookup on pause detection. Scale down the check deadline to exercise the
+// same path as the five minute check without a five minute test.
+func TestLongBookSavesFitWhenProbesRunOutOfTime(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the slow ffmpeg stand-in is a shell script")
+	}
+	e := newEnv(t)
+	const path = "Long.m4b"
+	e.book(t, path, "B000000001", 48*3600-10)
+	e.src.byASIN["B000000001"] = chapters(96, 1800)
+	if err := os.WriteFile(filepath.Join(e.lib.Root, path), []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stand := filepath.Join(t.TempDir(), "ffmpeg")
+	script := `#!/bin/sh
+echo '  Duration: 48:00:00, start: 0.000000, bitrate: N/A' >&2
+cat >/dev/null
+echo '[silencedetect @ 0x1] silence_start: 1' >&2
+echo '[silencedetect @ 0x1] silence_end: 2' >&2
+echo '[silencedetect @ 0x1] silence_start: 3' >&2
+exec sleep 30
+`
+	if err := os.WriteFile(stand, []byte(script), 0o755); err != nil { //nolint:gosec // executable test helper
+		t.Fatal(err)
+	}
+	r := New(e.cat, e.src, stand, on, nil, nil)
+	r.timeout = testwait.Scaled(2 * time.Second)
+	e.src.delay = r.timeout / 3
+	cc, err := r.Check(t.Context(), catalog.Ref{LibraryID: e.lib.ID, Path: path})
+	if err != nil {
+		t.Fatalf("saving the long book's fit: %v", err)
+	}
+	b, err := e.cat.GetBookByPath(t.Context(), e.lib.ID, path)
+	if err != nil || len(b.Chapters) != 96 || cc.Detail.Snapped != 1 || cc.Detail.Approximate != 94 {
+		t.Fatalf("check %v, book %v, error %v", cc, b, err)
 	}
 }

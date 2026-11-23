@@ -1,11 +1,11 @@
 // Package metamirror keeps a local copy of the community metadata service's
 // database for mirror mode (metadata.mode: mirror): the SQLite release artifact
 // audiosilo-meta publishes on GitHub (meta.sqlite, the CC0 core and the CC BY-SA
-// community layer in one file), downloaded once a day and served in-process by
+// community layer in one file), checked weekly by default and served in-process by
 // metaserve's own API handler (pkg/query), so the server answers its metadata
 // questions without looking any book up over the internet.
 //
-// Mirror is the runner: a daily, durable schedule (the last check is recorded on
+// Mirror is the runner: a configurable, durable schedule (the last check is recorded on
 // disk, so a restart does not download again), a conditional release-list
 // request, a disk guard, the verified download (pkg/release), an atomic swap to
 // the new copy with a grace period for in-flight queries, and the status the
@@ -50,10 +50,8 @@ func Dir(dataDir string) string { return filepath.Join(dataDir, DirName) }
 // The schedule.
 const (
 	// checkInterval is how often the release list is asked, measured from the
-	// last check recorded on disk. Data releases come several times a day; a
-	// copy a day old is fresh enough for book details, and each new copy is a
-	// ~450 MB download.
-	checkInterval = 24 * time.Hour
+	// last successful check. Each new copy is a full download.
+	checkInterval = 7 * 24 * time.Hour
 	// retryInterval is how soon a failed check is tried again.
 	retryInterval = time.Hour
 	// startDelay is how long after start a mirror with no copy checks: soon, but
@@ -124,6 +122,8 @@ type Progress struct {
 
 // Options configures a Mirror. Every field may be left zero.
 type Options struct {
+	// Interval sets the time between successful checks. Zero uses one week.
+	Interval time.Duration
 	// Enabled reports the live metadata.enabled: while it is false nothing is
 	// checked or downloaded. Nil means always.
 	Enabled func() bool
@@ -162,8 +162,7 @@ type Mirror struct {
 	// openDB opens a copy: query.Open (tests: one that waits, to watch the opening).
 	openDB func(path, tag string) (*query.DB, error)
 
-	// The schedule's lengths: the constants above, fields only so tests can
-	// shrink them.
+	// The configured check interval and the schedule's other timers.
 	interval, retry, startAfter, grace, enabledPoll time.Duration
 
 	// done and total are the running download's progress (compressed bytes).
@@ -202,6 +201,9 @@ func New(dir string, opts Options) (*Mirror, error) {
 		enabledPoll: enabledPoll,
 		retiring:    map[*query.DB]bool{},
 		openDB:      query.Open,
+	}
+	if opts.Interval > 0 {
+		m.interval = opts.Interval
 	}
 	if m.enabled == nil {
 		m.enabled = func() bool { return true }
@@ -367,8 +369,8 @@ func (m *Mirror) sizeBytes() int64 {
 }
 
 // Run opens the copy the state names, then checks for a new copy on the
-// schedule until ctx ends: shortly after start when there is no copy, then once
-// a day from the last check recorded on disk, an hour after a failed one, and
+// schedule until ctx ends: shortly after start when there is no copy, then at
+// the configured interval, an hour after a failed check, and
 // whenever CheckNow asks. Nothing is checked while metadata is off; Wake (metadata
 // turned back on) makes it look again at once, but only a check that is due runs.
 func (m *Mirror) Run(ctx context.Context) {
@@ -457,7 +459,7 @@ func (m *Mirror) untilDue() time.Duration {
 }
 
 // nextLocked is when the next check is due: now when CheckNow asked; without a
-// copy, shortly after start for the first one; else a day after the last check,
+// copy, shortly after start for the first one; else the configured interval after the last check,
 // or an hour after it when it failed.
 func (m *Mirror) nextLocked() time.Time {
 	if m.due {

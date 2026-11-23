@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -21,8 +20,12 @@ func TestParseSilences(t *testing.T) {
 [silencedetect @ 0x1] silence_start: 2.25
 [silencedetect @ 0x1] silence_end: 4.75 | silence_duration: 2.5
 [silencedetect @ 0x1] silence_start: 7.5`
-	got := parseSilences(log, 100, 108)
-	want := []Silence{{100, 100.5}, {102.25, 104.75}, {107.5, 108}}
+	var pauses silenceLog
+	for line := range strings.SplitSeq(log, "\n") {
+		pauses.add(line)
+	}
+	got := pauses.finish(8)
+	want := []metadata.TimeRange{{Start: 0, End: 0.5}, {Start: 2.25, End: 4.75}, {Start: 7.5, End: 8}}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -49,14 +52,16 @@ func TestDetectSilences(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("ffmpeg could not build the fixture: %v\n%s", err, out)
 	}
-	got, err := DetectSilences(context.Background(), "ffmpeg", filepath.Dir(path), path, 2, 9)
+	got, err := DetectSilences(context.Background(), "ffmpeg", filepath.Dir(path), path, []metadata.TimeRange{{Start: 2, End: 5}, {Start: 5, End: 8}, {Start: 2, End: 9}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || math.Abs(got[0].Start-4) > 0.1 || math.Abs(got[0].End-6) > 0.1 {
-		t.Fatalf("pauses %v, want one about 4-6 s", got)
+	for i, want := range []metadata.TimeRange{{Start: 4, End: 5}, {Start: 5, End: 6}, {Start: 4, End: 6}} {
+		if len(got[i]) != 1 || math.Abs(got[i][0].Start-want.Start) > 0.1 || math.Abs(got[i][0].End-want.End) > 0.1 {
+			t.Errorf("window %d pauses %v, want about %v", i, got[i], want)
+		}
 	}
-	if _, err := DetectSilences(context.Background(), "ffmpeg", t.TempDir(), filepath.Join(t.TempDir(), "none.m4a"), 0, 5); err == nil {
+	if _, err := DetectSilences(context.Background(), "ffmpeg", t.TempDir(), filepath.Join(t.TempDir(), "none.m4a"), []metadata.TimeRange{{Start: 0, End: 5}}); err == nil {
 		t.Error("no error for a missing file")
 	}
 }
@@ -78,25 +83,31 @@ func TestDetectSilencesReadsNoPlaylist(t *testing.T) {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if got, err := DetectSilences(context.Background(), "ffmpeg", dir, path, 0, 5); err == nil {
+		if got, err := DetectSilences(context.Background(), "ffmpeg", dir, path, []metadata.TimeRange{{Start: 0, End: 5}}); err == nil {
 			t.Errorf("%s: pauses %v and no error, want it refused", name, got)
 		}
 	}
 }
 
-// ffmpeg is run held to metadata.InputFormats, the list an option of the
-// input it applies to (before its -i).
-func TestDetectSilencesPassesInputFormats(t *testing.T) {
+// All three windows go to one process. Each input in the generated seek list
+// carries the demuxer allowlist.
+func TestDetectSilencesBatchesWindows(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("the ffmpeg stand-in is a shell script")
 	}
 	dir := t.TempDir()
-	stand, args := filepath.Join(dir, "ffmpeg"), filepath.Join(dir, "args")
-	// Held so no exec another parallel test forks meanwhile inherits the file
-	// still open for writing (ETXTBSY on Linux, golang/go#22315).
+	stand, record := filepath.Join(dir, "ffmpeg"), filepath.Join(dir, "calls")
+	script := `#!/bin/sh
+echo '  Duration: 00:01:00, start: 2.000000, bitrate: N/A' >&2
+{
+  echo invocation
+  printf '%s\n' "$@"
+  cat
+} >> '` + record + `'
+`
 	syscall.ForkLock.RLock()
-	err := os.WriteFile(stand, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+args+"'\n"), 0o755) //nolint:gosec // G306: the stand-in must be executable
+	err := os.WriteFile(stand, []byte(script), 0o755) //nolint:gosec // executable test helper
 	syscall.ForkLock.RUnlock()
 	if err != nil {
 		t.Fatal(err)
@@ -105,16 +116,19 @@ func TestDetectSilencesPassesInputFormats(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DetectSilences(context.Background(), stand, dir, file, 0, 5); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(args)
+	_, err = DetectSilences(t.Context(), stand, dir, file, []metadata.TimeRange{{Start: 0, End: 5}, {Start: 11, End: 20}, {Start: 30, End: 32}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := strings.Split(strings.TrimSpace(string(data)), "\n")
-	at, in := slices.Index(got, "-format_whitelist"), slices.Index(got, "-i")
-	if at < 0 || in != at+2 || got[at+1] != metadata.InputFormats {
-		t.Fatalf("ffmpeg's arguments %q, want -format_whitelist %s and then -i", got, metadata.InputFormats)
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if strings.Count(log, "invocation\n") != 1 ||
+		!strings.Contains(log, "-format_whitelist\n"+metadata.InputFormats+"\n-i\n") ||
+		strings.Count(log, "option format_whitelist "+metadata.InputFormats+"\n") != 3 ||
+		!strings.Contains(log, "inpoint 13.000000\noutpoint 22.000000") {
+		t.Fatalf("ffmpeg calls and seek list:\n%s", log)
 	}
 }

@@ -98,6 +98,8 @@ metadata:
   enabled: true
   base_url: %q
   mode: mirror
+  mirror:
+    interval: 48h
 `, addr, root, remote.URL)
 	if err := os.WriteFile(config.Path(data), []byte(cfgYAML), 0o600); err != nil {
 		t.Fatal(err)
@@ -151,6 +153,9 @@ metadata:
 	})
 	if m := sys.Metadata.Mirror; m.Tag != "data-v2026.10.09-ccccccc-ddddddd" || m.Fallback || m.SizeBytes == 0 || m.Error != "" {
 		t.Fatalf("after the download: %+v", m)
+	}
+	if m := sys.Metadata.Mirror; m.NextCheckAt.Sub(m.CheckedAt) != 48*time.Hour {
+		t.Fatalf("configured check interval: %+v", m)
 	}
 	asked := remoteHits.Load()
 	if ua := gh.UserAgents(); len(ua) == 0 || ua[0] != "AudioSilo/"+api.Version {

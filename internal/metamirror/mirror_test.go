@@ -107,8 +107,8 @@ func TestMirrorDownloadsAndSwaps(t *testing.T) {
 		st.DownloadedAt.IsZero() || st.CheckedAt.IsZero() || st.Progress != nil {
 		t.Fatalf("the copy's facts = %+v", st)
 	}
-	if got := st.NextCheckAt.Sub(st.CheckedAt); got != checkInterval {
-		t.Fatalf("the next check is %v after this one, want a day", got)
+	if got := st.NextCheckAt.Sub(st.CheckedAt); got != 7*24*time.Hour {
+		t.Fatalf("the next check is %v after this one, want a week", got)
 	}
 	if got := copies(t, dir); len(got) != 1 || got[0] != "meta-"+tag+".sqlite" {
 		t.Fatalf("copies = %v", got)
@@ -176,7 +176,7 @@ func TestMirrorProgress(t *testing.T) {
 		t.Fatalf("after the download = %+v", st)
 	}
 	if got := st.NextCheckAt.Sub(st.CheckedAt); got != checkInterval {
-		t.Fatalf("once the check ends the next is %v after it, want a day", got)
+		t.Fatalf("once the check ends the next is %v after it, want a week", got)
 	}
 	select {
 	case <-m.wake:
@@ -308,7 +308,7 @@ func TestMirrorDiskGuard(t *testing.T) {
 }
 
 // The state outlives a restart: the copy opens at once, nothing is fetched, and
-// the next check is a day after the last one, not shortly after start.
+// the next check is an interval after the last one, not shortly after start.
 func TestMirrorStateSurvivesRestart(t *testing.T) {
 	gh := releasetest.NewGitHub(t, mirrortest.Releases(mirrortest.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
 	dir := t.TempDir()
@@ -460,7 +460,7 @@ func TestRemove(t *testing.T) {
 
 // The copy is opened by Run, not New: until then the status says it is opening
 // (not "no copy yet"), names no copy and lookups go to the remote service,
-// though the next check is the copy's (a day after the last), not a first
+// though the next check is the copy's (an interval after the last), not a first
 // download's.
 func TestMirrorOpensInRun(t *testing.T) {
 	gh := releasetest.NewGitHub(t, mirrortest.Releases(mirrortest.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
@@ -559,7 +559,7 @@ func TestMirrorStopsWhenDisabled(t *testing.T) {
 }
 
 // A Check now that metadata turned off stops stays due: once metadata is back
-// on, Wake runs it, though the copy held is not a day old.
+// on, Wake runs it, though the copy held is not a week old.
 func TestMirrorCheckNowSurvivesDisable(t *testing.T) {
 	art := mirrortest.Fixture(t, 0)
 	const first, next = "data-v2026.10.09-ccccccc-ddddddd", "data-v2026.10.10-eeeeeee-fffffff"
@@ -568,7 +568,7 @@ func TestMirrorCheckNowSurvivesDisable(t *testing.T) {
 	on.Store(true)
 	m := newMirror(t, t.TempDir(), gh, Options{Enabled: on.Load})
 	m.enabledPoll = 10 * time.Millisecond
-	m.check(context.Background()) // a fresh copy: no check due for a day
+	m.check(context.Background()) // a fresh copy: no check due for a week
 
 	gh.SetReleases(mirrortest.Releases(art, first, next)...)
 	gh.Throttle(len(art[release.DataAsset])/20+1, 200*time.Millisecond) // about four seconds
@@ -780,7 +780,7 @@ func TestMirrorWake(t *testing.T) {
 	m.Wake()
 	eventually(t, "the due check after a wake", func() bool { return m.Ready() && !m.Status().NextCheckAt.IsZero() })
 
-	// The copy is fresh: the next check is a day away, and waking checks nothing.
+	// The copy is fresh: the next check is a week away, and waking checks nothing.
 	lists := gh.Lists() + gh.NotModified()
 	m.Wake()
 	time.Sleep(100 * time.Millisecond)

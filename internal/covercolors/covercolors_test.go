@@ -191,7 +191,7 @@ func TestRunKick(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, "a.m4b")
 	e.fc.failing["a.m4b"] = true // read again on every pass
-	e.r.settle = 200 * time.Millisecond
+	e.r.Quiet = 200 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {

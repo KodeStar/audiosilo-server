@@ -365,9 +365,13 @@ type MetadataConfig struct {
 	Region string `yaml:"region"`
 	// Mode is where the lookups are answered (read only at start): MetadataRemote
 	// asks the service at BaseURL for each book; MetadataMirror keeps a local copy
-	// of the service's database (internal/metamirror), downloaded from GitHub once
-	// a day, and asks BaseURL only while that copy can't answer.
+	// of the service's database (internal/metamirror), checked on the configured
+	// interval, and asks BaseURL only while that copy can't answer.
 	Mode string `yaml:"mode"`
+	// MirrorSettings controls the local copy's schedule, read at startup.
+	MirrorSettings struct {
+		Interval time.Duration `yaml:"interval,omitempty"`
+	} `yaml:"mirror,omitempty"`
 	// ReportUnknown sends the metadata service, once a day, the Audible ASINs of
 	// this server's books the community database doesn't know (internal/coverage),
 	// and nothing else. Off by default; applies at once.
@@ -797,6 +801,9 @@ func (c *Config) Validate() error {
 	if w := c.Upcoming.WindowDays; w < 1 || w > MaxUpcomingWindowDays {
 		return fieldErr("upcoming.window_days", fmt.Errorf("upcoming.window_days must be from 1 to %d, got %d",
 			MaxUpcomingWindowDays, w))
+	}
+	if c.Metadata.MirrorSettings.Interval < 0 {
+		return fieldErr("metadata.mirror.interval", errors.New("metadata.mirror.interval must be non-negative"))
 	}
 	if mode := c.Metadata.ModeName(); !slices.Contains(MetadataModes, mode) {
 		return fieldErr("metadata.mode", fmt.Errorf("metadata.mode must be one of %s, got %q",

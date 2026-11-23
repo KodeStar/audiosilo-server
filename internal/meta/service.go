@@ -313,7 +313,8 @@ type Service struct {
 	store Store
 	// composeBudget bounds one full compose fan-out. Defaults to composeTimeout;
 	// a field only so tests can shrink it.
-	composeBudget time.Duration
+	composeBudget  time.Duration
+	previousBudget time.Duration
 	// workSem bounds concurrent uncached work-id fetches upstream (see
 	// maxConcurrentWorkFetches).
 	workSem chan struct{}
@@ -359,18 +360,19 @@ func NewService(baseURL string, now func() time.Time) *Service {
 	}
 	base := strings.TrimRight(baseURL, "/")
 	return &Service{
-		client:        newClient(base),
-		report:        newReportClient(),
-		baseURL:       base,
-		cache:         newCache(now),
-		composeBudget: composeTimeout,
-		workSem:       make(chan struct{}, maxConcurrentWorkFetches),
-		lookupSem:     make(chan struct{}, maxConcurrentLookups),
-		flights:       map[string]*lookupFlight{},
-		seriesFlights: map[string]chan struct{}{},
-		covers:        media.NewArtFetcher(coverTransport(netguard.PublicAddrPort), coverTimeout, ""),
-		coverSem:      make(chan struct{}, maxConcurrentCoverFetches),
-		now:           now,
+		client:         newClient(base),
+		report:         newReportClient(),
+		baseURL:        base,
+		cache:          newCache(now),
+		composeBudget:  composeTimeout,
+		previousBudget: previousTimeout,
+		workSem:        make(chan struct{}, maxConcurrentWorkFetches),
+		lookupSem:      make(chan struct{}, maxConcurrentLookups),
+		flights:        map[string]*lookupFlight{},
+		seriesFlights:  map[string]chan struct{}{},
+		covers:         media.NewArtFetcher(coverTransport(netguard.PublicAddrPort), coverTimeout, ""),
+		coverSem:       make(chan struct{}, maxConcurrentCoverFetches),
+		now:            now,
 	}
 }
 

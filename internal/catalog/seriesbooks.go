@@ -141,6 +141,45 @@ func (c *Catalog) seriesMembers(ctx context.Context, scopes []Scope, keys []stri
 	return found[:min(len(found), maxSeriesBooks)], nil
 }
 
+// SeriesPosition places a book by a stored series key and its numeric position.
+type SeriesPosition struct {
+	Key        string
+	Start, End float64
+}
+
+// RailPositions reads the numbered memberships of these already scoped books.
+// The main key comes with the book. Only additional memberships need a query.
+func (c *Catalog) RailPositions(ctx context.Context, books []Book) (map[int64][]SeriesPosition, error) {
+	out := make(map[int64][]SeriesPosition)
+	var extra []int64
+	for i := range books {
+		b := &books[i]
+		if b.SeriesKey != "" && b.SeriesIndex > 0 {
+			out[b.ID] = []SeriesPosition{{b.SeriesKey, b.SeriesIndex, b.SeriesIndexEnd}}
+		}
+		if len(b.SeriesList) > 0 {
+			extra = append(extra, b.ID)
+		}
+	}
+	for ids := range slices.Chunk(extra, 500) {
+		type membership struct {
+			bookID int64
+			SeriesPosition
+		}
+		rows, err := queryRows(ctx, c.db, func(r *sql.Rows, m *membership) error {
+			return r.Scan(&m.bookID, &m.Key, &m.Start, &m.End)
+		}, `SELECT book_id, series_key, position, position_end FROM book_more_series
+		      WHERE book_id IN (`+placeholders(len(ids))+`) AND position > 0`, anyOf(ids)...)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range rows {
+			out[m.bookID] = append(out[m.bookID], m.SeriesPosition)
+		}
+	}
+	return out, nil
+}
+
 // NextInSeries returns the book after book in the series it is in within one
 // library and scope, list shape: every series of book.AllSeries() it has a
 // position in, its main series first, then its others in list order; the first

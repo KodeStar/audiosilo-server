@@ -9,6 +9,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // rail builds a main-view rail at position at, with entries "id@position".
@@ -112,6 +115,30 @@ func TestPreviousFetchesInOrderAndSkipsFailures(t *testing.T) {
 	}
 	if got := svc.Previous(context.Background(), &Enrichment{Work: &MetaWork{ID: "cur"}}); got != nil {
 		t.Fatalf("no rails = %v, want nil", got)
+	}
+}
+
+func TestPreviousBudgetReturnsReadyWorks(t *testing.T) {
+	stopped := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		close(stopped)
+	}))
+	defer srv.Close()
+	svc := NewService(srv.URL, nil)
+	svc.previousBudget = testwait.Scaled(200 * time.Millisecond)
+	cachePut(svc.cache, nsWork.key("ready"), &MetaWork{ID: "ready"}, positiveTTL)
+	env := &Enrichment{Series: []MetaSeries{rail("3", "ready@1", "slow@2")}, Work: &MetaWork{ID: "cur"}}
+	ctx, cancel := context.WithTimeout(t.Context(), testwait.Scaled(5*time.Second))
+	defer cancel()
+	got := svc.Previous(ctx, env)
+	if ctx.Err() != nil || len(got) != 1 || got[0].ID != "ready" {
+		t.Fatalf("previous works %v, parent error %v", got, ctx.Err())
+	}
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+		t.Fatal("the unfinished lookup was still running")
 	}
 }
 

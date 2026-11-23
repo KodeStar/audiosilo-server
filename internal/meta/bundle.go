@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
+	"time"
 )
 
 // The /meta "bundle": what GET /libraries/{id}/meta adds to the cached
@@ -21,6 +21,8 @@ import (
 // listener catching up on a long series without the bundle growing into the
 // whole series' cast lists; older books are a /meta/work call away.
 const maxPrevious = 5
+
+const previousTimeout = 5 * time.Second
 
 // previousWorkIDs returns the work ids before the envelope's work, nearest
 // first, at most maxPrevious. They come from each rail's MAIN view only (never
@@ -89,8 +91,8 @@ func parsePosition(s string) (float64, bool) {
 // Previous fetches the works previousWorkIDs names, in that order, each through
 // Work - so each is cached (and persisted) on its own and an uncached one waits
 // on the same workSem bound as any /meta/work call. They are fetched
-// concurrently under the caller's ctx. A work that fails (not found, upstream
-// down) is left out: the previous books are an extra, and the envelope they ride
+// concurrently with a five second budget shared by all the lookups. A work
+// that fails (not found, upstream down) is left out: the previous books are an extra, and the envelope they ride
 // on must not fail with them. nil when there are none.
 //
 // The returned works are shared with the cache - treat them as immutable.
@@ -99,17 +101,29 @@ func (s *Service) Previous(ctx context.Context, env *Enrichment) []*MetaWork {
 	if len(ids) == 0 {
 		return nil
 	}
-	works := make([]*MetaWork, len(ids))
-	var wg sync.WaitGroup
-	for i, id := range ids {
-		wg.Go(func() {
-			// Each goroutine owns its own index.
-			if w, err := s.Work(ctx, id); err == nil {
-				works[i] = w
-			}
-		})
+	ctx, cancel := context.WithTimeout(ctx, s.previousBudget)
+	defer cancel()
+	type result struct {
+		index int
+		work  *MetaWork
 	}
-	wg.Wait()
+	results := make(chan result, len(ids))
+	for i, id := range ids {
+		go func() {
+			w, _ := s.Work(ctx, id)
+			results <- result{i, w}
+		}()
+	}
+	works := make([]*MetaWork, len(ids))
+collect:
+	for range ids {
+		select {
+		case r := <-results:
+			works[r.index] = r.work
+		case <-ctx.Done():
+			break collect
+		}
+	}
 	var out []*MetaWork
 	for _, w := range works {
 		if w != nil {

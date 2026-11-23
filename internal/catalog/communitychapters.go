@@ -379,7 +379,7 @@ func (r *chapterRow) holds(source, key string) bool { return r.current == source
 // longer there. Titles are the scanned ones (an edit's own); refreshEffective
 // applies the renames after, except over an edit. A fit already in the rows is
 // not written again, nor decoded.
-func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, path string) error {
+func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, path string, scan *Book) error {
 	r := chapterRow{book: Book{ID: bookID, LibraryID: libID, RelPath: path}}
 	// Whether a chapters.json is stored, from the record header alone
 	// (octet_length, as BookAttachmentParts: the column is the row's last, past
@@ -430,6 +430,9 @@ func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, pa
 		}
 	}
 	if r.current == "" {
+		if scan != nil {
+			return replaceChapters(ctx, tx, bookID, scan.Chapters)
+		}
 		return nil
 	}
 	// Leaving an edited, community or generated list: the scan's own come back.

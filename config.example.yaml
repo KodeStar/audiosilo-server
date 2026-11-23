@@ -215,14 +215,17 @@ metadata:
   #   remote - ask the service at base_url for each book (the default).
   #   mirror - keep a local copy of the service's database in <data>/meta-mirror/
   #            and answer from it, so no book is looked up over the internet. The
-  #            copy comes from the audiosilo-meta releases on GitHub, checked once
-  #            a day: about 450 MB downloaded per update and about 1.8 GB on disk
+  #            copy comes from the audiosilo-meta releases on GitHub, checked weekly
+  #            by default: about 450 MB downloaded per update and about 1.8 GB on disk
   #            (up to twice that while an update is swapped in). Until the first
   #            copy is ready, and for any question the copy can't answer, the
   #            server asks base_url as in remote mode. Switching back to remote
   #            deletes the copy at the next start.
   # [AUDIOSILO_METADATA_MODE]
   mode: remote
+  mirror:
+    # Time between successful release checks, read at startup. Zero uses one week.
+    interval: 168h
   # Help complete the community database (Settings > Metadata; off by default,
   # applies at once): once a day, send the metadata service the Audible ASINs of
   # your books the community database doesn't know, and nothing else (no titles,

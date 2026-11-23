@@ -54,15 +54,7 @@ func loadMythos(t *testing.T) mythos {
 // recorded answers a Prober from a whole file's pauses: those overlapping the
 // window, clipped to it (as ffmpeg reports a window's own).
 func recorded(pauses []Silence) Prober {
-	return func(_ context.Context, _ string, from, to float64) ([]Silence, error) {
-		var out []Silence
-		for _, p := range pauses {
-			if p.End > from && p.Start < to {
-				out = append(out, Silence{Start: max(p.Start, from), End: min(p.End, to)})
-			}
-		}
-		return out, nil
-	}
+	return split(nil, pauses)
 }
 
 func TestMythosRefines(t *testing.T) {
