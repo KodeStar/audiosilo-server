@@ -631,7 +631,7 @@ function ReviewDialog({
               ) : null}
               {preview.isError ? (
                 <QueryError
-                  title={t('health.bulkMatch.listError')}
+                  title={t('health.bulkMatch.countError')}
                   error={preview.error}
                   onRetry={() => void preview.refetch()}
                 />

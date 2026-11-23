@@ -399,7 +399,7 @@ function MatchCompare({
         />
         {query.isError ? (
           <QueryError
-            title={t('book.error')}
+            title={t('book.match.compareError')}
             error={query.error}
             onRetry={() => void query.refetch()}
           />
@@ -409,7 +409,7 @@ function MatchCompare({
           <CompareTable
             rows={rows}
             ticks={ticks}
-            onToggle={(field, on) => setChoices({ ...choices, [field]: on })}
+            onToggle={(field, on) => setChoices((was) => ({ ...was, [field]: on }))}
             cover={
               <CoverRow
                 detail={detail}
@@ -433,7 +433,11 @@ function MatchCompare({
         <Button
           onClick={() => void accept()}
           disabled={
-            busy || !proposal || query.isError || (taking === 0 && !recordsMatch && !recordsOffered)
+            busy ||
+            !proposal ||
+            query.isFetching ||
+            query.isError ||
+            (taking === 0 && !recordsMatch && !recordsOffered)
           }
         >
           {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}

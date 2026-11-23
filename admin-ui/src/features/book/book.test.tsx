@@ -1025,6 +1025,90 @@ describe('match with community metadata', () => {
     });
   });
 
+  it('accepts nothing until the server plan answers, and asks again after a failure', async () => {
+    let fail = true;
+    let release!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const proposal: BookMatchProposal = {
+      work_id: candidate.work_id,
+      recording_id: 'r1',
+      cover_url: '',
+      cover: false,
+      match: true,
+      values: { published: '2010' },
+      set: { published: '2010' },
+    };
+    const calls = mockFetch(
+      matchRoutes(bookDetail(), {
+        'GET /admin/books/match-proposal': async () => {
+          if (fail) return { status: 502, body: { error: 'metadata service unavailable' } };
+          await answered;
+          return { body: proposal };
+        },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    await within(dialog).findByRole('radio', { name: /The Way of Kings/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Compare fields' }));
+    const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
+    const alert = await within(compare).findByRole('alert');
+    expect(alert).toHaveTextContent("The comparison didn't load");
+    expect(within(compare).queryByRole('table')).toBeNull();
+    expect(within(compare).getByRole('button', { name: 'Match to this work' })).toBeDisabled();
+    fail = false;
+    await user.click(within(alert).getByRole('button', { name: 'Try again' }));
+    // Asked again: still nothing to accept until the plan answers.
+    expect(within(compare).getByRole('button', { name: 'Match to this work' })).toBeDisabled();
+    release();
+    expect(await within(compare).findByRole('button', { name: 'Accept 1 field' })).toBeEnabled();
+    expect(calls.filter((c) => c.path === '/admin/books/match-proposal')).toHaveLength(2);
+  });
+
+  it('never shows a closed dialog plan again: it opens on a fresh one', async () => {
+    let asked = 0;
+    let release!: () => void;
+    const second = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const plan = (published: string): BookMatchProposal => ({
+      work_id: candidate.work_id,
+      recording_id: 'r1',
+      cover_url: '',
+      cover: false,
+      match: true,
+      values: { published },
+      set: { published },
+    });
+    mockFetch(
+      matchRoutes(bookDetail(), {
+        'GET /admin/books/match-proposal': async () => {
+          if (++asked === 1) return { body: plan('2010') };
+          await second;
+          return { body: plan('2011') };
+        },
+      }),
+    );
+    const { user, compare } = await openCompare();
+    expect(within(compare).getByText('2010')).toBeInTheDocument();
+    await user.click(within(compare).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    await user.click(await within(dialog).findByRole('button', { name: 'Compare fields' }));
+    const again = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
+    // The plan for the book as it was is gone: nothing to take until the new one answers.
+    expect(within(again).queryByRole('table')).toBeNull();
+    expect(within(again).getByRole('button', { name: 'Match to this work' })).toBeDisabled();
+    release();
+    expect(await within(again).findByText('2011')).toBeInTheDocument();
+    expect(within(again).getByRole('button', { name: 'Accept 1 field' })).toBeEnabled();
+  });
+
   it('takes the community cover for a book without art', async () => {
     const detail = bookDetail();
     detail.book.has_cover = false;
