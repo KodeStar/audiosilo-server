@@ -431,6 +431,7 @@ func TestSignInsReachTheFeed(t *testing.T) {
 	// A failed sign-in is not a new device.
 	e.do(t, "POST", "/api/v1/auth/login", "", `{"username":"member","password":"wrong"}`)
 
+	e.notify.Flush() // events are recorded in the background
 	_, body := e.do(t, "GET", "/api/v1/admin/events?limit=10", adminTok, "")
 	var feed struct {
 		Events []catalog.ServerEvent `json:"events"`
