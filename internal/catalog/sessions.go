@@ -488,7 +488,7 @@ func (c *Catalog) ListSessions(ctx context.Context, f SessionFilter) ([]Session,
 	if err != nil {
 		return nil, 0, err
 	}
-	out, next := pageBefore(out, f.Limit, func(s Session) int64 { return s.ID })
+	out, next := keysetPage(out, f.Limit, func(s Session) int64 { return s.ID })
 	return out, next, nil
 }
 

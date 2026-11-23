@@ -477,7 +477,7 @@ func (c *Catalog) ListMatchRunItems(ctx context.Context, runID int64, outcome st
 	if err != nil {
 		return nil, 0, err
 	}
-	items, next := pageBefore(items, limit, func(it MatchRunItem) int64 { return it.ID })
+	items, next := keysetPage(items, limit, func(it MatchRunItem) int64 { return it.ID })
 	return items, next, nil
 }
 

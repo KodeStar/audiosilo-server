@@ -518,8 +518,12 @@ func (c *Catalog) BridgeAudibleTitleDecisions(ctx context.Context, account, afte
 	if after != "" && !ValidASIN(after) {
 		return nil, "", ErrInvalidCursor
 	}
-	if _, err := c.AudibleAccount(ctx, account); err != nil {
+	var exists bool
+	if err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audible_accounts WHERE account = ?)`, account).Scan(&exists); err != nil {
 		return nil, "", err
+	}
+	if !exists {
+		return nil, "", ErrUnknownAccount
 	}
 	if limit <= 0 || limit > MaxAudibleTitles {
 		limit = MaxAudibleTitles
@@ -528,10 +532,11 @@ func (c *Catalog) BridgeAudibleTitleDecisions(ctx context.Context, account, afte
 		return row.Scan(&t.ASIN, &t.Rejected)
 	}, `SELECT asin, rejected FROM audible_titles WHERE account = ? AND rejected = 1 AND asin > ?
 		ORDER BY asin LIMIT ?`, account, after, limit+1)
-	if err != nil || len(titles) <= limit {
-		return titles, "", err
+	if err != nil {
+		return nil, "", err
 	}
-	return titles[:limit], titles[limit-1].ASIN, nil
+	titles, next := keysetPage(titles, limit, func(t AudibleTitleDecision) string { return t.ASIN })
+	return titles, next, nil
 }
 
 // AudibleTitleInput is one title of a poll, as the Bridge reports it.
@@ -770,7 +775,8 @@ func bridgeBookPath(p string) bool {
 // account (pollID, the Bridge's), each replacing what an earlier poll said of
 // it (its planned destination and contested book too, both dropped for an
 // accepted match) but keeping the console's and an import's columns
-// (rejected, ignored, no_sync, dest_path, import_job_id, first_seen). A match to a library that is gone or
+// (rejected, ignored, no_sync, dest_path, import_job_id, first_seen) and a
+// rejected title's match (the book the import fold refuses, and Undo's). A match to a library that is gone or
 // not a books library is stored as none. A backup's match (how "import",
 // FoldAudibleImport) stays while its book is indexed and the poll names no
 // other: the next poll may have listed the library before the backup landed.
@@ -811,8 +817,6 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 		if err != nil {
 			return err
 		}
-		// A rejected match still identifies the book the import fold must refuse.
-		// Preserve it for that check and for Undo while storing the separate plan.
 		upsert, err := tx.PrepareContext(ctx,
 			`INSERT INTO audible_titles(account, asin, title, authors, series, release_date, runtime_s, state, reason,
 			     match_library_id, match_path, match_how, first_seen, updated_at, poll_id, planned,
@@ -846,8 +850,8 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 				(matchPath == nil || (t.Match.LibraryID == im.LibraryID && t.Match.Path == im.Path)) {
 				matchLib, matchPath, how = im.LibraryID, im.Path, AudibleMatchImport
 			}
-			// The plan and the contest are an unmatched title's: a stored match
-			// drops both.
+			// The plan and the contest are an unmatched title's: the poll's
+			// match drops both.
 			var (
 				planned, contest string
 				contestLib       any
@@ -1139,7 +1143,8 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 	// The plan and the contest are in the account's library: a paused account
 	// (its library deleted) or one mapped to another library since shows
 	// neither until its next poll. Undo can accept a match before the next poll.
-	if planned != "" && acctLib.Valid && (t.Match == nil || t.Rejected) {
+	accepted := t.Match != nil && !t.Rejected
+	if planned != "" && acctLib.Valid && !accepted {
 		var p AudiblePlan
 		if json.Unmarshal([]byte(planned), &p) == nil && p.LibraryID == acctLib.Int64 {
 			t.Planned = &p
@@ -1152,7 +1157,7 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 		t.ImportJobID = &jobID.Int64
 	}
 	switch {
-	case pending && (t.Match == nil || t.Rejected): // a match marked "Not this book" isn't this title
+	case pending && !accepted: // a match marked "Not this book" isn't this title
 		t.Import = &AudibleImport{State: AudibleImportPending}
 	case jobID.Valid && jobState.Valid:
 		j := bridge.Job{ID: jobID.Int64, State: jobState.String, Error: jobErr.String,

@@ -426,7 +426,7 @@ func (c *Catalog) CoverColorsDue(ctx context.Context, afterID int64, limit int) 
 	if err != nil {
 		return nil, 0, err
 	}
-	rows, next = pageBefore(rows, limit, func(d CoverColorDue) int64 { return d.id })
+	rows, next = keysetPage(rows, limit, func(d CoverColorDue) int64 { return d.id })
 	due = slices.DeleteFunc(rows, func(d CoverColorDue) bool { return d.Source.ColorRead })
 	byLib := map[int64][]string{}
 	for _, d := range due {
