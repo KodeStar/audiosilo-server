@@ -874,9 +874,12 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// adminMatchCandidates keeps a search hit's cover and the ASIN it matched
-// beside the work and edition. A lookup by work id alone lacks these facts.
-// The query it sent comes back too, so a lookup by id keeps the book's facts.
+// adminMatchCandidates is the match search for the book at p (?q=, ?asin=,
+// ?isbn=, else the book's own facts), as handleAdminMatch answers it, having
+// answered the error itself when ok is false. The match proposal reads its
+// candidates rather than a lookup by work id, which lacks a search hit's cover
+// and the ASIN it matched; the query it sent comes back too, so a lookup by id
+// keeps the book's facts.
 func (a *API) adminMatchCandidates(w http.ResponseWriter, r *http.Request, libraryID int64, p string) ([]meta.MatchCandidate, meta.MatchQuery, bool) {
 	book, err := a.cat.GetBookByPath(r.Context(), libraryID, p)
 	if err != nil {
@@ -912,8 +915,16 @@ func (a *API) adminMatchCandidates(w http.ResponseWriter, r *http.Request, libra
 	return cands, mq, true
 }
 
-// handleMatchProposal compares a chosen work and recording with the indexed book.
-// An omitted recording means the admin is comparing the work alone.
+// handleMatchProposal serves GET /admin/books/match-proposal?library_id=&path=
+// &work_id=[&recording_id=][&q=|&asin=|&isbn=]: the match dialog's comparison of
+// a chosen work and recording with the indexed book (matchrun.Preview, the
+// overwrite plan a run applies). An omitted recording means the admin is
+// comparing the work alone; the search parameters are the ones that found the
+// candidate.
+//
+// Responses: metadata off -> 404 (code metadata_off); no library_id, or a work
+// or recording id that isn't one -> 400; no book -> 404 (code book_not_found);
+// the work or recording not found -> 404; upstream down -> 502; otherwise 200.
 func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return

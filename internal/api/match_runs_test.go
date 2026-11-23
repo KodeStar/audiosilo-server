@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -544,7 +545,14 @@ func TestMatchRunSaysItIsWaiting(t *testing.T) {
 func TestMatchProposalAPI(t *testing.T) {
 	t.Parallel()
 	e, admin, member, lib := newMatchRunEnv(t, "uk")
-	base := "/api/v1/admin/books/match-proposal?library_id=" + strconv.FormatInt(lib, 10) + "&work_id=the-martian"
+	// Indexed in NFC, asked for in NFD: the path's spelling is the index's.
+	nfc := catalog.Book{LibraryID: lib, RelPath: "Émile/The Martian", Title: "The Martian", IsFolder: true,
+		Author: "Andy Weir", Duration: 634 * 60, AddedAt: "2020-01-01"}
+	if _, err := e.cat.UpsertBook(context.Background(), &nfc); err != nil {
+		t.Fatal(err)
+	}
+	route := "/api/v1/admin/books/match-proposal?"
+	base := route + "library_id=" + strconv.FormatInt(lib, 10) + "&work_id=the-martian"
 	book := base + "&path=Andy%20Weir%2FThe%20Martian"
 	for _, tc := range []struct {
 		url, token string
@@ -552,7 +560,13 @@ func TestMatchProposalAPI(t *testing.T) {
 	}{
 		{book, member, 403},
 		{book, "", 401},
+		{route + "work_id=the-martian&path=Andy%20Weir%2FThe%20Martian", admin, 400},
+		{strings.Replace(book, "work_id=the-martian", "work_id=", 1), admin, 400},
+		{strings.Replace(book, "work_id=the-martian", "work_id=%01", 1), admin, 400},
+		{book + "&recording_id=%01", admin, 400},
+		{strings.Replace(book, "library_id="+strconv.FormatInt(lib, 10), "library_id=9999", 1), admin, 404},
 		{base + "&path=gone", admin, 404},
+		{base + "&path=" + url.QueryEscape("Émile/The Martian"), admin, 200},
 		{strings.Replace(book, "work_id=the-martian", "work_id=missing", 1), admin, 404},
 		{book + "&recording_id=gone", admin, 404},
 		{book, admin, 200},
