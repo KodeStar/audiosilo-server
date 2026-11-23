@@ -366,7 +366,7 @@ func TestSplitCreditsEdges(t *testing.T) {
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
 	for _, b := range []*Book{
 		{RelPath: "dup", Title: "Twice", Author: "Jane Doe; Jane Doe", Narrator: ",", Duration: 5},
-		{RelPath: "punct", Title: "Marks", Author: "Joe Bloggs; ???", Duration: 7},
+		{RelPath: "punct", Title: "Marks", Author: "Joe Bloggs; ???", Narrator: "Reader; ???", Duration: 7},
 	} {
 		b.LibraryID, b.Format = lib.ID, "m4b"
 		if _, err := c.UpsertBook(ctx, b); err != nil {
@@ -385,8 +385,13 @@ func TestSplitCreditsEdges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(narrators.People) != 0 || narrators.Unknown != 2 {
-		t.Errorf("narrators = %+v unknown=%d, want none and 2 unknown", narrators.People, narrators.Unknown)
+	wantNarrators := []PersonCount{{Name: "???", Books: 1, Duration: 7}, {Name: "Reader", Books: 1, Duration: 7}}
+	if !reflect.DeepEqual(narrators.People, wantNarrators) || narrators.Unknown != 1 {
+		t.Errorf("narrators = %+v unknown=%d, want %v and 1 unknown", narrators.People, narrators.Unknown, wantNarrators)
+	}
+	player, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Narrator: "???"})
+	if err != nil || len(player.Books) != 1 || player.Books[0].RelPath != "punct" {
+		t.Fatalf("narrator co-credit: page=%+v err=%v", player, err)
 	}
 	for value, want := range map[string][]string{"???": {"punct"}, "Jane Doe": {"dup"}} {
 		page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Author: value}})
@@ -403,6 +408,25 @@ func TestSplitCreditsEdges(t *testing.T) {
 	}
 	if b := page.Books[0]; !reflect.DeepEqual(b.Authors, []string{"Jane Doe"}) || b.Narrators == nil || len(b.Narrators) != 0 {
 		t.Errorf("row people = %#v / %#v", b.Authors, b.Narrators)
+	}
+}
+
+func TestCreditFilterPlan(t *testing.T) {
+	t.Parallel()
+	c, _ := newTestCatalog(t)
+	for _, tc := range []struct {
+		filter BookFilter
+		index  string
+	}{
+		{BookFilter{LibraryID: 1, Narrator: "Kate Reading"}, "books_fts VIRTUAL TABLE INDEX"},
+		{BookFilter{LibraryID: 1, Narrator: "???"}, "idx_books_narrator (library_id=? AND narrator>?)"},
+		{BookFilter{LibraryID: 1, Author: "???"}, "(library_id=? AND author>?)"},
+	} {
+		where, args := tc.filter.where("")
+		plan := strings.Join(queryPlan(t, c, "SELECT b.id FROM books b WHERE "+where+" ORDER BY "+keyTitle.expr+", b.id LIMIT ?", append(args, 61)), "\n")
+		if !strings.Contains(plan, tc.index) {
+			t.Errorf("%+v: expected %s in plan:\n%s", tc.filter, tc.index, plan)
+		}
 	}
 }
 

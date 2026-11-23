@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -280,13 +279,9 @@ type CoverSource struct {
 	// Art is the book's cover art identity (books.cover_art), what a colour read
 	// from a thumbnail is recorded against (CoverColorRecord); Colored is whether
 	// the book holds a colour for that identity already (a thumbnail also checks
-	// the identity is still its art's version). ColorRead is whether anything was
-	// read for it: a colour, or a record that the art has none, which a thumbnail
-	// that does decode still replaces (the background pass's read may have hit a
-	// passing read failure).
-	Art       string
-	Colored   bool
-	ColorRead bool
+	// the identity is still its art's version).
+	Art     string
+	Colored bool
 }
 
 // ArtFiles is the book's own art (no custom cover) as a CoverSource: its sidecar
@@ -298,6 +293,13 @@ func (b *Book) ArtFiles() CoverSource {
 	}
 	return CoverSource{CoverPath: b.CoverPath, AudioPath: audio}
 }
+
+const coverSourceCols = `COALESCE(cv.updated_at, ''), b.cover_path,
+       CASE WHEN b.is_folder THEN COALESCE(
+         (SELECT bf.rel_path FROM book_files bf WHERE bf.book_id = b.id ORDER BY bf.seq LIMIT 1),
+         b.rel_path) ELSE b.rel_path END, b.cover_art`
+
+const coverSourceJoin = ` LEFT JOIN book_covers cv ON cv.library_id = b.library_id AND cv.path = b.rel_path `
 
 // CoverSources resolves the cover source of each book indexed at one of paths in
 // a library, in one query (a page of cover thumbnails). A path with no indexed
@@ -313,13 +315,8 @@ func (c *Catalog) CoverSources(ctx context.Context, libraryID int64, paths []str
 		args = append(args, p)
 	}
 	rows, err := c.db.QueryContext(ctx, `
-		SELECT b.rel_path, COALESCE(cv.updated_at, ''), b.cover_path,
-		       CASE WHEN b.is_folder THEN COALESCE(
-		         (SELECT bf.rel_path FROM book_files bf WHERE bf.book_id = b.id ORDER BY bf.seq LIMIT 1),
-		         b.rel_path) ELSE b.rel_path END,
-		       b.cover_art, b.cover_color
-		  FROM books b
-		  LEFT JOIN book_covers cv ON cv.library_id = b.library_id AND cv.path = b.rel_path
+		SELECT b.rel_path, `+coverSourceCols+`, b.cover_color
+		  FROM books b`+coverSourceJoin+`
 		 WHERE b.library_id = ? AND b.rel_path IN (`+placeholders(len(paths))+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -331,8 +328,7 @@ func (c *Catalog) CoverSources(ctx context.Context, libraryID int64, paths []str
 		if err := rows.Scan(&path, &src.CustomAt, &src.CoverPath, &src.AudioPath, &src.Art, &color); err != nil {
 			return nil, err
 		}
-		var cc *CoverColor
-		cc, src.ColorRead = storedCoverColor(src.Art, color)
+		cc, _ := storedCoverColor(src.Art, color)
 		src.Colored = cc != nil
 		out[path] = src
 	}
@@ -383,13 +379,34 @@ func (c *Catalog) RecordCoverColors(ctx context.Context, recs []CoverColorRecord
 	return c.db.WithTx(ctx, "RecordCoverColors", func(tx *sql.Tx) error {
 		for _, r := range recs {
 			art := cmp.Or(r.Version, r.Art)
+			// Setting cover_color_art here, not leaving it to 0094's trigger for
+			// older writers, keeps the trigger's WHEN false: no nested UPDATE.
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE books SET cover_art = ?, cover_color = ? WHERE library_id = ? AND rel_path = ? AND cover_art = ?`,
+				`UPDATE books SET cover_art = ?1, cover_color = ?2, cover_color_art = NULLIF(?1, '')
+				  WHERE library_id = ?3 AND rel_path = ?4 AND cover_art = ?5`,
 				art, encodeCoverColor(CoverVersion(art), r.Color), r.LibraryID, r.Path, r.Art); err != nil {
 				return err
 			}
 		}
 		return nil
+	})
+}
+
+// BackfillCoverColorArt verifies the version tags written before migration
+// 0094. A tag alone is a completed read too. The marker and the verified art
+// identities commit together so an interrupted start can retry.
+func (c *Catalog) BackfillCoverColorArt(ctx context.Context) error {
+	const marker = "backfill_cover_color_art_0094"
+	if pending, err := getServerState[bool](ctx, c.db, marker); err != nil || !pending {
+		return err
+	}
+	return c.db.WithTx(ctx, "BackfillCoverColorArt", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE books SET cover_color_art = cover_art
+			WHERE cover_color_art IS NULL AND cover_color <> '' AND cover_color_current(cover_art, cover_color)`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM server_state WHERE key = ?`, marker)
+		return err
 	})
 }
 
@@ -401,51 +418,26 @@ type CoverColorDue struct {
 	id     int64
 }
 
-// CoverColorsDue lists the books after afterID (by the index's own order) that
-// may have cover art, a custom cover or art a scan saw or hasn't checked for, but
-// hold no colour for their current art, nor a record that it has none: what the
-// background colour pass reads thumbnails of. It reads up to limit books and
-// returns those due among them, and next, the id to continue after (0 once there
-// are no more). The ids stay inside the catalog; a caller only hands next back.
-//
-// Whether a book is due needs its colour's version tag checked against a hash of
-// its art identity, which SQL can't do here, so every page reads its books' two
-// columns and only the due ones' cover sources (CoverSources, one query per
-// library): a pass over a library that is all coloured stays cheap.
-func (c *Catalog) CoverColorsDue(ctx context.Context, afterID int64, limit int) (due []CoverColorDue, next int64, err error) {
-	rows, err := queryRows(ctx, c.db, func(rows *sql.Rows, d *CoverColorDue) error {
-		var color string
-		if err := rows.Scan(&d.id, &d.LibraryID, &d.Path, &d.Source.Art, &color); err != nil {
-			return err
-		}
-		_, d.Source.ColorRead = storedCoverColor(d.Source.Art, color)
-		return nil
-	}, `SELECT b.id, b.library_id, b.rel_path, b.cover_art, b.cover_color FROM books b
-		 WHERE `+inBookLibrary+` AND b.id > ? AND (COALESCE(b.has_cover, 1) = 1 OR `+customCoverExpr+`)
-		 ORDER BY b.id LIMIT ?`, afterID, limit+1)
+// The partial index skips current readings. A stale pre-0094 tag has no
+// recoverable raw identity. If that art returns before the next read, its tag
+// still counts, using the same check as a book page.
+const coverColorsDueSQL = `SELECT b.id, b.library_id, b.rel_path, ` + coverSourceCols + `
+    FROM books b` + coverSourceJoin + `
+    WHERE b.cover_color_art IS NOT b.cover_art AND b.id > ? AND ` + inBookLibrary + `
+      AND (COALESCE(b.has_cover, 1) = 1 OR cv.path IS NOT NULL)
+      AND (b.cover_color_art IS NOT NULL OR b.cover_color = '' OR NOT cover_color_current(b.cover_art, b.cover_color))
+    ORDER BY b.id LIMIT ?`
+
+// CoverColorsDue lists up to limit books after afterID that may have art and
+// have no reading for it. next is the id to continue after, or zero at the end.
+func (c *Catalog) CoverColorsDue(ctx context.Context, afterID int64, limit int) ([]CoverColorDue, int64, error) {
+	due, err := queryRows(ctx, c.db, func(rows *sql.Rows, d *CoverColorDue) error {
+		return rows.Scan(&d.id, &d.LibraryID, &d.Path, &d.Source.CustomAt, &d.Source.CoverPath, &d.Source.AudioPath, &d.Source.Art)
+	}, coverColorsDueSQL, afterID, limit+1)
 	if err != nil {
 		return nil, 0, err
 	}
-	rows, next = pageBefore(rows, limit, func(d CoverColorDue) int64 { return d.id })
-	due = slices.DeleteFunc(rows, func(d CoverColorDue) bool { return d.Source.ColorRead })
-	byLib := map[int64][]string{}
-	for _, d := range due {
-		byLib[d.LibraryID] = append(byLib[d.LibraryID], d.Path)
-	}
-	sources := make(map[int64]map[string]CoverSource, len(byLib))
-	for libID, paths := range byLib {
-		if sources[libID], err = c.CoverSources(ctx, libID, paths); err != nil {
-			return nil, 0, err
-		}
-	}
-	// A book re-indexed or removed between the two reads is left for the next pass.
-	due = slices.DeleteFunc(due, func(d CoverColorDue) bool {
-		src, ok := sources[d.LibraryID][d.Path]
-		return !ok || src.ColorRead
-	})
-	for i := range due {
-		due[i].Source = sources[due[i].LibraryID][due[i].Path]
-	}
+	due, next := pageBefore(due, limit, func(d CoverColorDue) int64 { return d.id })
 	return due, next, nil
 }
 

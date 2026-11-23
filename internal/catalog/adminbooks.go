@@ -260,14 +260,15 @@ func scanAdminBook(rows *sql.Rows, b *AdminBook) error {
 // The full-text index finds the candidates (a phrase match is a superset of
 // both, case and accents aside), so the filter reads only those rows rather
 // than every book of the library; credit_has then keeps the exact ones. A value
-// with no letter or digit has no phrase to match, so (rarely) credit_has reads
-// every row the other conditions leave: the people lists count such a name in a
-// co-credit ("Jane Doe; ???") too, so its filter must find it there.
+// with no letter or digit has no phrase to match, yet the people lists count
+// such a name in a co-credit ("Jane Doe; ???") too, so its filter must find it
+// there: it reads the library's nonempty credits (only those can name it) by an
+// index on the column (idx_books_author; 0094's idx_books_narrator).
 func creditFilter(prefix, field, value string) (string, []any) {
 	col := prefix + field
 	phrase, ok := ftsPhrase(value)
 	if !ok {
-		return "credit_has(" + col + ", ?)", []any{value}
+		return col + " > '' AND credit_has(" + col + ", ?)", []any{value}
 	}
 	return prefix + "id IN (SELECT rowid FROM books_fts WHERE " + field + " MATCH ?) AND credit_has(" + col + ", ?)",
 		[]any{phrase, value}

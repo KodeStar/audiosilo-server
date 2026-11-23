@@ -11,6 +11,7 @@ import (
 	"github.com/kodestar/audiosilo-meta/pkg/model"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // seedSeries indexes books (lib, path, series, index) and returns the two
@@ -473,24 +474,7 @@ func TestNextInSeriesPlan(t *testing.T) {
 // queryPlan is the detail lines of q's EXPLAIN QUERY PLAN.
 func queryPlan(t *testing.T, c *Catalog, q string, args []any) []string {
 	t.Helper()
-	rows, err := c.db.QueryContext(context.Background(), `EXPLAIN QUERY PLAN `+q, args...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var plan []string
-	for rows.Next() {
-		var id, parent, notused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
-			t.Fatal(err)
-		}
-		plan = append(plan, detail)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	return plan
+	return storetest.QueryPlan(t, c.db, q, args...)
 }
 
 // TestEarlierInSeries: the books before a book in its series, in reading order,

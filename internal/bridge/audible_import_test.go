@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 func TestCheckAudibleDestPath(t *testing.T) {
@@ -143,24 +145,8 @@ func TestAudibleImportJobs(t *testing.T) {
 func TestCancelAudibleImportsPlan(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
-	rows, err := q.db.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+openAudibleImportsSQL,
+	plan := storetest.QueryPlan(t, q.db, openAudibleImportsSQL,
 		KindAudibleImport+"|", "||acct0001|", "||acct0001}", "acct0001")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var plan []string
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-			t.Fatal(err)
-		}
-		plan = append(plan, detail)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
 	if !strings.Contains(strings.Join(plan, "\n"), "idx_bridge_jobs_open (dedupe_key>? AND dedupe_key<?)") {
 		t.Fatalf("no account range seek: %v", plan)
 	}
