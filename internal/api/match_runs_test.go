@@ -639,6 +639,15 @@ func TestMatchRunPreviewCountsApplySelection(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &preview); err != nil || resp.StatusCode != 200 || preview.ApplyCount != 2 || preview.Status != catalog.MatchReady {
 		t.Fatalf("preview = %d %s", resp.StatusCode, body)
 	}
+	// A run a stopped server left marked applying, nothing behind it: an apply
+	// settles it ready and goes ahead, so its preview counts it the same.
+	if err := e.cat.BeginApply(ctx, id, "fill", 2); err != nil {
+		t.Fatal(err)
+	}
+	resp, body = e.do(t, "POST", base+"/preview", admin, picks)
+	if err := json.Unmarshal([]byte(body), &preview); err != nil || resp.StatusCode != 200 || preview.ApplyCount != 2 || preview.Status != catalog.MatchReady {
+		t.Fatalf("preview of a stuck applying run = %d %s", resp.StatusCode, body)
+	}
 	resp, body = e.do(t, "POST", base+"/apply", admin, picks)
 	if resp.StatusCode != 202 || decodeRun(t, body).ApplyTotal != preview.ApplyCount {
 		t.Fatalf("apply = %d %s", resp.StatusCode, body)

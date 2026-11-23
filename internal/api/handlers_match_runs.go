@@ -250,7 +250,8 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 
 // handlePreviewMatchRun serves POST /admin/match-runs/{id}/preview, an apply's
 // body: the run with apply_count, the items that apply would take
-// (catalog.CountMatchItemsToApply, the selection Apply reads), changing nothing.
+// (matchrun.Runner.PreviewApply: a run stuck marked working settled first, as
+// an apply settles it, then the selection Apply reads), changing nothing else.
 // It refuses what an apply refuses (matchrun.CheckApply: 409
 // match_run_not_ready, 400 for a scope the run's mode doesn't take); 404 for a
 // run that isn't there.
@@ -259,11 +260,14 @@ func (a *API) handlePreviewMatchRun(w http.ResponseWriter, r *http.Request) {
 	if run == nil {
 		return
 	}
-	if writeApplyRefusal(w, run, matchrun.CheckApply(run, opts.Scope)) {
+	run, count, err := a.matchRuns.PreviewApply(r.Context(), run.ID, opts)
+	switch {
+	case errors.Is(err, catalog.ErrNotFound): // cleared since matchRunFor loaded it
+		writeError(w, http.StatusNotFound, "no such match run")
 		return
-	}
-	count, err := a.cat.CountMatchItemsToApply(r.Context(), run.ID, opts.Scope, opts.Include, opts.Exclude)
-	if err != nil {
+	case run != nil && writeApplyRefusal(w, run, err):
+		return
+	case err != nil:
 		a.writeCatalogError(w, err, "count match apply failed", "could not count selected books")
 		return
 	}
