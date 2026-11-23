@@ -63,19 +63,31 @@ const colorThumbSize = 160
 // to the art's own, RecordCoverColors), so the console files a thumbnail under
 // the version a reload's row names: never under an older row's version that
 // asked for it (the art has moved on since that row was read).
+//
+// Pending says the cover was still being made when the answer went
+// (coverBatchWait): Data is "" for now, and the same ask a moment later finds
+// it made (or waits on the same read, never a second one).
 type coverThumb struct {
 	LibraryID int64  `json:"library_id"`
 	Path      string `json:"path"`
 	Data      string `json:"data"`
 	Version   string `json:"version,omitempty"`
+	Pending   bool   `json:"pending,omitempty"`
 }
+
+// coverBatchTimeout is API.coverBatchWait: how long POST /admin/covers waits
+// for its slowest cover before answering the rest (the others pending). Well
+// under fileWaitTimeout, which bounds one cover's read.
+const coverBatchTimeout = 2 * time.Second
 
 // maxCoverReads bounds the art reads in progress across all requests (a slow
 // network mount shouldn't get a grid's 60 at once), and so how many images are
 // held in memory waiting to be decoded; decodes are bounded by thumbSem.
 const maxCoverReads = 8
 
-// handleAdminCovers serves POST /admin/covers {"books":[{library_id,path}],"size"}.
+// handleAdminCovers serves POST /admin/covers {"books":[{library_id,path}],"size"}:
+// {"covers":[coverThumb]} in request order, answered once every cover is made
+// or coverBatchWait has passed, whichever is first (the rest pending).
 func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Books boundedList[catalog.Ref] `json:"books"`
@@ -108,9 +120,19 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The thumbnails are made apart from the request (a cover still being read
+	// when the answer goes finishes into the cache, for the ask that follows),
+	// and the answer waits at most coverBatchWait for them: a cover on a share
+	// slow to answer is "pending" rather than holding every other (server#225).
+	bg := context.WithoutCancel(ctx)
+	var (
+		mu       sync.Mutex
+		answered bool
+		wg       sync.WaitGroup
+	)
 	out := make([]coverThumb, len(req.Books))
 	recs := make([]*catalog.CoverColorRecord, len(req.Books))
-	var wg sync.WaitGroup
+	working := make([]bool, len(req.Books))
 	for i, ref := range req.Books {
 		out[i] = coverThumb{LibraryID: ref.LibraryID, Path: ref.Path}
 		src, ok := sources[ref.LibraryID][paths[i]]
@@ -118,29 +140,57 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 			continue // an unknown library, or no book indexed at the path: no art
 		}
 		lib := byID[ref.LibraryID]
+		working[i] = true
+		a.coverWork.Add(1)
 		wg.Go(func() {
-			art := a.coverArt(ctx, lib, paths[i], src)
-			if art == nil {
-				return
+			defer a.coverWork.Done()
+			var th coverThumb
+			var rec *catalog.CoverColorRecord
+			if art := a.coverArt(bg, lib, paths[i], src); art != nil {
+				// An image that can't be read is "" for now (not cached, so the
+				// next page load tries again); one that can't be decoded is ""
+				// for good.
+				if jpg, r, err := a.coverThumbnail(bg, lib, paths[i], src, art, req.Size); err == nil && jpg != nil {
+					th.Data = jpegDataURL(jpg)
+					// The version the row has once this colour is recorded (as
+					// RecordCoverColors moves it), else the one it has now.
+					identity := src.Art
+					if r != nil {
+						identity = cmp.Or(r.Version, r.Art)
+					}
+					th.Version = catalog.CoverVersion(identity)
+					rec = r
+				}
 			}
-			// An image that can't be read is "" for now (not cached, so the next
-			// page load tries again); one that can't be decoded is "" for good.
-			jpg, rec, err := a.coverThumbnail(ctx, lib, paths[i], src, art, req.Size)
-			if err != nil || jpg == nil {
-				return
+			mu.Lock()
+			late := answered
+			if !late {
+				out[i].Data, out[i].Version, recs[i], working[i] = th.Data, th.Version, rec, false
 			}
-			out[i].Data = jpegDataURL(jpg)
-			// The version the row has once this colour is recorded (as
-			// RecordCoverColors moves it), else the one it has now.
-			identity := src.Art
-			if rec != nil {
-				identity = cmp.Or(rec.Version, rec.Art)
+			mu.Unlock()
+			if late {
+				a.recordCoverColors(bg, rec) // the answer went without it
 			}
-			out[i].Version = catalog.CoverVersion(identity)
-			recs[i] = rec
 		})
 	}
-	wg.Wait()
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+	wait := time.NewTimer(a.coverBatchWait)
+	select {
+	case <-finished:
+	case <-wait.C:
+	case <-ctx.Done():
+	}
+	wait.Stop()
+	mu.Lock()
+	answered = true
+	for i := range out {
+		out[i].Pending = working[i]
+	}
+	mu.Unlock()
 	a.recordCoverColors(ctx, recs...)
 	writeJSON(w, http.StatusOK, map[string]any{"covers": out})
 }
@@ -239,15 +289,45 @@ func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path str
 	key := thumbKey(lib.ID, path, size, art.version)
 	jpg, ok := a.thumbs.Get(key)
 	if !ok {
-		if jpg, err = a.makeThumbnail(ctx, lib, path, art, size); err != nil {
+		if jpg, err = a.sharedThumbnail(ctx, key, lib, path, art, size); err != nil {
 			return nil, nil, err
 		}
-		a.thumbs.Put(key, jpg)
 	}
 	if jpg == nil || (src.Colored && src.Art == art.version) {
 		return jpg, nil, nil
 	}
 	return jpg, a.colorRecord(lib.ID, path, src, art, jpg), nil
+}
+
+// sharedThumbnail makes the thumbnail cached under key (makeThumbnail) and
+// caches it, the asks for it at once sharing one read (libraryThumbs): a
+// cover the console asks for again while its first read is still going (a
+// pending one, handleAdminCovers) waits on that read, never starts another on
+// a share already slow to answer. An ask whose leader's request ended first
+// makes it itself.
+func (a *API) sharedThumbnail(ctx context.Context, key string, lib *catalog.Library, path string, art *artSource, size int) ([]byte, error) {
+	for {
+		if jpg, ok := a.thumbs.Get(key); ok {
+			return jpg, nil
+		}
+		c, lead, _ := a.libraryThumbs.join(key, "", true)
+		if lead {
+			c.jpg, c.err = a.makeThumbnail(ctx, lib, path, art, size)
+			if c.err == nil {
+				a.thumbs.Put(key, c.jpg)
+			}
+			a.libraryThumbs.finish(key, "", c, ctx.Err() != nil)
+			return c.jpg, c.err
+		}
+		select {
+		case <-c.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if c.err == nil || !c.abandoned {
+			return c.jpg, c.err
+		}
+	}
 }
 
 // thumbETag is the validator of a thumbnail at size of art whose

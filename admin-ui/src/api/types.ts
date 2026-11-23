@@ -2301,6 +2301,8 @@ export interface CoverThumb {
   data: string;
   /** The cover_version the book's row has for this art (absent without art): the cache keeps it under that. */
   version?: string;
+  /** Still being made when the answer went (a cover slow to read): `data` is "" for now; ask again. */
+  pending?: boolean;
 }
 
 /** One entry of POST /admin/books/works (handlers_catalog.go bookWork), in request order. */

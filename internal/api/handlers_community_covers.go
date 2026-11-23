@@ -216,12 +216,13 @@ func (f *communityFlights) join(key, rawURL string, retryFailed bool) (c *commun
 }
 
 // finish ends the leader's call c for key, remembering rawURL as failed when the
-// fetch itself failed (not when its request gave up first), and releases the
+// fetch itself failed (not when its request gave up first; never for an empty
+// rawURL, the library's own covers: API.libraryThumbs), and releases the
 // waiters.
 func (f *communityFlights) finish(key, rawURL string, c *communityCall, abandoned bool) {
 	f.mu.Lock()
 	c.abandoned = abandoned
-	if c.err != nil && !abandoned {
+	if c.err != nil && !abandoned && rawURL != "" {
 		f.rememberFailure(rawURL)
 	}
 	delete(f.calls, key)

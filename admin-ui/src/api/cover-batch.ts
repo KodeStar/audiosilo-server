@@ -14,10 +14,22 @@ import type { BookRef } from './types';
 /** The server's per-request cap (handlers_covers.go maxCoverBatch). */
 export const MAX_COVER_BATCH = 60;
 
-/** A thumbnail as the batch answers it: its data: URL and the cover_version it is of. */
+/**
+ * How many times a cover the server answers as pending is asked for in all. A
+ * batch waits about two seconds for its slowest cover (coverBatchWait) and one
+ * cover's read is given up on after ten (fileWaitTimeout), so a few asks see
+ * it finish; one still pending after that shows no art until the next load.
+ */
+export const MAX_COVER_ASKS = 6;
+
+/**
+ * A thumbnail as the batch answers it: its data: URL and the cover_version it
+ * is of, or pending: still being made when the answer went.
+ */
 interface Thumb {
   data: string | null;
   version?: string;
+  pending?: boolean;
 }
 
 /** One batcher per size: a request carries a single size. */
@@ -48,7 +60,12 @@ export async function loadThumb(
     const hit = await cache.get(key);
     if (hit) return hit;
   }
-  const thumb = await batched(size)(ref, signal);
+  // A cover the server was still making is asked for again (with the others
+  // pending at that moment, in one batch): the rest of its batch has shown.
+  let thumb = await batched(size)(ref, signal);
+  for (let asks = 1; thumb.pending && asks < MAX_COVER_ASKS; asks++) {
+    thumb = await batched(size)(ref, signal);
+  }
   if (key && thumb.data && thumb.version) {
     void cache.put(thumbKey(ref, size, thumb.version), thumb.data, epoch);
   }
@@ -73,7 +90,7 @@ async function sendCovers(refs: BookRef[], size: ThumbSize): Promise<Thumb[]> {
   const byKey = new Map(
     (covers ?? []).map((c): [string, Thumb] => [
       refKey(c),
-      { data: c.data || null, version: c.version },
+      { data: c.data || null, version: c.version, pending: c.pending },
     ]),
   );
   return refs.map((r) => byKey.get(refKey(r)) ?? { data: null });

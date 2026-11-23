@@ -257,6 +257,16 @@ type API struct {
 	// community shares a community cover's fetch between the asks for it at
 	// once, and remembers the ones that failed recently (communityThumbnail).
 	community communityFlights
+	// libraryThumbs shares a library cover thumbnail's read between the asks
+	// for it at once (sharedThumbnail; communityFlights with no failure
+	// memory: an unreadable cover is asked again at once). coverBatchWait is
+	// how long the console's batch waits for its covers (coverBatchTimeout; a
+	// field so tests can shorten it).
+	libraryThumbs  communityFlights
+	coverBatchWait time.Duration
+	// coverWork counts the batch's thumbnails being made, which may outlive
+	// its answer (WaitMediaCaches waits for them).
+	coverWork sync.WaitGroup
 
 	// bridge is the Bridge's status and job queue (SetBridge, before Handler).
 	bridge *bridge.Service
@@ -344,6 +354,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		coverReads:     make(chan struct{}, maxCoverReads),
 		colorWriteWait: coverColorWriteTimeout,
 		fileWait:       fileWaitTimeout,
+		coverBatchWait: coverBatchTimeout,
 		streamWait:     streamOpenTimeout,
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 		communityReads: make(chan struct{}, maxCommunityCoverReads),
@@ -428,8 +439,11 @@ func (a *API) renditionsOn() bool { return a.renditions != nil && a.ffmpeg != ""
 
 // WaitMediaCaches waits for the remuxes, warms and rendition encodes under way
 // to end (the launcher defers it, so once shutdown cancels the base context
-// their ffmpeg is killed and its .part removed before the process exits).
+// their ffmpeg is killed and its .part removed before the process exits), and
+// for the cover thumbnails a console batch answered without (bounded reads),
+// so none records its colour after the database closed.
 func (a *API) WaitMediaCaches() {
+	defer a.coverWork.Wait()
 	for _, c := range []*media.FileCache{a.remux, a.renditions} {
 		if c != nil {
 			c.Wait()
