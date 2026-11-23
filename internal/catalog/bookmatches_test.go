@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"maps"
 	"slices"
@@ -716,14 +717,101 @@ func TestUnlinkWithASeriesEditReadsTheUnlinkedBook(t *testing.T) {
 	}
 }
 
-// TestMatchedExprIsAnIndexSeek: the anchor's EXISTS reads book_matches by its
-// primary key per book, never a walk of the table.
-func TestMatchedExprIsAnIndexSeek(t *testing.T) {
+func TestMatchedSummaryReadsOnlyBooks(t *testing.T) {
 	t.Parallel()
 	c, _ := newTestCatalog(t)
 	plan := strings.Join(queryPlan(t, c, `SELECT COUNT(*) FROM books b WHERE `+issuePredicates[IssueUnmatched], nil), "\n")
-	if !strings.Contains(plan, "SEARCH m USING") || strings.Contains(plan, "SCAN m") {
-		t.Errorf("book_matches is not read by its key:\n%s", plan)
+	if strings.Contains(plan, "SUBQUERY") || strings.Contains(plan, "book_matches") {
+		t.Errorf("counting unmatched books looks up other rows:\n%s", plan)
+	}
+}
+
+// At each step, read the stored flag for all indexed books. A durable match
+// survives removing its book, follows a move and is copied when discs join.
+func TestStoredMatchedAcrossWrites(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const book, disc = "Book", "Book/CD1"
+	scan := func(path, asin, isbn string) error {
+		b := scannedBook(lib.ID, path)
+		b.ASIN, b.ISBN = asin, isbn
+		b.Files = []BookFile{{RelPath: path + "/a.m4b", Duration: b.Duration}}
+		_, err := c.UpsertBook(ctx, b)
+		return err
+	}
+	edit := func(e BookEdit) error { return c.EditBook(ctx, lib.ID, book, e) }
+	unlink := func() error { return edit(BookEdit{Match: &MatchAnchor{}}) }
+	for _, step := range []struct {
+		name string
+		run  func() error
+		want []string // matched paths, in order
+	}{
+		{"scan plain book", func() error { return scan(book, "", "") }, nil},
+		{"accept", func() error {
+			return edit(BookEdit{Source: SourceCommunity, Match: &MatchAnchor{WorkID: "first"}})
+		}, []string{book}},
+		{"unlink", unlink, nil},
+		{"bulk apply", func() error {
+			return edit(BookEdit{Source: SourceCommunity, KeepEdited: true, MatchIf: &MatchAnchor{},
+				Match: &MatchAnchor{WorkID: "auto", How: MatchHowAuto, RunID: 7}})
+		}, []string{book}},
+		{"refresh the work", func() error {
+			return edit(BookEdit{Source: SourceCommunity, MatchIf: &MatchAnchor{WorkID: "auto"},
+				Match: &MatchAnchor{WorkID: "redirect"}})
+		}, []string{book}},
+		{"remove index row", func() error { return c.DeleteBookAt(ctx, lib.ID, book) }, nil},
+		{"reindex with durable match", func() error { return scan(book, "", "") }, []string{book}},
+		{"index move destination", func() error { return scan(disc, "", "") }, []string{book}},
+		{"move recorded match", func() error { return c.MoveDurableState(ctx, lib.ID, book, disc) }, []string{disc}},
+		{"join discs", func() error {
+			return c.JoinDurableState(ctx, lib.ID, book, []JoinPart{{Path: disc, Last: true}}, 3600)
+		}, []string{book, disc}},
+		{"rekey paths left by an older scanner", func() error {
+			if _, err := c.db.ExecContext(ctx, `UPDATE books SET path_key = NULL WHERE library_id = ?`, lib.ID); err != nil {
+				return err
+			}
+			_, err := c.KeyPaths(ctx, nil)
+			return err
+		}, []string{book, disc}},
+		{"rekey a listener's rating from a track to its book", func() error {
+			user := seedUser(t, c, ctx)
+			if err := c.GrantWholeLibrary(ctx, user, lib.ID); err != nil {
+				return err
+			}
+			if _, err := c.SetRating(ctx, user, Ref{lib.ID, book + "/a.m4b"}, 4, ""); err != nil {
+				return err
+			}
+			rep, err := c.RekeyPathState(ctx, nil, nil)
+			if err == nil && rep.Rows != 1 {
+				t.Fatalf("rekeyed %d rows, want the rating", rep.Rows)
+			}
+			return err
+		}, []string{book, disc}},
+		{"clear one book", unlink, []string{disc}},
+		{"clear library", func() error {
+			_, err := c.ClearCommunityMatches(ctx, lib.ID)
+			return err
+		}, nil},
+		{"Bridge fold", func() error {
+			return c.FoldLibrivoxFetch(ctx, fetchJob(lib.ID, lib.ID, book, 0, "lv192"))
+		}, []string{book}},
+		{"rescan with ASIN", func() error { return scan(book, "B000000001", "") }, []string{book}},
+		{"unlink retains ASIN", unlink, []string{book}},
+		{"lose ASIN", func() error { return scan(book, "", "") }, nil},
+		{"gain ISBN", func() error { return scan(book, "", "9780000000002") }, []string{book}},
+	} {
+		if err := step.run(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		got, err := queryRows(ctx, c.db, func(r *sql.Rows, path *string) error { return r.Scan(path) },
+			`SELECT rel_path FROM books WHERE matched ORDER BY rel_path`)
+		if err != nil || !slices.Equal(got, step.want) {
+			t.Fatalf("%s: matched = %v, want %v, err %v", step.name, got, step.want, err)
+		}
 	}
 }
 

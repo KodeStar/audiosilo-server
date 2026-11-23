@@ -2798,11 +2798,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   was fetched keeps what the book has. The item reads detail `cover_superseded` (`DetailCoverSuperseded`:
   applied when its fields went in, else skipped; final, never turned into `cover_pending`).
   `SetCover` (uploads, the dialog's explicit cover tick) stays unconditional.
-  No Undo: the cleared values aren't kept. A store listing the
-  community holds with no ASIN or ISBN (Guild books) is matched by this row alone: `catalog.matchedExpr`
-  (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
-  facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
-  name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
+  No Undo: the cleared values aren't kept. `catalog.matchedExpr` reads `books.matched`. A book with an
+  effective ASIN, ISBN or recorded community match counts as matched. This includes a store listing
+  the community holds without an identifier (Guild books). Migration 0095 backfills the flag. Triggers
+  on `books` and `book_matches` maintain it even when an older server writes to the database. A migration
+  rebuilding either table must restore its triggers. The flag supplies the list's `matched` field and
+  facet, Health's Not matched (and a run's `UnmatchedBooks`), Activity's `identified`, series naming
+  and a refresh's `MatchedBooks`. What needs an identifier tests
   asin/isbn itself and stays identifier-only: community chapters (due only with one, though
   the recording they come from is then the match's, `chaptercheck`'s `chapters`), the unknown-ASIN report,
   a repick (`CommunityASINBooks`) and the console's chapter check,
