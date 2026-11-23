@@ -22,6 +22,9 @@ import (
 // whole series' cast lists; older books are a /meta/work call away.
 const maxPrevious = 5
 
+// previousTimeout is how long a /meta waits for its previous works. A lookup
+// still running then goes on, to at most composeTimeout, so it is cached for
+// the next request rather than asked and dropped on every one.
 const previousTimeout = 5 * time.Second
 
 // previousWorkIDs returns the work ids before the envelope's work, nearest
@@ -91,9 +94,11 @@ func parsePosition(s string) (float64, bool) {
 // Previous fetches the works previousWorkIDs names, in that order, each through
 // Work - so each is cached (and persisted) on its own and an uncached one waits
 // on the same workSem bound as any /meta/work call. They are fetched
-// concurrently with a five second budget shared by all the lookups. A work
-// that fails (not found, upstream down) is left out: the previous books are an extra, and the envelope they ride
-// on must not fail with them. nil when there are none.
+// concurrently, and the works in within five seconds are returned; a lookup
+// still running goes on without the caller (previousTimeout). A work that
+// fails (not found, upstream down) or is not in yet is left out: the previous
+// books are an extra, and the envelope they ride on must not fail with them.
+// nil when there are none.
 //
 // The returned works are shared with the cache - treat them as immutable.
 func (s *Service) Previous(ctx context.Context, env *Enrichment) []*MetaWork {
@@ -101,19 +106,23 @@ func (s *Service) Previous(ctx context.Context, env *Enrichment) []*MetaWork {
 	if len(ids) == 0 {
 		return nil
 	}
-	ctx, cancel := withBudget(ctx, s.previousBudget)
-	defer cancel()
 	type result struct {
 		index int
 		work  *MetaWork
 	}
+	// Buffered: a lookup that finishes after the wait never blocks.
 	results := make(chan result, len(ids))
+	detached := context.WithoutCancel(ctx)
 	for i, id := range ids {
 		go func() {
-			w, _ := s.Work(ctx, id)
+			lctx, cancel := withBudget(detached, composeTimeout)
+			defer cancel()
+			w, _ := s.Work(lctx, id)
 			results <- result{i, w}
 		}()
 	}
+	ctx, cancel := withBudget(ctx, s.previousBudget)
+	defer cancel()
 	works := make([]*MetaWork, len(ids))
 collect:
 	for range ids {
@@ -123,6 +132,11 @@ collect:
 		case <-ctx.Done():
 			break collect
 		}
+	}
+	// An answer in by the budget's end counts, whichever case select picked.
+	for len(results) > 0 {
+		r := <-results
+		works[r.index] = r.work
 	}
 	var out []*MetaWork
 	for _, w := range works {

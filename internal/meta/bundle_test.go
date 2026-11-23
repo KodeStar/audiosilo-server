@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,10 +120,12 @@ func TestPreviousFetchesInOrderAndSkipsFailures(t *testing.T) {
 }
 
 func TestPreviousBudgetReturnsReadyWorks(t *testing.T) {
-	stopped := make(chan struct{})
+	release := make(chan struct{})
+	var asked atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-		close(stopped)
+		asked.Add(1)
+		<-release
+		_, _ = w.Write([]byte(`{"id":"slow","title":"slow","authors":[],"language":"en"}`))
 	}))
 	defer srv.Close()
 	svc := NewService(srv.URL, nil)
@@ -135,10 +138,20 @@ func TestPreviousBudgetReturnsReadyWorks(t *testing.T) {
 	if ctx.Err() != nil || len(got) != 1 || got[0].ID != "ready" {
 		t.Fatalf("previous works %v, parent error %v", got, ctx.Err())
 	}
-	select {
-	case <-stopped:
-	case <-ctx.Done():
-		t.Fatal("the unfinished lookup was still running")
+	// The slow lookup outlives the wait and is cached for the next request.
+	close(release)
+	for {
+		if _, hit, _ := cacheGet[MetaWork](svc.cache, nsWork.key("slow")); hit {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("the slow work was never cached")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got = svc.Previous(ctx, env)
+	if len(got) != 2 || got[0].ID != "slow" || got[1].ID != "ready" || asked.Load() != 1 {
+		t.Fatalf("second request: %v, upstream asked %d times", got, asked.Load())
 	}
 }
 
