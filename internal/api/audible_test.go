@@ -530,6 +530,11 @@ func TestBridgeAudibleTitleDecisions(t *testing.T) {
 			t.Fatalf("want only %s marked rejected: %s", tc.asin, out)
 		}
 	}
+	for query, code := range map[string]string{"?after=not-an-asin": "invalid_cursor", "?limit=0": "invalid_request"} {
+		if resp, out := b.do(t, "GET", route+testAccount+"/titles"+query, b.bridgeTok, ""); resp.StatusCode != http.StatusBadRequest || codeOf(out) != code {
+			t.Fatalf("%s: %d %s, want 400 %s", query, resp.StatusCode, out, code)
+		}
+	}
 }
 
 // A poll's titles: pages, the final call's gone, the console's columns kept,

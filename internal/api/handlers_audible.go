@@ -262,7 +262,10 @@ func (a *API) handleBridgeAudibleTitles(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// handleBridgeAudibleTitleDecisions lists the account's titles marked "Not this book".
+// handleBridgeAudibleTitleDecisions serves GET /bridge/audible/accounts/
+// {account}/titles?after=&limit=: the account's titles marked "Not this book",
+// by ASIN, at most 500 a page. {"titles": [{asin, rejected}], "next": ""
+// at the end}; 404 unknown_account; 400 invalid_cursor, invalid_request.
 func (a *API) handleBridgeAudibleTitleDecisions(w http.ResponseWriter, r *http.Request) {
 	id, ok := audibleAccountID(w, r)
 	if !ok {
