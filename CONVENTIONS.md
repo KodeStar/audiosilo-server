@@ -4438,7 +4438,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   list gives it; a match naming a missing or non-books library is stored as none; `final` marks every title
   this `poll_id` did not send `gone` and sets `last_poll_at`). `GET .../titles?after=&limit=`
   lists only this account's titles marked Not this book, in ASIN order, up to 500 per page.
-  It returns `{titles:[{asin, rejected}], next}` with the last ASIN as the next cursor and `""` at the end.
+  It returns `{titles:[{asin, rejected}], next}` with the last ASIN as the next cursor and `""` at the end
+  (404 `unknown_account`, 400 `invalid_cursor` for an after that isn't an ASIN, 400 `invalid_request` for a bad limit).
   The Bridge reads the marks before matching. `GET /bridge/libraries/{id}/books`
   (`{books:[{path, title, authors, narrators, series, asin, isbn, duration}], next}`, path cursor, up to
   500; a main series with no position takes the one the code leading the book's folder name gives,
@@ -4586,7 +4587,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   another library: the account was mapped elsewhere while the poll ran), all the poll's: each titles PUT writes them and
   an accepted match (the poll's, a kept `import` match, `FoldAudibleImport`) clears them. A rejected
   title can keep a plan alongside the rejected match. The match identifies the book for Undo and for
-  refusing a backup that landed there. A title the final call marks
+  refusing a backup that landed there. Undo accepts that match: the plan stays stored but is not shown,
+  and the contest an older Bridge's poll left beside it goes, with a `contested` reason. A title the final call marks
   `gone` loses its plan. **Planned**: each title of the PUT may carry `planned {library_id, path, file, kind, siblings, state,
   conflict, template}` (the Bridge plans the backup's place during `audible.poll`; placement rules and the disk check
   are its own, the server never previews one), checked strictly by `checkAudiblePlan`: library > 0, `path` a clean

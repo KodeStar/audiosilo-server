@@ -140,6 +140,29 @@ func TestRejectedMatchKeepsBackupPlan(t *testing.T) {
 	}
 }
 
+// An older Bridge still claims a rejected title and can leave it contested:
+// Undo accepts the kept match, so the contest goes with it.
+func TestRejectedMatchUndoDropsContest(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	ti := avail("B000000001", "")
+	book := AudibleMatch{LibraryID: f.lib.ID, Path: "Existing edition", How: "fuzzy"}
+	ti.Match = &book
+	f.poll(t, "p1", ti)
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	ti.Match, ti.Reason, ti.ContestedPath = nil, AudibleReasonContested, "Other book"
+	f.poll(t, "p2", ti)
+	if got := f.title(t, ti.ASIN); got.Contested == nil || got.Match == nil || *got.Match != book {
+		t.Fatalf("rejected and contested: %+v", got)
+	}
+	got, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(false)})
+	if err != nil || got.Match == nil || *got.Match != book || got.Contested != nil || got.Reason != "" {
+		t.Fatalf("after Undo: %+v, %v", got, err)
+	}
+}
+
 // A planned destination and a contested book are checked strictly: a
 // Bridge's mistake fails the call, never stores half a plan.
 func TestAudiblePlannedChecked(t *testing.T) {

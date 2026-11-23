@@ -203,7 +203,9 @@ type AudibleTitlePatch struct {
 // disc folder another book would absorb (checkDestOwnFolder). "Not this book" drops a pending
 // request: such a title is never backed up by a policy or "Back up
 // everything", and its match is not this title's (a backup may still be asked
-// for one by one). A user-state write.
+// for one by one). Its undo accepts the kept match, which drops the contest a
+// poll left the title in, as any accepted match does (the plan stays, hidden
+// by scanAudibleTitle). A user-state write.
 func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p AudibleTitlePatch) (*AudibleTitle, error) {
 	if p.DestPath != nil {
 		if err := bridge.CheckAudibleDestPath(*p.DestPath); err != nil {
@@ -227,6 +229,16 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 				    import_pending = CASE WHEN ?1 THEN 0 ELSE import_pending END, updated_at = ?2
 				  WHERE account = ?3 AND asin = ?4`, *p.Rejected, now, account, asin); err != nil {
 				return err
+			}
+			// An older Bridge still claims a rejected title, so a poll can leave
+			// it contested beside the match it keeps.
+			if !*p.Rejected {
+				if _, err := tx.ExecContext(ctx, `UPDATE audible_titles SET contest_library_id = NULL, contest_path = '',
+					    reason = CASE WHEN reason = ?1 THEN '' ELSE reason END
+					  WHERE account = ?2 AND asin = ?3 AND match_path IS NOT NULL`,
+					AudibleReasonContested, account, asin); err != nil {
+					return err
+				}
 			}
 		}
 		if p.DestPath != nil {
