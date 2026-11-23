@@ -189,7 +189,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   tokens** (a QR already on screen dies with the old secret) and, like a mint, retiring
   the user's other still-redeemable invites. Mint and rotate include `external_https: true` for
   an HTTPS public URL or HTTPS forwarded by a configured trusted proxy, so the console skips
-  the upstream certificate notice. The invite URL still uses `baseURL`. `redeemed_at` records
+  the upstream self-signed certificate notice (an https link at an IP address still warns).
+  The invite URL still uses `baseURL`. `redeemed_at` records
   acceptance (first successful exchange) but the console buckets invites by whether
   they are still redeemable, not by `redeemed_at`. **Self-
   service password**: `POST /auth/password` calls `ChangePassword` (`SetPassword` answering the count below); setting a first

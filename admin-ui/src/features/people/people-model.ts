@@ -223,7 +223,8 @@ export function groupDevices(devices: readonly Device[] | undefined) {
  * off), else false. `selfSigned` is whether the server runs in self-signed
  * TLS mode (unknown while settings load or a TLS mode change waits for a
  * restart: runsSelfSigned). An external HTTPS invite uses the certificate at
- * its public address or proxy.
+ * its public address or proxy, so the self-signed reason gives way; one at an
+ * IP address still warns.
  * None for a public name, or a link that isn't one.
  */
 export type InviteReach = {
@@ -256,11 +257,17 @@ export function inviteReach(
     return { loopback: false, home: false, certificate: false };
   }
   const loopback = isLoopbackHost(url.host);
-  const https = !loopback && !externalHTTPS && url.protocol === 'https:';
+  const https = !loopback && url.protocol === 'https:';
   return {
     loopback,
     home: !loopback && isHomeHost(url.host),
+    // An external HTTPS front speaks for the server's own self-signed
+    // certificate, not for one at an IP address (a proxy's own, usually).
     certificate:
-      https && selfSigned === true ? 'selfsigned' : https && isIPHost(url.host) ? 'address' : false,
+      https && selfSigned === true && !externalHTTPS
+        ? 'selfsigned'
+        : https && isIPHost(url.host)
+          ? 'address'
+          : false,
   };
 }
