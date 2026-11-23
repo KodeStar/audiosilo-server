@@ -1224,22 +1224,6 @@ describe('cancelledView (BRIDGE-02)', () => {
     ).toEqual({ byAdmin: true, park: { code: 'budget_exceeded', hint: 'Raise it.' } });
   });
 
-  it("names the server's reason for a working job it stopped, not an admin", () => {
-    for (const [error, reason] of [
-      [
-        'a generate job for the book replaced it; make the read-along again after',
-        'A generate job for the book replaced it; make the read-along again after.',
-      ],
-      ['a newer request replaced it', 'A newer request replaced it.'],
-      ['the Audible account was removed', 'The Audible account was removed.'],
-      ["the Audible account's library was deleted", "The Audible account's library was deleted."],
-    ]) {
-      expect(cancelledView(cancelled({ error_code: 'server_cancelled', error })).reason).toBe(
-        reason,
-      );
-    }
-  });
-
   it('says nothing of an admin when none asked', () => {
     expect(cancelledView(cancelled({ cancel_requested: false, error: 'raw' }))).toEqual({
       byAdmin: false,

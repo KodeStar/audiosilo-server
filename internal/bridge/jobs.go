@@ -569,7 +569,7 @@ func scanJob(row rowScanner) (*Job, error) {
 	j.LeaseUntil, j.ClaimedAt, j.FinishedAt = nullable(lease), nullable(claimed), nullable(finished)
 	// A colliding move cancels immediately, without requesting a worker stop.
 	if (j.State == StateCancelled || (j.CancelRequested && IsOpenState(j.State))) && IsCancelReason(j.Error) {
-		j.ErrorCode = "server_cancelled"
+		j.ErrorCode = ErrorServerCancelled
 	}
 	j = readableJob(j)
 	return &j, nil
@@ -2217,8 +2217,12 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 	return job, err
 }
 
+// ErrorServerCancelled is the error_code scanJob gives a job the server cancelled,
+// or asked to stop, for one of its own reasons (IsCancelReason) rather than an admin.
+const ErrorServerCancelled = "server_cancelled"
+
 // The reasons the server records as a job's error when it cancels the job
-// itself. scanJob marks those with the server_cancelled code.
+// itself. scanJob marks those with ErrorServerCancelled.
 const (
 	// CancelMoved: MoveJobs, the book moved onto another open job of its kind.
 	CancelMoved = "the book moved onto another job of this kind"

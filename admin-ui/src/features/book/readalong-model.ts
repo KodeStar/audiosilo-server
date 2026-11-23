@@ -4,6 +4,7 @@ import {
   coverageDown,
   FEATURE_READALONG,
   generateResult,
+  isServerCancelled,
   KIND_DETECT,
   KIND_GENERATE,
   newestBlocker,
@@ -150,7 +151,7 @@ export function readalongJobShown(
   job: Pick<BridgeJob, 'state' | 'error_code' | 'result'> | undefined,
 ): boolean {
   if (!job) return false;
-  if (job.state === 'cancelled') return job.error_code === 'server_cancelled';
+  if (job.state === 'cancelled') return isServerCancelled(job);
   if (job.state !== 'done') return true;
   if (map === 'stale') return false;
   return map !== 'ready' || generateResult(job.result)?.transcribed === false;

@@ -551,11 +551,15 @@ export interface CancelledView {
   park?: { code: string; hint?: string };
 }
 
+/** Whether the server cancelled the job (or asked it to stop) for the reason in its error. */
+export function isServerCancelled(job: Pick<BridgeJob, 'error_code'>): boolean {
+  return job.error_code === 'server_cancelled';
+}
+
 export function cancelledView(
   job: Pick<BridgeJob, 'error' | 'error_code' | 'cancel_requested' | 'progress'>,
 ): CancelledView {
-  if (job.error_code === 'server_cancelled')
-    return { byAdmin: false, reason: asSentence(job.error) };
+  if (isServerCancelled(job)) return { byAdmin: false, reason: asSentence(job.error) };
   const park = generateProgress(job.progress).park;
   const hint = park ? parkHint(park.code, park.hint, '') : undefined;
   return {
