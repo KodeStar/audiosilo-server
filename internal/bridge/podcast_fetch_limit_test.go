@@ -46,17 +46,19 @@ func fetchLimitListener(t *testing.T, q *testQueue, name string, kid bool) int64
 	return id
 }
 
-func TestPodcastFetchLimitPlan(t *testing.T) {
+// Both capped counts seek their kind's partial index by requester, not the
+// retained history of every job.
+func TestOpenRequestsPlan(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
-	var id, parent, unused int
-	var detail string
-	if err := q.db.QueryRowContext(t.Context(), "EXPLAIN QUERY PLAN "+openFetchCountSQL, q.admin).
-		Scan(&id, &parent, &unused, &detail); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(detail, "idx_bridge_jobs_fetch_requester (requested_by=?)") {
-		t.Fatalf("fetch cap did not seek by requester: %s", detail)
+	for _, tc := range []struct{ kind, states, index string }{
+		{KindPodcastFetch, workingStatesSQL, "idx_bridge_jobs_fetch_requester (requested_by=?)"},
+		{KindPodcastSubscribe, OpenStatesSQL, "idx_bridge_jobs_subscribe_user (requested_by=?)"},
+	} {
+		plan := strings.Join(queryPlan(t, q, openRequestsSQL(tc.kind, tc.states), q.admin), "\n")
+		if !strings.Contains(plan, tc.index) {
+			t.Errorf("%s cap did not seek %s:\n%s", tc.kind, tc.index, plan)
+		}
 	}
 }
 
