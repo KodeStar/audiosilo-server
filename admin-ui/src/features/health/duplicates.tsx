@@ -35,15 +35,18 @@ export function Duplicates({
   several,
   ignored,
   across,
+  waiting = false,
   onAcrossChange,
 }: {
   ignored: boolean;
   several: boolean;
+  /** Whether `across` is still to be decided (the libraries loading): nothing is asked yet. */
+  waiting?: boolean;
   /** Copies in different libraries are usually on purpose: grouped only when asked (#165). */
   across: boolean;
   onAcrossChange: (on: boolean) => void;
 }) {
-  const groups = useDuplicates(ignored, across);
+  const groups = useDuplicates(ignored, across, !waiting);
   const actions = useIssueActions('duplicate');
   const roots = useLibraryRoots();
   // One tree whatever the state, so the switch keeps its focus while the list loads.

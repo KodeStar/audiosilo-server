@@ -949,9 +949,10 @@ export const DUPLICATES_PAGE = 50;
  * Groups of copies of one book, a page at a time (`fetchNextPage` for more): the
  * open ones, or with `ignored` the ignored ones.
  */
-export function useDuplicates(ignored: boolean, across = false) {
+export function useDuplicates(ignored: boolean, across = false, enabled = true) {
   return useInfiniteQuery({
     queryKey: keys.duplicates(ignored, across),
+    enabled,
     queryFn: ({ pageParam }) =>
       api.duplicates({
         ignored: ignored || undefined,

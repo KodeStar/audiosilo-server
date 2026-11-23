@@ -47,6 +47,9 @@ export function IssuesPage() {
   const bookLibraries = useBookLibraries();
   const several = offersLibraryChoice(bookLibraries ?? []);
   const across = several && !!search.across;
+  // ?across=1 can't be checked until the libraries load: the list waits for them
+  // rather than asking without it first, and a change of category keeps it.
+  const acrossPending = libraries.isPending && !!search.across;
   useEffect(() => {
     if (bookLibraries && !several && search.across) {
       void navigate({
@@ -57,7 +60,7 @@ export function IssuesPage() {
       });
     }
   }, [bookLibraries, several, search.across, navigate]);
-  const go = (next: { issue?: IssueKind; ignored?: true }, on = across) =>
+  const go = (next: { issue?: IssueKind; ignored?: true }, on = across || acrossPending) =>
     void navigate({ to: '.', search: { ...next, across: on || undefined }, replace: true });
   const setAcross = (on: boolean) => go({ issue: search.issue, ignored: search.ignored }, on);
   // Without ?issue= the page opens the first category needing attention and keeps
@@ -195,6 +198,7 @@ export function IssuesPage() {
               several={several}
               ignored={ignored}
               across={across}
+              waiting={acrossPending}
               onAcrossChange={setAcross}
             />
           )}
