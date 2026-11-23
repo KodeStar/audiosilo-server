@@ -1008,6 +1008,51 @@ func TestRequestedRunAfterRecentSuccess(t *testing.T) {
 	}
 }
 
+// Check now while a full check runs joins it, as does a request still pending
+// when one starts: no second full check follows. A light run (book changes)
+// leaves the request queued.
+func TestRequestedRunJoinsFullRun(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		full   bool
+		queued int
+	}{{"full run", true, 0}, {"light run", false, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			f.expanse("2011", "2012")
+			f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			f.md.seriesHook = func(context.Context, string) error {
+				once.Do(func() { close(entered) })
+				<-release
+				return nil
+			}
+			f.r.RequestRun()
+			done := make(chan error, 1)
+			go func() { done <- f.r.RunOnce(t.Context(), tc.full) }()
+			select {
+			case <-entered:
+			case <-time.After(testwait.Scaled(5 * time.Second)):
+				t.Fatal("the run never read a series")
+			}
+			f.r.RequestRun()
+			close(release)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if n := len(f.r.runNow); n != tc.queued {
+				t.Fatalf("queued requests after the run = %d, want %d", n, tc.queued)
+			}
+			f.r.RequestRun()
+			if n := len(f.r.runNow); n != 1 {
+				t.Fatalf("a request after the run queued %d, want 1", n)
+			}
+		})
+	}
+}
+
 func TestRequestedRunSwitchedOffWhileMirrorLoads(t *testing.T) {
 	for _, tc := range []struct {
 		name string

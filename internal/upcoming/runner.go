@@ -157,6 +157,10 @@ type Runner struct {
 	runNow chan struct{}
 	// mu makes one run at a time (the schedule's, a kick's, a test's).
 	mu sync.Mutex
+	// reqMu guards fullRunning, set while a full run of the whole job is in
+	// flight: a RequestRun then joins it instead of queuing another after it.
+	reqMu       sync.Mutex
+	fullRunning bool
 	// settle is how long kicks must be quiet before a kick's run; offCheck
 	// how often a run looks at the switch (pool.WhileOn).
 	settle   time.Duration
@@ -218,11 +222,35 @@ func (r *Runner) Wake() {
 }
 
 // RequestRun queues a full check even after a recent success. Repeated
-// requests share one pending check, run by the scheduler with its own context.
+// requests share one pending check, run by the scheduler with its own context;
+// one made while a full check runs, or still pending when one starts, is that
+// check (its record is the run the console watches for).
 func (r *Runner) RequestRun() {
+	r.reqMu.Lock()
+	defer r.reqMu.Unlock()
+	if r.fullRunning {
+		return
+	}
 	select {
 	case r.runNow <- struct{}{}:
 	default:
+	}
+}
+
+// fullStarted marks a full run of the whole job in flight and takes any
+// pending request into it; the func it returns ends the mark.
+func (r *Runner) fullStarted() (ended func()) {
+	r.reqMu.Lock()
+	defer r.reqMu.Unlock()
+	r.fullRunning = true
+	select {
+	case <-r.runNow:
+	default:
+	}
+	return func() {
+		r.reqMu.Lock()
+		r.fullRunning = false
+		r.reqMu.Unlock()
 	}
 }
 
@@ -457,6 +485,9 @@ func (r *Runner) runOnce(ctx context.Context, trigger runTrigger) (whole bool, e
 		on, step = r.resolveOn, r.resolveOnly
 	}
 	full := trigger.full(whole)
+	if full && whole {
+		defer r.fullStarted()()
+	}
 	now := r.opt.Now()
 	rctx, stop := pool.WhileOn(ctx, r.offCheck, on, errSwitchedOff)
 	defer stop()
