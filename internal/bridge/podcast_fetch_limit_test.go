@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 func fetchLimitJobs(t *testing.T, q *testQueue, n int) []NewJob {
@@ -55,7 +57,7 @@ func TestOpenRequestsPlan(t *testing.T) {
 		{KindPodcastFetch, workingStatesSQL, "idx_bridge_jobs_fetch_requester (requested_by=?)"},
 		{KindPodcastSubscribe, OpenStatesSQL, "idx_bridge_jobs_subscribe_user (requested_by=?)"},
 	} {
-		plan := strings.Join(queryPlan(t, q, openRequestsSQL(tc.kind, tc.states), q.admin), "\n")
+		plan := strings.Join(storetest.QueryPlan(t, q.db, openRequestsSQL(tc.kind, tc.states), q.admin), "\n")
 		if !strings.Contains(plan, tc.index) {
 			t.Errorf("%s cap did not seek %s:\n%s", tc.kind, tc.index, plan)
 		}

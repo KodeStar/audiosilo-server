@@ -35,8 +35,24 @@ func TestMigration0094CoverColorArt(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 	c := catalog.New(db, time.Now)
-	if err := c.BackfillCoverColorArt(ctx); err != nil {
-		t.Fatal(err)
+	marker := func() (n int) {
+		t.Helper()
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM server_state WHERE key = 'backfill_cover_color_art_0094'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if marker() != 1 {
+		t.Fatal("0094 left no backfill marker")
+	}
+	// Twice: the marker goes with the verified identities, so the second is a no-op.
+	for range 2 {
+		if err := c.BackfillCoverColorArt(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if marker() != 0 {
+		t.Fatal("backfill marker left behind")
 	}
 	checkDue := func(want ...string) {
 		t.Helper()

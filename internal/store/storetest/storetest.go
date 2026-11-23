@@ -11,6 +11,7 @@ package storetest
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,4 +71,34 @@ func build() ([]byte, error) {
 		return nil, fmt.Errorf("closing left %s-wal behind", path)
 	}
 	return os.ReadFile(path)
+}
+
+// Querier is what QueryPlan reads through: a *store.DB, or a package's own view
+// of one.
+type Querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// QueryPlan is the detail lines of EXPLAIN QUERY PLAN for query run with args on
+// db, for a test that checks which index a query seeks.
+func QueryPlan(t testing.TB, db Querier, query string, args ...any) []string {
+	t.Helper()
+	rows, err := db.QueryContext(context.Background(), "EXPLAIN QUERY PLAN "+query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return plan
 }

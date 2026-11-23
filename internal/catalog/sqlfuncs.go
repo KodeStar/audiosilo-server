@@ -19,21 +19,17 @@ import (
 // in a migration, view, index or generated column, or a database could no longer
 // be opened by a plain sqlite3 shell (or an older AudioSilo build).
 func init() {
-	// Verify a legacy colour's short version tag by the same rule as a book read.
+	// cover_color_current(art, color): whether a stored colour's version tag is
+	// that of the art identity (storedCoverColor, a book page's own check), so a
+	// legacy palette written before 0094 still counts (CoverColorsDue).
 	store.RegisterFunction("cover_color_current", 2, func(args []driver.Value) (driver.Value, error) {
 		_, current := storedCoverColor(sqlText(args[0]), sqlText(args[1]))
-		if current {
-			return int64(1), nil
-		}
-		return int64(0), nil
+		return sqlBool(current), nil
 	})
 	// disc_before(a, b): whether disc folder a comes before b in the order the
 	// scanner joins a split book's discs (metadata.DiscOrder: CD2 before CD10).
 	store.RegisterFunction("disc_before", 2, func(args []driver.Value) (driver.Value, error) {
-		if metadata.DiscOrder(sqlText(args[0]), sqlText(args[1])) < 0 {
-			return int64(1), nil
-		}
-		return int64(0), nil
+		return sqlBool(metadata.DiscOrder(sqlText(args[0]), sqlText(args[1])) < 0), nil
 	})
 	// name_sort(credit): the surname-first sort key of an Author/Narrator credit,
 	// so a query orders by exactly what a keyset cursor holds (keySurname).
@@ -48,10 +44,7 @@ func init() {
 	store.RegisterFunction("credit_has", 2,
 		func(args []driver.Value) (driver.Value, error) {
 			credit, name := sqlText(args[0]), sqlText(args[1])
-			if credit == name || slices.Contains(creditNames(credit), name) {
-				return int64(1), nil
-			}
-			return int64(0), nil
+			return sqlBool(credit == name || slices.Contains(creditNames(credit), name)), nil
 		})
 	// audible_disc_parent(dest_path, template): the folder an Audible backup's
 	// disc folder would join (audibleDiscParent), "" for none: the disc-folder
@@ -64,10 +57,7 @@ func init() {
 	// "Back up everything" skips a title for (backupAllQueuedSQL).
 	store.RegisterFunction("audible_dest_ok", 1,
 		func(args []driver.Value) (driver.Value, error) {
-			if bridge.CheckAudibleDestPath(sqlText(args[0])) != nil {
-				return int64(0), nil
-			}
-			return int64(1), nil
+			return sqlBool(bridge.CheckAudibleDestPath(sqlText(args[0])) == nil), nil
 		})
 }
 
@@ -120,6 +110,14 @@ func nameSortKey(credit string) string { return sortKeys.get(credit) }
 // creditNames is the people a credit names (splitOnce), memoized (callers must
 // not modify the slice).
 func creditNames(credit string) []string { return creditSplit.get(credit) }
+
+// sqlBool is a SQL function's boolean answer, as SQLite has none: 1 or 0.
+func sqlBool(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
 
 // sqlText reads a TEXT argument (NULL as "").
 func sqlText(v driver.Value) string {
