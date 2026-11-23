@@ -315,13 +315,17 @@ func (c *Catalog) SaveMetaSeries(ctx context.Context, r MetaSeriesRecord) error 
 }
 
 // MarkMetaSeriesGone records a 404 for id (kept from the first one: gone_at
-// doesn't move), stored without members when it was never fetched.
-func (c *Catalog) MarkMetaSeriesGone(ctx context.Context, id, at string) error {
-	_, err := c.db.ExecUserState(ctx, `INSERT INTO meta_series(series_id, fetched_at, state, gone_at)
-		VALUES(?, ?, 'gone', ?)
-		ON CONFLICT(series_id) DO UPDATE SET fetched_at = excluded.fetched_at, state = 'gone',
-		  gone_at = COALESCE(meta_series.gone_at, excluded.gone_at)`, id, at, at)
-	return err
+// doesn't move), stored without members when it was never fetched. It returns
+// the gone_at kept.
+func (c *Catalog) MarkMetaSeriesGone(ctx context.Context, id, at string) (goneAt string, err error) {
+	err = c.db.WithUserStateTx(ctx, "MarkMetaSeriesGone", func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `INSERT INTO meta_series(series_id, fetched_at, state, gone_at)
+			VALUES(?, ?, 'gone', ?)
+			ON CONFLICT(series_id) DO UPDATE SET fetched_at = excluded.fetched_at, state = 'gone',
+			  gone_at = COALESCE(meta_series.gone_at, excluded.gone_at)
+			RETURNING gone_at`, id, at, at).Scan(&goneAt)
+	})
+	return goneAt, err
 }
 
 // DropMetaSeries forgets community series, the local series resolved to them

@@ -950,14 +950,12 @@ func (r *Runner) fetchSeries(ctx context.Context, rows []catalog.UpcomingSeries,
 			updated = toRecord(*id, rec, now)
 			werr = r.cat.SaveMetaSeries(ctx, updated)
 		case errors.Is(err, meta.ErrNotFound):
-			// As MarkMetaSeriesGone writes it: the members kept, gone_at
-			// from the first 404.
+			// The row as MarkMetaSeriesGone leaves it: its members kept.
 			mu.Lock()
 			updated = stored[*id]
 			mu.Unlock()
 			updated.ID, updated.FetchedAt, updated.Gone = *id, stamp(now), true
-			updated.GoneAt = cmp.Or(updated.GoneAt, updated.FetchedAt)
-			werr = r.cat.MarkMetaSeriesGone(ctx, *id, updated.FetchedAt)
+			updated.GoneAt, werr = r.cat.MarkMetaSeriesGone(ctx, *id, updated.FetchedAt)
 		default:
 			if ctx.Err() == nil {
 				r.log.Debug("upcoming: reading a series failed", "series", *id, "err", err)
