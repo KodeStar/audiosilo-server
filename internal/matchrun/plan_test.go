@@ -899,3 +899,53 @@ func TestPreviewUsesOverwritePlan(t *testing.T) {
 		}
 	}
 }
+
+// TestPlanClearedSeries: a book whose series an admin cleared (an empty edit)
+// keeps none, and the series offered as its main one isn't filed among its
+// other series instead; the work's other series still are.
+func TestPlanClearedSeries(t *testing.T) {
+	c := martian
+	c.Series = []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: "City Watch", Position: "1"}}
+	p := Propose(&c, nil)
+	st := state(nil, []string{"series"}, false)
+	for _, scope := range []string{ScopeFill, ScopeOverwrite} {
+		w := Plan(scope, st, p)
+		if _, ok := w.Set["series"]; ok || w.Set["series_index"] != "" ||
+			w.Set["more_series"] != `[{"name":"City Watch","position":1}]` {
+			t.Fatalf("%s over a cleared series = %v", scope, w.Set)
+		}
+	}
+	// Ticking the series in the dialog takes it with its position.
+	if alt := Preview(st, &c, nil).AlternateSeries; alt == nil || alt.Set["series_index"] != "8" ||
+		alt.Set["more_series"] != `[{"name":"City Watch","position":1}]` {
+		t.Fatalf("alternate = %+v", alt)
+	}
+}
+
+// TestPreviewKeptSeries: unticking the series a match would set keeps the
+// book's own series together: no position of the offered series beside it, the
+// offered series not added beside a series the community doesn't list (most
+// likely it, spelled the book's own way), and a respelling of the book's own
+// series keeping its position.
+func TestPreviewKeptSeries(t *testing.T) {
+	c := martian
+	c.Series = []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: "City Watch", Position: "1"}}
+	for _, tc := range []struct {
+		own, index string
+	}{
+		{own: "Red Planet"},
+		{own: "discworld", index: "8"},
+	} {
+		st := state(map[string]string{"series": tc.own}, nil, false)
+		got := Preview(st, &c, nil)
+		if got.Set["series"] != "Discworld" || got.Set["series_index"] != "8" {
+			t.Fatalf("%s: default = %+v", tc.own, got.Set)
+		}
+		alt := got.AlternateSeries
+		watch := `[{"name":"City Watch","position":1}]`
+		if alt == nil || alt.Values["series_index"] != tc.index || alt.Set["series_index"] != tc.index ||
+			alt.Values["more_series"] != watch || alt.Set["more_series"] != watch {
+			t.Fatalf("%s: alternate = %+v", tc.own, alt)
+		}
+	}
+}

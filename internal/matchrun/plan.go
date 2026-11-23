@@ -441,14 +441,21 @@ func revertStale(scope string, st *catalog.MatchState, w *Writes, field string) 
 }
 
 // planSeriesDetails resolves the position and other memberships beside the main
-// series the book will actually keep.
+// series the book will actually keep. A book left with no main series (its own an
+// admin's empty edit, or the match dialog declining the one offered: Preview)
+// doesn't get the series offered as its main one (the work's first, planSeries)
+// as another series either.
 func planSeriesDetails(scope string, st *catalog.MatchState, work []catalog.SeriesRef, main string, w *Writes) (string, string) {
 	mainPos, found := "", false
 	unlisted := len(work) > 0 && main != "" && !slices.ContainsFunc(work, func(s catalog.SeriesRef) bool { return match.SameSeries(s.Name, main) })
+	declined := ""
+	if main == "" && len(work) > 0 {
+		declined = work[0].Name
+	}
 	others := []catalog.SeriesRef{}
 	for i, s := range work {
 		if !match.SameSeries(s.Name, main) {
-			if !(unlisted && i == 0) {
+			if !(unlisted && i == 0) && !match.SameSeries(s.Name, declined) {
 				others = append(others, s)
 			}
 		} else if !found {

@@ -453,10 +453,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   search parameters that found the candidate (`matchrun.Preview`). Its proposed values,
   default sets, reverts and cover come from the same overwrite plan as a run. Changing
   the main series checkbox uses the position and other memberships planned for that
-  choice (`alternate_series`; a book with no series that declines the one offered
-  doesn't get it as another series either). The plan is for the book as it is, so
-  the console keeps no closed dialog's answer (`useMatchProposal`, gcTime 0) and
-  accepts nothing while it is asked. Series carry an additive `id`. The facts come from `series/{id}`, each series once per request,
+  choice (`alternate_series`). A book left with no main series (one that declines
+  the series offered, or whose series an admin cleared) doesn't get the offered one
+  as another series either (`planSeriesDetails`, a run's plan too). The plan is for
+  the book as it is, so the console keeps no closed dialog's answer
+  (`useMatchProposal`, gcTime 0) and accepts nothing while it is asked. Series carry
+  an additive `id`. The facts come from `series/{id}`, each series once per request,
   concurrently through `workSem`, at most `maxSeriesFacts` per match within
   `seriesFactsTimeout` (none for a work they can't rule on: no language, one
   series), cached in the `s:` key space (quota `maxSeriesEntries`); an unreadable

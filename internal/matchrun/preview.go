@@ -5,7 +5,6 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
-	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // ProposalFields are the community values to compare and the default writes.
@@ -16,6 +15,9 @@ type ProposalFields struct {
 	Revert []string          `json:"revert,omitempty"`
 }
 
+// BookProposal is GET /admin/books/match-proposal's answer: the overwrite plan
+// for the book (ProposalFields), the work and recording it records, the cover
+// and whether the plan takes it, and whether the match is a new one for the book.
 type BookProposal struct {
 	ProposalFields
 	WorkID      string `json:"work_id"`
@@ -55,14 +57,11 @@ func Preview(st *catalog.MatchState, c *meta.MatchCandidate, rec *meta.MatchReco
 		return result
 	}
 	if alternate != main {
-		work := series.work
-		if alternate == "" {
-			// A book with no series that declines the one offered keeps none:
-			// the declined series isn't listed among its other series either.
-			work = slices.DeleteFunc(slices.Clone(work), func(s catalog.SeriesRef) bool { return match.SameSeries(s.Name, series.name) })
-		}
+		// A book with no series that declines the one offered keeps none: the
+		// declined series isn't listed among its other series either
+		// (planSeriesDetails).
 		other := Writes{Set: map[string]string{}}
-		pos, more := planSeriesDetails(ScopeOverwrite, st, work, alternate, &other)
+		pos, more := planSeriesDetails(ScopeOverwrite, st, series.work, alternate, &other)
 		fields := &ProposalFields{Values: map[string]string{}, Set: other.Set, Revert: other.Revert}
 		fields.offer(catalog.FieldSeriesIndex, pos)
 		fields.offer(catalog.FieldMoreSeries, more)
