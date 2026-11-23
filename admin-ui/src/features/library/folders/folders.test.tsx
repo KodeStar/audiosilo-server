@@ -179,6 +179,30 @@ describe('folders', () => {
     expect(Math.max(...offsets)).toBe(9_500);
   });
 
+  it('keeps the selected folder shown when a refresh of its listing fails', async () => {
+    let down = false;
+    const ok = fiction();
+    mockFetch(
+      routes({
+        'GET /libraries/1/fs': (req) =>
+          down && req.query.get('path') === 'A/B'
+            ? { status: 500, body: { error: 'down' } }
+            : ok(req),
+      }),
+    );
+    const { queryClient } = renderApp('/library/folders?library=1&folder=A/B');
+    const card = await screen.findByRole('region', { name: 'Audio files in this folder' });
+    down = true;
+    await act(() =>
+      queryClient.refetchQueries({ queryKey: keys.folderDetail(1, 'A/B'), exact: true }),
+    );
+    expect(queryClient.getQueryState(keys.folderDetail(1, 'A/B'))?.status).toBe('error');
+    // The query's observers hear of the failure on a later task.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(card).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
   it('Show more asks for the next page after a refresh of the first one failed', async () => {
     // Big/ holds 620 folders. Its first page stays listed through a failed
     // refresh, so Show more still means the page after it.

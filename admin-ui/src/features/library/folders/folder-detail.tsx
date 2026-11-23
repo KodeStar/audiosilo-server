@@ -77,8 +77,8 @@ export function FolderDetail({
       </Notice>
     );
   }
-  // A later page's failed refresh keeps the totals there are, as the tree keeps its pages.
-  const failed = own.isError ? own : rest.isError && !rest.data ? rest : undefined;
+  // A failed refresh keeps the folder and totals there are, as the tree keeps its pages.
+  const failed = own.isError && !own.data ? own : rest.isError && !rest.data ? rest : undefined;
   if (failed) {
     return (
       <QueryError
