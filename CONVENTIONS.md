@@ -573,7 +573,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Covers are unchanged (their own hosts in both modes). Admin wire below (Server settings).
   **Bundle** (`meta_bundle` capability): `?include=previous` adds `previous`
   (`meta.PreviousWorkIDs` / `Service.Previous`: main-view works before this one
-  (an omnibus "1-3" only when it ends before this one starts), nearest first, max 5, with five seconds for the group and unfinished or failed lookups left out) and `?spoilers=hide` gates the current
+  (an omnibus "1-3" only when it ends before this one starts), nearest first, max 5, with five seconds for the group and unfinished or failed lookups left out;
+  a lookup still running goes on to be cached, one per work across requests, at most 16, and ends with the server) and `?spoilers=hide` gates the current
   work by the CALLER's saved progress (`meta.ChapterAt` + `meta.HideSpoilers`,
   mirroring the player's `meta-gating.ts`; previous works lose only
   `recap_summary.ending`). Both work on a per-request copy - the cached envelope

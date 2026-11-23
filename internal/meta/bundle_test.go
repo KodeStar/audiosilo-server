@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -152,6 +153,71 @@ func TestPreviousBudgetReturnsReadyWorks(t *testing.T) {
 	got = svc.Previous(ctx, env)
 	if len(got) != 2 || got[0].ID != "slow" || got[1].ID != "ready" || asked.Load() != 1 {
 		t.Fatalf("second request: %v, upstream asked %d times", got, asked.Load())
+	}
+}
+
+// Two /meta asking for a previous work while its lookup runs share that one
+// lookup, and the server stopping ends it.
+func TestPreviousLookupsShareAndStopWithTheServer(t *testing.T) {
+	var asked atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	svc := NewService(srv.URL, nil)
+	svc.previousBudget = testwait.Scaled(100 * time.Millisecond)
+	base, stop := context.WithCancel(t.Context())
+	defer stop()
+	svc.SetBaseContext(base)
+	env := &Enrichment{Series: []MetaSeries{rail("2", "slow@1")}, Work: &MetaWork{ID: "cur"}}
+	first := svc.previousLookup(t.Context(), "slow")
+	if got := svc.Previous(t.Context(), env); len(got) != 0 {
+		t.Fatalf("previous works %v before the lookup answered", got)
+	}
+	svc.flightMu.Lock()
+	running := len(svc.previousFlights)
+	svc.flightMu.Unlock()
+	if running != 1 || svc.previousLookup(t.Context(), "slow") != first {
+		t.Fatalf("%d lookups running, want the one shared", running)
+	}
+	stop()
+	select {
+	case <-first.done:
+	case <-time.After(testwait.Scaled(5 * time.Second)):
+		t.Fatal("the lookup outlived the server")
+	}
+	if n := asked.Load(); n > 1 {
+		t.Errorf("upstream asked %d times for one work", n)
+	}
+}
+
+// Past maxPreviousFlights, a new lookup is not left running for later
+// requests: it is not shared, and it ends with its own request.
+func TestPreviousLookupsPastTheCapEndWithTheRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	svc := NewService(srv.URL, nil)
+	svc.flightMu.Lock()
+	for i := range maxPreviousFlights {
+		svc.previousFlights[strconv.Itoa(i)] = &previousFlight{done: make(chan struct{})}
+	}
+	svc.flightMu.Unlock()
+	req, cancel := context.WithCancel(t.Context())
+	over := svc.previousLookup(req, "over")
+	svc.flightMu.Lock()
+	running, shared := len(svc.previousFlights), svc.previousFlights["over"] != nil
+	svc.flightMu.Unlock()
+	if running != maxPreviousFlights || shared {
+		t.Fatalf("%d lookups running (shared: %v), want the cap of %d", running, shared, maxPreviousFlights)
+	}
+	cancel()
+	select {
+	case <-over.done:
+	case <-time.After(testwait.Scaled(5 * time.Second)):
+		t.Fatal("the lookup past the cap outlived its request")
 	}
 }
 

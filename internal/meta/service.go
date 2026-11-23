@@ -328,6 +328,12 @@ type Service struct {
 	// seriesFlights are the series records being read for their facts, by series id,
 	// each closed when its read ends (see seriesFacts). Guarded by flightMu.
 	seriesFlights map[string]chan struct{}
+	// previousFlights are Previous's lookups running on past their /meta, by
+	// work id, at most maxPreviousFlights (see previousLookup), on base: the
+	// server's lifetime (SetBaseContext), so a stop ends them. Both guarded by
+	// flightMu.
+	previousFlights map[string]*previousFlight
+	base            context.Context
 	// health caches Ping's answer.
 	health healthCache
 	// covers fetches community cover images (FetchCover), at most
@@ -360,20 +366,31 @@ func NewService(baseURL string, now func() time.Time) *Service {
 	}
 	base := strings.TrimRight(baseURL, "/")
 	return &Service{
-		client:         newClient(base),
-		report:         newReportClient(),
-		baseURL:        base,
-		cache:          newCache(now),
-		composeBudget:  composeTimeout,
-		previousBudget: previousTimeout,
-		workSem:        make(chan struct{}, maxConcurrentWorkFetches),
-		lookupSem:      make(chan struct{}, maxConcurrentLookups),
-		flights:        map[string]*lookupFlight{},
-		seriesFlights:  map[string]chan struct{}{},
-		covers:         media.NewArtFetcher(coverTransport(netguard.PublicAddrPort), coverTimeout, ""),
-		coverSem:       make(chan struct{}, maxConcurrentCoverFetches),
-		now:            now,
+		client:          newClient(base),
+		report:          newReportClient(),
+		baseURL:         base,
+		cache:           newCache(now),
+		composeBudget:   composeTimeout,
+		previousBudget:  previousTimeout,
+		workSem:         make(chan struct{}, maxConcurrentWorkFetches),
+		lookupSem:       make(chan struct{}, maxConcurrentLookups),
+		flights:         map[string]*lookupFlight{},
+		seriesFlights:   map[string]chan struct{}{},
+		previousFlights: map[string]*previousFlight{},
+		base:            context.Background(),
+		covers:          media.NewArtFetcher(coverTransport(netguard.PublicAddrPort), coverTimeout, ""),
+		coverSem:        make(chan struct{}, maxConcurrentCoverFetches),
+		now:             now,
 	}
+}
+
+// SetBaseContext sets the server's lifetime: the previous works' lookups that
+// run on past their /meta (Previous) end with it. Call before the Service
+// answers requests.
+func (s *Service) SetBaseContext(ctx context.Context) {
+	s.flightMu.Lock()
+	defer s.flightMu.Unlock()
+	s.base = ctx
 }
 
 // Enrich resolves a book's asin (preferred) or isbn to a composed enrichment.
