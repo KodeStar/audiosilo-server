@@ -53,7 +53,11 @@ export function FolderDetail({
   });
   const name = own.data?.folder?.name ?? relBaseName(path);
 
-  if (own.error instanceof ApiError && own.error.status === 404) {
+  // A path naming the root ("/", "."): its listing has no folder entry to show.
+  if (
+    (own.error instanceof ApiError && own.error.status === 404) ||
+    (own.data && !own.data.folder)
+  ) {
     return (
       <Notice
         tone="info"

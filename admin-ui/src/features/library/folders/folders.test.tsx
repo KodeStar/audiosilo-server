@@ -228,6 +228,12 @@ describe('folders', () => {
     expect(calls.filter((c) => c.query.get('path') === 'A')).toHaveLength(1);
   });
 
+  it('shows a folder path naming the root as a folder not found', async () => {
+    mockFetch(routes());
+    renderApp('/library/folders?library=1&folder=%2F');
+    expect(await screen.findByText(/isn't here any more/)).toBeInTheDocument();
+  });
+
   it('joins a folder whose audio is only in its disc folders', async () => {
     let override: FolderMode | undefined;
     const calls = mockFetch(
