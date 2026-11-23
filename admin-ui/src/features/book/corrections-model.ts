@@ -7,6 +7,7 @@ import {
   type FieldValue,
   type MatchCandidate,
   type MatchRecording,
+  type SeriesPlan,
   type MetaCorrectChange,
   type MetaCorrectParams,
   type OverrideField,
@@ -294,16 +295,18 @@ export function sendable(r: CorrectionRow): boolean {
 /**
  * The review's rows: each edited correction field whose value differs from the
  * community's (the community lacking one counts: the correction adds it), in
- * field order. The community's values are the match dialog's (communityValues,
- * for the recording the book is), as a correction reads them (asCorrection).
+ * field order. Both reviews read the server's proposed values for the recording.
  */
 export function correctionRows(
   fields: Record<OverrideField, FieldValue>,
   c: MatchCandidate,
   { rec, known }: CorrectionRecording,
+  proposal: SeriesPlan,
 ): CorrectionRow[] {
   const edited = new Set<string>(editedCorrectionFields(fields));
-  return compareRows(fields, c, rec)
+  // A correction compares the community's own series and position even when
+  // the overwrite plan leaves the admin's main series in place.
+  return compareRows(fields, proposal, true)
     .filter((r) => edited.has(r.field) && isCorrectionField(r.field))
     .map((r) => asCorrection(r, c, rec))
     .filter((r) => !r.same)

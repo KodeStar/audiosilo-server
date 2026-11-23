@@ -58,18 +58,12 @@ func absFields(f *metadata.ABSFile) bookFields {
 	set(FieldDescription, f.Description)
 	set(FieldASIN, f.ASIN)
 	set(FieldISBN, f.ISBN)
-	if len(f.Series) > 0 {
-		set(FieldSeries, f.Series[0].Name)
+	main, index, more := SeriesFields(f.Series, func(s metadata.ABSSeries) (string, string) { return s.Name, s.Position })
+	set(FieldSeries, main)
+	if out[FieldSeries] != "" {
+		set(FieldSeriesIndex, index)
+		set(FieldMoreSeries, more)
 	}
-	if out[FieldSeries] == "" {
-		return out
-	}
-	set(FieldSeriesIndex, f.Series[0].Position)
-	more := make([]SeriesRef, 0, len(f.Series)-1)
-	for _, s := range f.Series[1:] {
-		more = append(more, SeriesAt(s.Name, CleanOverride(FieldSeriesIndex, s.Position)))
-	}
-	set(FieldMoreSeries, EncodeMoreSeries(more))
 	return out
 }
 

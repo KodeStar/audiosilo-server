@@ -720,6 +720,20 @@ type ApplyOptions struct {
 	UserID  int64
 }
 
+// CheckApply is why run can't be applied under scope, nil when it can:
+// catalog.ErrRunNotReady unless it is ready, ErrScope for a scope its mode
+// doesn't take. Apply asks it, and so does the review's count of what an apply
+// would take (POST /admin/match-runs/{id}/preview).
+func CheckApply(run *catalog.MatchRun, scope string) error {
+	if run.Status != catalog.MatchReady {
+		return catalog.ErrRunNotReady
+	}
+	if scopes := ScopesFor(run.Mode); scopes != nil && !slices.Contains(scopes, scope) {
+		return ErrScope
+	}
+	return nil
+}
+
 // Apply starts applying a ready run in the background, under base, returning the
 // run as it starts. ErrBusy while a run is working; catalog.ErrRunNotReady when
 // this one isn't ready; ErrScope for a scope its mode doesn't take. A run left
@@ -736,11 +750,8 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 	if err != nil {
 		return nil, err
 	}
-	if run.Status != catalog.MatchReady {
-		return nil, catalog.ErrRunNotReady
-	}
-	if scopes := ScopesFor(run.Mode); scopes != nil && !slices.Contains(scopes, o.Scope) {
-		return nil, ErrScope
+	if err := CheckApply(run, o.Scope); err != nil {
+		return nil, err
 	}
 	items, err := r.cat.MatchItemsToApply(ctx, runID, o.Scope, o.Include, o.Exclude)
 	if err != nil {
@@ -758,6 +769,27 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 		r.apply(work, run, items, o)
 	})
 	return started, err
+}
+
+// PreviewApply is the run as an Apply now would find it, with how many items
+// it would take (catalog.CountMatchItemsToApply, the selection Apply reads),
+// changing nothing else: a run left marked working with nothing behind it is
+// settled first, as Apply settles it (settleBeforeStart), so a stuck applying run
+// counts as the ready run Apply would apply. CheckApply's refusals as Apply's;
+// catalog.ErrNotFound for a run that isn't there.
+func (r *Runner) PreviewApply(ctx context.Context, runID int64, o ApplyOptions) (*catalog.MatchRun, int, error) {
+	r.mu.Lock()
+	r.settleBeforeStart(ctx)
+	run, err := r.cat.GetMatchRun(ctx, runID)
+	r.mu.Unlock()
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := CheckApply(run, o.Scope); err != nil {
+		return run, 0, err
+	}
+	n, err := r.cat.CountMatchItemsToApply(ctx, runID, o.Scope, o.Include, o.Exclude)
+	return run, n, err
 }
 
 // apply applies each item, a few at a time, then settles the run. Turning

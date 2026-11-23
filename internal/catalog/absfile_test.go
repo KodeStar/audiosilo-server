@@ -103,6 +103,19 @@ func TestABSFileSeriesPosition(t *testing.T) {
 	}
 }
 
+func TestABSFileSeriesFields(t *testing.T) {
+	series := []metadata.ABSSeries{{Name: "Main", Position: "2 - 4"}, {Name: "Other", Position: "invalid"}, {Name: "Third", Position: "1 - 3"}}
+	fields := absFields(&metadata.ABSFile{Series: series})
+	if fields[FieldSeries] != "Main" || fields[FieldSeriesIndex] != "2-4" ||
+		fields[FieldMoreSeries] != `[{"name":"Other","position":0},{"name":"Third","position":1,"position_end":3}]` {
+		t.Fatalf("series fields = %v", fields)
+	}
+	series[0].Name = ""
+	if got := absFields(&metadata.ABSFile{Series: series}); len(got) != 0 {
+		t.Fatalf("ABS file without a main series offered %v", got)
+	}
+}
+
 // TestABSFileTitlePosition: a series position read from the title
 // (titlePosition) has the title's source: the ABS file's when the file gave the
 // title (server#213), a tag's when the tags did.

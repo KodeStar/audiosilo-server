@@ -17,6 +17,7 @@ import {
   useAllMatchRunItems,
   useLibraryRoots,
   useMatchRunItems,
+  useMatchRunPreview,
   useMatchRuns,
 } from '@/api/hooks';
 import {
@@ -68,7 +69,6 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
   NO_PICKS,
-  applyCount,
   answeredCount,
   applyRequest,
   bulkPhase,
@@ -517,12 +517,14 @@ function ReviewDialog({
     });
   }, []);
   const applyScope = repick ? 'ids' : scope;
-  const { picks: effectivePicks, leftOut } = useMemo(() => {
+  const effectivePicks = useMemo(() => {
     const scopeItems = new Map(loaded);
     if (readAllAuto) for (const item of autoRows) scopeItems.set(item.id, item);
     return picksForScope(picks, [...scopeItems.values()], run.mode, applyScope);
   }, [loaded, readAllAuto, autoRows, picks, run.mode, applyScope]);
-  const count = applyCount(run, effectivePicks, leftOut);
+  const request = applyRequest(applyScope, effectivePicks);
+  const preview = useMatchRunPreview(run.id, request, open && !readOnly && autoReady);
+  const count = preview.data?.apply_count;
   // Finish an empty refresh through the existing apply endpoint, so another
   // mode can be started afterwards. The server leaves out the items with
   // nothing to change, so it sends only the admin's own exclusions.
@@ -550,7 +552,7 @@ function ReviewDialog({
   const apply = async () => {
     setBusy(true);
     try {
-      await api.applyMatchRun(run.id, applyRequest(applyScope, effectivePicks));
+      const started = await api.applyMatchRun(run.id, request);
       // The run list only: the review's item pages are read again when it next
       // opens, not every loaded page before this one closes.
       await qc.invalidateQueries({ queryKey: keys.matchRuns, exact: true });
@@ -558,7 +560,7 @@ function ReviewDialog({
         title: t(finishEmpty ? 'common.done' : 'health.bulkMatch.applyStarted'),
         description: finishEmpty
           ? undefined
-          : t('health.bulkMatch.applyStartedBody', counted(count, lang)),
+          : t('health.bulkMatch.applyStartedBody', counted(started.apply_total, lang)),
         type: 'success',
       });
       onOpenChange(false);
@@ -627,6 +629,13 @@ function ReviewDialog({
                   onRetry={() => void autoItems.refetch()}
                 />
               ) : null}
+              {preview.isError ? (
+                <QueryError
+                  title={t('health.bulkMatch.countError')}
+                  error={preview.error}
+                  onRetry={() => void preview.refetch()}
+                />
+              ) : null}
               <ItemList
                 key={tab}
                 run={run}
@@ -650,12 +659,21 @@ function ReviewDialog({
                   </DialogClose>
                   <Button
                     onClick={() => void apply()}
-                    disabled={busy || !autoReady || (count === 0 && !finishEmpty)}
+                    disabled={
+                      busy ||
+                      !autoReady ||
+                      count === undefined ||
+                      preview.isFetching ||
+                      preview.isError ||
+                      (count === 0 && !finishEmpty)
+                    }
                   >
                     {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-                    {finishEmpty
-                      ? t('common.done')
-                      : t('health.bulkMatch.apply', counted(count, lang))}
+                    {count === undefined
+                      ? t('common.loading')
+                      : finishEmpty
+                        ? t('common.done')
+                        : t('health.bulkMatch.apply', counted(count, lang))}
                   </Button>
                 </>
               )}

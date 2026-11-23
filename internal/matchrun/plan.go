@@ -241,8 +241,8 @@ var noLanguage = func() map[string]bool {
 var yearRE = regexp.MustCompile(`^\d{4}`)
 
 // Propose is what candidate c offers a book as recording rec (nil = none): the
-// match dialog's community values (admin-ui match-model.ts communityValues), each
-// in stored form, a value an override would refuse left out. The ASIN is the
+// match dialog's community values (Preview), each in stored form, a value an
+// override would refuse left out. The ASIN is the
 // recording's best for this server (meta.MatchRecording.ASINs is ordered by the
 // preferred marketplace), named with its marketplace. The series are the ones a
 // book that is rec is in (meta.MatchRecording.Series): an edition named for that
@@ -264,17 +264,8 @@ func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProp
 	if rec != nil && rec.Series != nil {
 		series = rec.Series
 	}
-	if len(series) > 0 {
-		raw[catalog.FieldSeries], raw[catalog.FieldSeriesIndex] = series[0].Name, series[0].Position
-		// The work's other series (Plan decides which is the book's main one). A
-		// position the series_index field would refuse is no position; a range
-		// ("1-3", an omnibus) is kept as one.
-		more := make([]catalog.SeriesRef, 0, len(series)-1)
-		for _, s := range series[1:] {
-			more = append(more, catalog.SeriesAt(s.Name, catalog.CleanOverride(catalog.FieldSeriesIndex, s.Position)))
-		}
-		raw[catalog.FieldMoreSeries] = catalog.EncodeMoreSeries(more)
-	}
+	raw[catalog.FieldSeries], raw[catalog.FieldSeriesIndex], raw[catalog.FieldMoreSeries] =
+		catalog.SeriesFields(series, func(s meta.MatchSeries) (string, string) { return s.Name, s.Position })
 	if rec != nil {
 		p.RecordingID, p.Narrators, p.RuntimeMin = rec.ID, joinNames(rec.Narrators), rec.RuntimeMin
 		raw[catalog.FieldNarrator], raw[catalog.FieldPublisher] = p.Narrators, rec.Publisher
@@ -350,6 +341,11 @@ func (w Writes) after(st *catalog.MatchState, field string) string {
 // match when that is not the one it has (a refresh only heals one: planRefresh;
 // see planFor).
 func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
+	w, _ := planBook(scope, st, p)
+	return w
+}
+
+func planBook(scope string, st *catalog.MatchState, p catalog.MatchProposal) (Writes, seriesOffer) {
 	w := Writes{Set: map[string]string{}}
 	for _, field := range catalog.OverrideFields {
 		switch field {
@@ -360,7 +356,7 @@ func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes 
 			plan(scope, field, p.Values[field], st.Fields[field], w.Set)
 		}
 	}
-	planSeries(scope, st, p, &w)
+	series := planSeries(scope, st, p, &w)
 	// Fill also tidies a title the files clutter (tidyTitle): the community's
 	// title is the book's, less the series and "Book 2 (Unabridged)".
 	if scope == ScopeFill {
@@ -375,7 +371,7 @@ func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes 
 		w.Anchor = &catalog.MatchAnchor{WorkID: p.WorkID, RecordingID: p.RecordingID,
 			OfferedASIN: p.Values[catalog.FieldASIN], OfferedISBN: p.Values[catalog.FieldISBN]}
 	}
-	return w
+	return w, series
 }
 
 // plan puts the community's value for field (theirs) in set when the scope takes
@@ -393,15 +389,20 @@ func plan(scope, field, theirs string, mine catalog.FieldValue, set map[string]s
 	}
 }
 
+type seriesOffer struct {
+	work                 []catalog.SeriesRef
+	name, position, more string
+}
+
 // planSeries plans the series, the position and the other series. The community
 // lists the series a book of the work is in (its main one first, then p.Values'
 // more_series: meta.SeriesFor's rules) and offers one as the book's main series:
-// the book's own when the work is in it, else the work's first (as the match
-// dialog's communityValues does), so even overwrite keeps a book filed under
-// another of the work's series. The book keeps one main series - its own, or the
-// one being set - so its position is the community's position in THAT series
-// (its first listing; none when the community doesn't list it), and the work's
-// other series become its more_series. A main series the community doesn't list
+// the book's own when the work is in it, else the work's first. Even overwrite
+// keeps a book filed under another of the work's series. The book keeps one
+// main series - its own, or the one being set - so its position is the
+// community's position in THAT series (its first listing; none when the
+// community doesn't list it), and the work's other series become its
+// more_series. A main series the community doesn't list
 // at all is most likely the work's main series spelled the book's own way
 // ("Stormlight Archive" for "The Stormlight Archive"), so that one isn't added
 // beside it as another.
@@ -413,32 +414,48 @@ func plan(scope, field, theirs string, mine catalog.FieldValue, set map[string]s
 // what the files say. Only the series fields: a community title or narrator the
 // candidate lacks says nothing (a recording not picked), while a series it lacks
 // is the series rules' answer. An admin's own series stay under every scope.
-func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w *Writes) {
+func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w *Writes) seriesOffer {
 	set := w.Set
-	stale := func(field string) {
-		if mine := st.Fields[field]; scope == ScopeOverwrite && mine.Source == catalog.SourceCommunity && mine.Value != "" {
-			w.Revert = append(w.Revert, field)
-		}
-	}
 	var work []catalog.SeriesRef
 	if name := p.Values[catalog.FieldSeries]; name != "" {
 		work = append(work, catalog.SeriesAt(name, p.Values[catalog.FieldSeriesIndex]))
 	}
 	work = append(work, catalog.ParseMoreSeries(p.Values[catalog.FieldMoreSeries])...)
 	own := st.Fields[catalog.FieldSeries].Value
+	offer := seriesOffer{work: work}
 	if len(work) > 0 {
 		offered := max(slices.IndexFunc(work, func(s catalog.SeriesRef) bool { return match.SameSeries(s.Name, own) }), 0)
-		plan(scope, catalog.FieldSeries, work[offered].Name, st.Fields[catalog.FieldSeries], set)
+		offer.name = work[offered].Name
+		plan(scope, catalog.FieldSeries, offer.name, st.Fields[catalog.FieldSeries], set)
 	} else {
-		stale(catalog.FieldSeries)
+		revertStale(scope, st, w, catalog.FieldSeries)
 	}
-	main := w.after(st, catalog.FieldSeries)
+	offer.position, offer.more = planSeriesDetails(scope, st, work, w.after(st, catalog.FieldSeries), w)
+	return offer
+}
+
+func revertStale(scope string, st *catalog.MatchState, w *Writes, field string) {
+	if mine := st.Fields[field]; scope == ScopeOverwrite && mine.Source == catalog.SourceCommunity && mine.Value != "" {
+		w.Revert = append(w.Revert, field)
+	}
+}
+
+// planSeriesDetails resolves the position and other memberships beside the main
+// series the book will actually keep. A book left with no main series (its own an
+// admin's empty edit, or the match dialog declining the one offered: Preview)
+// doesn't get the series offered as its main one (the work's first, planSeries)
+// as another series either.
+func planSeriesDetails(scope string, st *catalog.MatchState, work []catalog.SeriesRef, main string, w *Writes) (string, string) {
 	mainPos, found := "", false
 	unlisted := len(work) > 0 && main != "" && !slices.ContainsFunc(work, func(s catalog.SeriesRef) bool { return match.SameSeries(s.Name, main) })
+	declined := ""
+	if main == "" && len(work) > 0 {
+		declined = work[0].Name
+	}
 	others := []catalog.SeriesRef{}
 	for i, s := range work {
 		if !match.SameSeries(s.Name, main) {
-			if !(unlisted && i == 0) {
+			if !(unlisted && i == 0) && !match.SameSeries(s.Name, declined) {
 				others = append(others, s)
 			}
 		} else if !found {
@@ -446,24 +463,25 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 			mainPos, found = catalog.FormatSeriesRange(s.Position, s.PositionEnd), true
 		}
 	}
-	plan(scope, catalog.FieldSeriesIndex, mainPos, st.Fields[catalog.FieldSeriesIndex], set)
+	plan(scope, catalog.FieldSeriesIndex, mainPos, st.Fields[catalog.FieldSeriesIndex], w.Set)
 	// A main series the community doesn't list keeps its position: the book's own
 	// spelling of the work's main series, numbered as the community numbers it.
 	// The files' position comes back only beside the series it numbers (or when
 	// the files have none): never the tags' #3 of one series beside another.
 	if files := st.Fields[catalog.FieldSeriesIndex].Scanned; mainPos == "" && !unlisted &&
 		(files == "" || match.SameSeries(st.Fields[catalog.FieldSeries].Scanned, main)) {
-		stale(catalog.FieldSeriesIndex)
+		revertStale(scope, st, w, catalog.FieldSeriesIndex)
 	}
 	// In stored form (each name once, within the bounds), as the book's own value
 	// is compared and as an apply would store it.
 	more := catalog.CleanOverride(catalog.FieldMoreSeries, catalog.EncodeMoreSeries(others))
-	plan(scope, catalog.FieldMoreSeries, more, st.Fields[catalog.FieldMoreSeries], set)
+	plan(scope, catalog.FieldMoreSeries, more, st.Fields[catalog.FieldMoreSeries], w.Set)
 	// Only a community that lists no other series takes them away: a list it
 	// offers that can't be stored (too many, a name too long) is no answer.
 	if len(others) == 0 {
-		stale(catalog.FieldMoreSeries)
+		revertStale(scope, st, w, catalog.FieldMoreSeries)
 	}
+	return mainPos, more
 }
 
 // planFor is what applying item it (its proposal) to a book in state st writes for a

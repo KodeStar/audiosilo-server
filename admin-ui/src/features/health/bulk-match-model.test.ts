@@ -3,7 +3,6 @@ import { regionName, regionOptions, regionTag } from '@/lib/regions';
 import {
   NO_PICKS,
   answeredCount,
-  applyCount,
   picksForScope,
   hasCloseScore,
   applyRequest,
@@ -179,13 +178,10 @@ describe('picks', () => {
     expect(isChosen(noChange, picks, 'refresh', 'fill')).toBe(false);
     expect(isChosen(changed, picks, 'refresh', 'fill')).toBe(true);
     // The no-op is left out by the server (server#332): counted, never sent.
-    expect(fill.leftOut).toBe(1);
-    expect(applyCount(run({}, { pending: 2 }), fill.picks, fill.leftOut)).toBe(1);
-    expect(applyRequest('fill', fill.picks)).toEqual({ scope: 'fill', exclude: [], include: [] });
+    expect(applyRequest('fill', fill)).toEqual({ scope: 'fill', exclude: [], include: [] });
     expect(isPickable(noChange, 'refresh', 'overwrite')).toBe(true);
     const overwrite = picksForScope(picks, [noChange], 'refresh', 'overwrite');
-    expect(overwrite.picks.exclude.size).toBe(0);
-    expect(overwrite.leftOut).toBe(0);
+    expect(overwrite.exclude.size).toBe(0);
     expect(isPickable(noChange, 'repick', 'ids')).toBe(true);
     expect(isPickable(noChange, 'match', 'ids')).toBe(true);
   });
@@ -215,8 +211,7 @@ describe('picks', () => {
       expect(isChosen(healed, picks, 'refresh', scope)).toBe(true);
       expect(isChosen(review, picks, 'refresh', scope)).toBe(true);
       const effective = picksForScope(picks, [healed, review, noop], 'refresh', scope);
-      expect(applyCount(run({}, { pending: 2 }), effective.picks, effective.leftOut)).toBe(2);
-      expect(applyRequest(scope, effective.picks)).toEqual({ scope, exclude: [], include: [2] });
+      expect(applyRequest(scope, effective)).toEqual({ scope, exclude: [], include: [2] });
     }
     const range = togglePickRange(
       NO_PICKS,
@@ -256,7 +251,6 @@ describe('picks', () => {
   });
 
   it("doesn't count a loaded confident book the apply would leave alone", () => {
-    const r = run({}, { auto: 4, pending: 3 });
     const loaded = [
       item({ id: 11, outcome: 'auto' }),
       item({ id: 12, outcome: 'auto', matched_since: true }),
@@ -264,10 +258,8 @@ describe('picks', () => {
       item({ id: 14, outcome: 'auto', matched_since: true, applied: 'applied' }),
       item({ id: 15, outcome: 'review', matched_since: true }),
     ];
-    const { picks, leftOut } = picksForScope(NO_PICKS, loaded, 'match', 'fill');
+    const picks = picksForScope(NO_PICKS, loaded, 'match', 'fill');
     expect([...picks.exclude].sort()).toEqual([12, 13]);
-    expect(leftOut).toBe(0);
-    expect(applyCount(r, picks, leftOut)).toBe(1);
   });
 
   it('leaves refresh no-ops to the server: counted, never sent (server#332)', () => {
@@ -292,12 +284,9 @@ describe('picks', () => {
     ];
     const picks = { exclude: new Set([4]), include: new Set([7]) };
     const out = picksForScope(picks, loaded, 'refresh', 'fill');
-    expect(out.leftOut).toBe(2);
-    expect([...out.picks.exclude].sort()).toEqual([4, 5]);
-    expect([...out.picks.include]).toEqual([]);
-    const r = run({}, { auto: 6, pending: 5 });
-    expect(applyCount(r, out.picks, out.leftOut)).toBe(1);
-    expect(applyRequest('fill', out.picks)).toEqual({
+    expect([...out.exclude].sort()).toEqual([4, 5]);
+    expect([...out.include]).toEqual([]);
+    expect(applyRequest('fill', out)).toEqual({
       scope: 'fill',
       exclude: [4, 5],
       include: [],
@@ -309,19 +298,8 @@ describe('picks', () => {
       item({ id: i + 1, outcome: 'auto', changes: { fill: { fields: [], cover: false } } }),
     );
     const out = picksForScope(NO_PICKS, items, 'refresh', 'fill');
-    const body = JSON.stringify(applyRequest('fill', out.picks));
-    expect(out.leftOut).toBe(120_000);
+    const body = JSON.stringify(applyRequest('fill', out));
     expect(body.length).toBeLessThan(100);
-    expect(applyCount(run({}, { auto: 120_000, pending: 120_000 }), out.picks, out.leftOut)).toBe(
-      0,
-    );
-  });
-
-  it('counts what an apply takes: pending confident, less left out, plus put in', () => {
-    const r = run({}, { auto: 4, pending: 3 });
-    expect(applyCount(r, NO_PICKS)).toBe(3);
-    expect(applyCount(r, { exclude: new Set([1, 2]), include: new Set([9]) })).toBe(2);
-    expect(applyCount(r, { exclude: new Set([1, 2, 3, 4]), include: new Set() })).toBe(0);
   });
 
   it('leaves a book matched by hand out of the apply, and never offers one matched since', () => {

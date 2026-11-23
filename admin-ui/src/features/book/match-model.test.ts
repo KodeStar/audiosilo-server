@@ -1,13 +1,10 @@
-import type { MatchCandidate, MatchRecording } from '@/api/types';
+import type { BookMatchProposal, MatchCandidate, MatchRecording } from '@/api/types';
 import { bookDetail } from '@/test/library-fixtures';
 import {
   acceptRequest,
   communityCover,
-  communityValues,
   compareRows,
-  defaultCoverTick,
   defaultRecording,
-  defaultTicks,
   lengthComparison,
   parseMatchQuery,
   scoreTone,
@@ -74,204 +71,31 @@ describe('defaultRecording', () => {
   });
 });
 
-describe('compare', () => {
-  it('maps a candidate onto the fields', () => {
-    expect(communityValues(candidate(), recording())).toEqual({
-      title: 'The Way of Kings',
-      subtitle: '',
-      author: 'Brandon Sanderson',
-      narrator: 'Michael Kramer, Kate Reading',
-      series: 'The Stormlight Archive',
-      series_index: '1',
-      more_series: '',
-      published: '2010',
-      publisher: 'Macmillan Audio',
-      language: '',
-      abridged: '',
-      genres: '',
-      tags: '',
-      description: 'Roshar is a world of stone and storms.',
-      asin: 'B003P2WO5E',
-      isbn: '',
-    });
-  });
-
-  it('offers the subtitle, the language and abridged only when the recording says so', () => {
-    const c = candidate({ subtitle: 'Book One', language: 'en' });
-    const values = communityValues(c, recording({ abridged: true }));
-    expect(values).toMatchObject({ subtitle: 'Book One', language: 'en', abridged: 'true' });
-    // The community's false is also "not recorded".
-    expect(communityValues(c, recording({ abridged: false })).abridged).toBe('');
-    // The label fields have no row: the community offers neither.
-    const rows = compareRows(bookDetail().fields, c, recording());
-    expect(rows.some((r) => r.field === 'genres' || r.field === 'tags')).toBe(false);
-  });
-
-  it('offers a work in several series as one main series and the rest', () => {
-    const watch = 'Discworld: Ankh-Morpork City Watch';
-    const c = candidate({
-      series: [
-        { name: 'Discworld', position: '8' },
-        { name: watch, position: '1' },
-        { name: 'Omnibus', position: '1-3' },
-      ],
-    });
-    // No main series yet: the work's first.
-    expect(communityValues(c, undefined)).toMatchObject({
-      series: 'Discworld',
-      series_index: '8',
-      more_series: `[{"name":"${watch}","position":1},{"name":"Omnibus","position":1,"position_end":3}]`,
-    });
-    // Filed under City Watch: that one, numbered as City Watch numbers it.
-    expect(communityValues(c, undefined, 'discworld: ankh-morpork city watch')).toMatchObject({
-      series: watch,
-      series_index: '1',
-      more_series:
-        '[{"name":"Discworld","position":8},{"name":"Omnibus","position":1,"position_end":3}]',
-    });
-  });
-
-  it("offers the chosen recording's series: its own edition first", () => {
-    const hp = { name: 'Harry Potter', position: '2' };
-    const cast = { name: 'Harry Potter (Full-Cast Editions)', position: '2' };
-    const c = candidate({ series: [hp] });
-    // Another recording, or none: the work's series alone, never the edition.
-    for (const rec of [recording({ id: 'dale', series: [hp] }), undefined]) {
-      expect(communityValues(c, rec)).toMatchObject({
-        series: 'Harry Potter',
-        series_index: '2',
-        more_series: '',
-      });
-    }
-    expect(communityValues(c, recording({ id: 'cast', series: [cast, hp] }))).toMatchObject({
-      series: 'Harry Potter (Full-Cast Editions)',
-      more_series: '[{"name":"Harry Potter","position":2}]',
-    });
-  });
-
-  it('keeps the book series together when its own series is kept', () => {
-    const detail = bookDetail();
-    detail.fields.series = { ...detail.fields.series, value: 'Red Planet' };
-    detail.fields.series_index = { ...detail.fields.series_index, value: '' };
-    const c = candidate({
-      series: [
-        { name: 'Discworld', position: '8' },
-        { name: 'City Watch', position: '1' },
-      ],
-    });
-    const rows = compareRows(detail.fields, c, recording());
-    const ticks = defaultTicks(rows);
-    ticks.delete('series');
-    // Discworld's #8 isn't put beside Red Planet, nor Discworld itself (Red Planet
-    // may be it, spelled otherwise); the work's other series are still added.
-    const { set } = acceptRequest(rows, ticks, candidate(), recording());
-    expect(set?.series_index).toBeUndefined();
-    expect(set?.more_series).toBe('[{"name":"City Watch","position":1}]');
-  });
-
-  it("doesn't add the offered series beside the book's own when it is kept", () => {
-    // The book's "Stormlight Archive" is most likely the offered series spelled
-    // its own way: nothing to add beside it.
-    const detail = bookDetail();
-    detail.fields.series = { ...detail.fields.series, value: 'Stormlight Archive' };
-    const rows = compareRows(detail.fields, candidate(), recording());
-    const ticks = defaultTicks(rows);
-    ticks.delete('series');
-    const { set } = acceptRequest(rows, ticks, candidate(), recording());
-    expect(set?.series_index).toBeUndefined();
-    expect(set?.more_series).toBeUndefined();
-  });
-
-  it('keeps the position when only a respelling of the own series is declined', () => {
-    const detail = bookDetail();
-    detail.fields.series = { ...detail.fields.series, value: 'the stormlight archive' };
-    detail.fields.series_index = { ...detail.fields.series_index, value: '' };
-    const rows = compareRows(detail.fields, candidate(), recording());
-    const ticks = defaultTicks(rows);
-    ticks.delete('series');
-    const { set } = acceptRequest(rows, ticks, candidate(), recording());
-    expect(set?.series_index).toBe('1');
-    expect(set?.more_series).toBeUndefined();
-  });
-
-  it('lists a work once per series, at its first position', () => {
-    const c = candidate({
-      series: [
-        { name: 'Discworld', position: '8' },
-        { name: 'Discworld', position: '8.5' },
-      ],
-    });
-    expect(communityValues(c, undefined)).toMatchObject({ series_index: '8', more_series: '' });
-  });
-
-  it('keeps a range as a series position, and drops values the server would refuse', () => {
-    const c = candidate({ series: [{ name: 'Mistborn', position: '1 - 3' }] });
-    expect(communityValues(c, undefined).series_index).toBe('1-3');
-    expect(communityValues(c, undefined).narrator).toBe('');
-    const wide = candidate({ series: [{ name: 'Mistborn', position: '1-500' }] });
-    expect(communityValues(wide, undefined).series_index).toBe('');
-  });
-
-  it('offers what differs, and leaves the admin’s own edits unticked', () => {
-    const detail = bookDetail();
-    detail.fields.narrator = { ...detail.fields.narrator, source: 'edited', locked: true };
-    const rows = compareRows(detail.fields, candidate(), recording());
-    const offered = rows.filter((r) => r.offered).map((r) => r.field);
-    expect(offered).toEqual(['narrator', 'published', 'publisher', 'description']);
-    expect(rows.find((r) => r.field === 'title')?.same).toBe(true);
-    expect(rows.find((r) => r.field === 'isbn')).toMatchObject({ same: false, offered: false });
-    const ticks = defaultTicks(rows);
-    expect([...ticks]).toEqual(['published', 'publisher', 'description']);
-    expect(acceptRequest(rows, ticks, candidate(), recording())).toEqual({
-      set: {
-        published: '2010',
-        publisher: 'Macmillan Audio',
-        description: 'Roshar is a world of stone and storms.',
-      },
-      source: 'community',
-      // The book already has the match's ASIN: recorded as offered all the same.
-      match: { work_id: 'the-way-of-kings', recording_id: 'r1', asin: 'B003P2WO5E', isbn: '' },
-    });
-  });
-
-  it('sends the offered identifiers with the match, ticked or not (server#330)', () => {
-    const detail = bookDetail();
-    detail.fields.asin = { ...detail.fields.asin, value: '' };
-    const rec = recording({ isbns: ['9780765326355'] });
-    const c = candidate({ recordings: [rec] });
-    const rows = compareRows(detail.fields, c, rec);
-    expect(rows.find((r) => r.field === 'asin')).toMatchObject({ offered: true });
-    const ticks = defaultTicks(rows);
-    ticks.delete('asin');
-    const req = acceptRequest(rows, ticks, c, rec);
-    expect(req.set?.asin).toBeUndefined();
-    expect(req.set?.isbn).toBe('9780765326355');
-    expect(req.match).toEqual({
-      work_id: 'the-way-of-kings',
-      recording_id: 'r1',
-      asin: 'B003P2WO5E',
-      isbn: '9780765326355',
-    });
-  });
-
-  it('records the match with no identifier, and with no recording picked', () => {
-    // A store listing: the community holds the book with no ASIN or ISBN, so the
-    // recorded work is what makes the book matched (server#320).
-    const listing = candidate({ recordings: [recording({ asins: [], isbns: [] })] });
-    const rows = compareRows(bookDetail().fields, listing, listing.recordings[0]);
-    const req = acceptRequest(rows, defaultTicks(rows), listing, listing.recordings[0]);
-    expect(req.set?.asin).toBeUndefined();
-    expect(req.match).toEqual({
-      work_id: 'the-way-of-kings',
-      recording_id: 'r1',
-      asin: '',
-      isbn: '',
-    });
-    const none = acceptRequest(rows, new Set(), listing, undefined);
-    expect(none).toMatchObject({
-      set: {},
-      match: { work_id: 'the-way-of-kings', recording_id: '', asin: '', isbn: '' },
-    });
+it('displays the proposed values and submits selected writes, including a revert and unticked identifiers', () => {
+  const detail = bookDetail();
+  const proposal: BookMatchProposal = {
+    work_id: 'work',
+    recording_id: '',
+    cover_url: '',
+    cover: false,
+    match: true,
+    match_alone: false,
+    values: { author: 'Community author', asin: 'B0OFFER000' },
+    set: { author: 'Community author', asin: 'B0OFFER000' },
+    revert: ['more_series'],
+  };
+  const rows = compareRows(detail.fields, proposal);
+  expect(
+    rows
+      .filter((r) => r.planned)
+      .map((r) => r.field)
+      .sort(),
+  ).toEqual(['asin', 'author', 'more_series']);
+  expect(acceptRequest(rows, new Set(['more_series', 'author']), proposal)).toEqual({
+    set: { author: 'Community author' },
+    revert: ['more_series'],
+    source: 'community',
+    match: { work_id: 'work', recording_id: '', asin: 'B0OFFER000', isbn: '' },
   });
 });
 
@@ -303,16 +127,5 @@ describe('community cover', () => {
     expect(communityCover(c, recording())).toBe('https://c/work.jpg');
     expect(communityCover(c, undefined)).toBe('https://c/work.jpg');
     expect(communityCover(candidate({ cover_url: undefined }), recording())).toBe('');
-  });
-
-  it('starts ticked only for a book without art', () => {
-    expect(defaultCoverTick(false, 'https://c/rec.jpg')).toBe(true);
-    expect(defaultCoverTick(true, 'https://c/rec.jpg')).toBe(false);
-    expect(defaultCoverTick(false, '')).toBe(false);
-  });
-
-  it("isn't ticked when the server couldn't fetch its preview", () => {
-    expect(defaultCoverTick(false, 'https://c/rec.jpg', null)).toBe(false);
-    expect(defaultCoverTick(false, 'https://c/rec.jpg', 'data:image/jpeg;base64,AA')).toBe(true);
   });
 });

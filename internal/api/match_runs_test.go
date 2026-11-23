@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/matchrun"
 )
 
 // matchRunMetaserve answers works/match by the book's title: "Martian" is a
@@ -355,6 +358,8 @@ func TestMatchRunsAdminOnly(t *testing.T) {
 		{"POST", "/api/v1/admin/match-runs", `{}`},
 		{"GET", "/api/v1/admin/match-runs/1", ""},
 		{"GET", "/api/v1/admin/match-runs/1/items", ""},
+		{"GET", "/api/v1/admin/books/match-proposal", ""},
+		{"POST", "/api/v1/admin/match-runs/1/preview", `{"scope":"ids"}`},
 		{"POST", "/api/v1/admin/match-runs/1/apply", `{"scope":"ids"}`},
 		{"POST", "/api/v1/admin/match-runs/1/cancel", ""},
 	}
@@ -535,4 +540,117 @@ func TestMatchRunSaysItIsWaiting(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &list); err != nil || len(list.Runs) != 1 || list.Runs[0].WaitingUntil != run.WaitingUntil {
 		t.Fatalf("list = %s, want the run waiting", body)
 	}
+}
+
+func TestMatchProposalAPI(t *testing.T) {
+	t.Parallel()
+	e, admin, member, lib := newMatchRunEnv(t, "uk")
+	// Indexed in NFC, asked for in NFD: the path's spelling is the index's.
+	nfc := catalog.Book{LibraryID: lib, RelPath: "Émile/The Martian", Title: "The Martian", IsFolder: true,
+		Author: "Andy Weir", Duration: 634 * 60, AddedAt: "2020-01-01"}
+	if _, err := e.cat.UpsertBook(context.Background(), &nfc); err != nil {
+		t.Fatal(err)
+	}
+	route := "/api/v1/admin/books/match-proposal?"
+	base := route + "library_id=" + strconv.FormatInt(lib, 10) + "&work_id=the-martian"
+	book := base + "&path=Andy%20Weir%2FThe%20Martian"
+	for _, tc := range []struct {
+		url, token string
+		status     int
+		code       string
+	}{
+		{book, member, 403, ""},
+		{book, "", 401, ""},
+		{route + "work_id=the-martian&path=Andy%20Weir%2FThe%20Martian", admin, 400, ""},
+		{strings.Replace(book, "work_id=the-martian", "work_id=", 1), admin, 400, ""},
+		{strings.Replace(book, "work_id=the-martian", "work_id=%01", 1), admin, 400, ""},
+		{book + "&recording_id=%01", admin, 400, ""},
+		{strings.Replace(book, "library_id="+strconv.FormatInt(lib, 10), "library_id=9999", 1), admin, 404, ""},
+		{base + "&path=gone", admin, 404, "book_not_found"},
+		{base + "&path=" + url.QueryEscape("Émile/The Martian"), admin, 200, ""},
+		{strings.Replace(book, "work_id=the-martian", "work_id=missing", 1), admin, 404, "not_found"},
+		{book + "&recording_id=gone", admin, 404, "not_found"},
+		{book, admin, 200, ""},
+		{base + "&path=Someone%2FObscure", admin, 200, ""},
+		{book + "&recording_id=bray", admin, 200, ""},
+	} {
+		resp, body := e.do(t, "GET", tc.url, tc.token, "")
+		if resp.StatusCode != tc.status {
+			t.Fatalf("GET %s = %d %s, want %d", tc.url, resp.StatusCode, body, tc.status)
+		}
+		if tc.code != "" && !strings.Contains(body, `"code":"`+tc.code+`"`) {
+			t.Fatalf("GET %s = %s, want code %s", tc.url, body, tc.code)
+		}
+		if tc.status == 200 {
+			var p matchrun.BookProposal
+			if err := json.Unmarshal([]byte(body), &p); err != nil {
+				t.Fatal(err)
+			}
+			withRecording := strings.Contains(tc.url, "bray")
+			if p.WorkID != "the-martian" || p.Values["title"] != "The Martian" || p.Set["description"] != "Stranded." ||
+				!p.Match || !p.MatchAlone || (p.Set["asin"] == "B0UK000001") != withRecording || (p.RecordingID == "bray") != withRecording {
+				t.Fatalf("unexpected proposal: %s", body)
+			}
+		}
+	}
+}
+
+func TestMatchRunPreviewCountsApplySelection(t *testing.T) {
+	t.Parallel()
+	e, admin, member, lib := newMatchRunEnv(t, "uk")
+	ctx := context.Background()
+	id, err := e.cat.StartMatchRun(ctx, catalog.MatchRun{Mode: catalog.MatchModeRefresh, Total: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range []catalog.MatchRunItem{
+		{Path: "excluded", Outcome: catalog.OutcomeAuto},
+		{Path: "unchanged", Outcome: catalog.OutcomeAuto, Unchanged: []string{"fill"}},
+		{Path: "confident", Outcome: catalog.OutcomeAuto},
+		{Path: "chosen", Outcome: catalog.OutcomeReview},
+		{Path: "ignored", Outcome: catalog.OutcomeReview},
+	} {
+		it.LibraryID = lib
+		if err := e.cat.RecordMatchItem(ctx, id, &it); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.cat.FinishMatching(ctx, id, catalog.MatchReady, ""); err != nil {
+		t.Fatal(err)
+	}
+	items, _, err := e.cat.ListMatchRunItems(ctx, id, "", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int64{}
+	for _, it := range items {
+		ids[it.Path] = it.ID
+	}
+	picks := fmt.Sprintf(`{"scope":"fill","include":[%d,%d,999],"exclude":[%d]}`, ids["chosen"], ids["chosen"], ids["excluded"])
+	base := "/api/v1/admin/match-runs/" + strconv.FormatInt(id, 10)
+	if resp, _ := e.do(t, "POST", base+"/preview", member, picks); resp.StatusCode != 403 {
+		t.Fatalf("member = %d", resp.StatusCode)
+	}
+	resp, body := e.do(t, "POST", base+"/preview", admin, picks)
+	var preview struct {
+		ApplyCount int    `json:"apply_count"`
+		Status     string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(body), &preview); err != nil || resp.StatusCode != 200 || preview.ApplyCount != 2 || preview.Status != catalog.MatchReady {
+		t.Fatalf("preview = %d %s", resp.StatusCode, body)
+	}
+	// A run a stopped server left marked applying, nothing behind it: an apply
+	// settles it ready and goes ahead, so its preview counts it the same.
+	if err := e.cat.BeginApply(ctx, id, "fill", 2); err != nil {
+		t.Fatal(err)
+	}
+	resp, body = e.do(t, "POST", base+"/preview", admin, picks)
+	if err := json.Unmarshal([]byte(body), &preview); err != nil || resp.StatusCode != 200 || preview.ApplyCount != 2 || preview.Status != catalog.MatchReady {
+		t.Fatalf("preview of a stuck applying run = %d %s", resp.StatusCode, body)
+	}
+	resp, body = e.do(t, "POST", base+"/apply", admin, picks)
+	if resp.StatusCode != 202 || decodeRun(t, body).ApplyTotal != preview.ApplyCount {
+		t.Fatalf("apply = %d %s", resp.StatusCode, body)
+	}
+	e.api.matchRuns.Wait()
 }

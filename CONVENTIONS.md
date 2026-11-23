@@ -448,9 +448,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   extends another ("Discworld: Tiffany Aching") is a series of its own. A match
   candidate's `series` is the work's series every recording is in, and each
   recording's additive `series` the book's list as that recording, its own edition
-  first (`workSeries.of`), which `matchrun.Propose` and the match dialog's
-  `communityValues` read (so the console has no copy of the rule); series carry an
-  additive `id`. The facts come from `series/{id}`, each series once per request,
+  first (`workSeries.of`). The dialog asks `GET /admin/books/match-proposal` for its
+  chosen `work_id` and optional `recording_id` at `library_id` and `path`, with the
+  search parameters that found the candidate (`matchrun.Preview`). Its proposed values,
+  default sets, reverts and cover come from the same overwrite plan as a run, and
+  `match_alone` says whether Accept with nothing ticked records the match by itself
+  (a new match for a book with no ASIN or ISBN of its own). Changing
+  the main series checkbox uses the position and other memberships planned for that
+  choice (`alternate_series`). A book left with no main series (one that declines
+  the series offered, or whose series an admin cleared) doesn't get the offered one
+  as another series either (`planSeriesDetails`, a run's plan too). The plan is for
+  the book as it is, so the console keeps no closed dialog's answer
+  (`useMatchProposal`, gcTime 0) and accepts nothing while it is asked. Series carry
+  an additive `id`. The facts come from `series/{id}`, each series once per request,
   concurrently through `workSem`, at most `maxSeriesFacts` per match within
   `seriesFactsTimeout` (none for a work they can't rule on: no language, one
   series), cached in the `s:` key space (quota `maxSeriesEntries`); an unreadable
@@ -2975,20 +2985,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   filters it in SQL, so an empty refresh's Done starts at `apply_total` 0, and a book that
   changed since so planning now would write something the review never showed is left
   alone; the review (`Runner.Items`) shows no change under that scope either, so its
-  `leftOut` count and the apply agree; it stays `applied` '' as an exclusion leaves it. One
+  count and the apply agree. It stays `applied` '' as an exclusion leaves it. One
   that had a change then but none now (the book took it since, or no longer has what it was
   found by) is `skipped` / `nothing_to_change`, as a match or repick item with nothing to
   change is (server#355), so the review says why; `apply_done` ends at `apply_total` either
-  way. An item recorded before 0070 (`unchanged` '') is planned as before. The review counts refresh rows with no changes under the selected
-  scope (a healed recorded match counts as a change) as left out (`picksForScope`'s
-  `leftOut`, `applyCount(run, picks, leftOut)`) and never sends them, reading all confident
-  pages with a separate `useAllMatchRunItems` query (200 per page, no focus refetch)
-  before enabling Apply; the shown list keeps manual pagination. Gone items are still
-  excluded, and an admin's own exclusion stays (counted once). With no picks, Done
-  finishes the run through an apply with only the admin's own exclusions: the server leaves
-  out every item recorded with no change under the scope unread, and plans the rest again,
-  so it changes no book the review showed no change for. Apply waits only for the run list to refresh, not
-  the loaded item pages.
+  way. An item recorded before 0070 (`unchanged` '') is planned as before.
+  The review posts the selected scope, includes and excludes to `POST /admin/match-runs/{id}/preview`.
+  The returned run's `apply_count` counts the same selection the apply reads, including older
+  items with no recorded unchanged scopes, and it refuses what the apply refuses
+  (`matchrun.CheckApply`: not ready, a scope the mode doesn't take). A refresh still reads the confident pages to exclude
+  gone books, while leaving recorded no-ops to the shared SQL selection. A zero-count refresh
+  finishes through Done. The apply's reply reports the number taken in `apply_total`.
   Apply caps manual includes at 20,000 ids; exclusions use the existing 1 MiB
   request-body limit (an older console still sends every unchanged book).
   `InterruptMatchRuns` (launcher, at

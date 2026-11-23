@@ -55,6 +55,17 @@ const candidate = (over: Partial<MatchCandidate> = {}): MatchCandidate => ({
   ...over,
 });
 
+const proposal = {
+  set: {},
+  values: {
+    title: 'The Way of Kings',
+    author: 'Brandon Sanderson',
+    narrator: 'Michael Kramer',
+    series: 'The Stormlight Archive',
+    series_index: '1',
+  },
+};
+
 const edited = (value: string): FieldValue => ({
   value,
   source: 'edited',
@@ -136,7 +147,7 @@ describe('the review rows', () => {
       publisher: 'Tor',
     });
     const c = candidate();
-    const rows = correctionRows(d.fields, c, correctionRecording(c, d.fields));
+    const rows = correctionRows(d.fields, c, correctionRecording(c, d.fields), proposal);
     // The title agrees with the community; the publisher is no correction field.
     expect(rows.map((r) => [r.field, r.current, r.corrected, r.handling])).toEqual([
       ['author', 'Brandon Sanderson', 'B. Sanderson', 'maintainer'],
@@ -149,24 +160,38 @@ describe('the review rows', () => {
     expect(handling('series')).toBe('maintainer');
   });
 
+  it('compares an edited position with the offered series when the book keeps an edited main series', () => {
+    const d = detailWith({ series: 'Our shelf', series_index: '8' });
+    const c = candidate();
+    const rows = correctionRows(d.fields, c, correctionRecording(c, d.fields), {
+      values: { series: 'Discworld' },
+      set: {},
+      alternate_series: { values: { series_index: '8' }, set: {} },
+    });
+    expect(rows.map((r) => r.field)).toEqual(['series']);
+  });
+
   it("marks a value over the limit as one that can't be sent, counting characters", () => {
     const d = detailWith({ series: 'S'.repeat(501) });
     const c = candidate();
-    const [row] = correctionRows(d.fields, c, correctionRecording(c, d.fields));
+    const [row] = correctionRows(d.fields, c, correctionRecording(c, d.fields), proposal);
     expect(row.tooLong).toBe(true);
     expect(defaultCorrectionTicks([row]).size).toBe(0);
     // Characters as the server counts them, not UTF-16 units: 300 emoji are 300.
     const wide = detailWith({ series: '📚'.repeat(300) });
-    expect(correctionRows(wide.fields, c, correctionRecording(c, wide.fields))[0].tooLong).toBe(
-      false,
-    );
+    expect(
+      correctionRows(wide.fields, c, correctionRecording(c, wide.fields), proposal)[0].tooLong,
+    ).toBe(false);
   });
 
   it("marks a value holding a bidirectional control as one that can't be sent", () => {
     const c = candidate();
     const rowFor = (series: string) => {
       const d = detailWith({ series });
-      return correctionRows(d.fields, c, correctionRecording(c, d.fields))[0];
+      return correctionRows(d.fields, c, correctionRecording(c, d.fields), {
+        ...proposal,
+        values: { ...proposal.values, title: c.title },
+      })[0];
     };
     const row = rowFor('Stormlight \u202eArchive');
     expect(row.bidi).toBe(true);
@@ -179,7 +204,10 @@ describe('the review rows', () => {
     const c = candidate({ title: 'Tom & Jerry' });
     const rowFor = (title: string) => {
       const d = detailWith({ title });
-      return correctionRows(d.fields, c, correctionRecording(c, d.fields))[0];
+      return correctionRows(d.fields, c, correctionRecording(c, d.fields), {
+        ...proposal,
+        values: { ...proposal.values, title: c.title },
+      })[0];
     };
     // A bidirectional control written as a reference, hex, decimal or upper-case hex.
     for (const v of ['Tom &#x202E;Jerry', 'Tom &#8238;Jerry', 'Tom &#X202e;Jerry']) {
@@ -208,7 +236,7 @@ describe('the review rows', () => {
     });
     const rowFor = (published: string) => {
       const d = detailWith({ published });
-      return correctionRows(d.fields, c, correctionRecording(c, d.fields));
+      return correctionRows(d.fields, c, correctionRecording(c, d.fields), proposal);
     };
     // The release date, or the work's first publication, at any precision: nothing to file.
     expect(rowFor('2006-12-05')).toEqual([]);
@@ -225,7 +253,9 @@ describe('the review rows', () => {
       recordings: [recording({ isbns: ['978-0765326355', '9780765365279'] })],
     });
     const second = detailWith({ isbn: '9780765365279' });
-    expect(correctionRows(second.fields, c, correctionRecording(c, second.fields))).toEqual([]);
+    expect(
+      correctionRows(second.fields, c, correctionRecording(c, second.fields), proposal),
+    ).toEqual([]);
     // Without an ASIN the ISBN is how the community finds the book: no correction.
     const noAsin = detailWith({ isbn: '9780000000002' });
     noAsin.fields.asin = { ...noAsin.fields.asin, value: '' };
@@ -253,7 +283,7 @@ describe('the review rows', () => {
     });
     const target = correctionRecording(guess, d.fields);
     expect(target).toEqual({ rec: r2, known: false });
-    const rows = correctionRows(d.fields, guess, target);
+    const rows = correctionRows(d.fields, guess, target, proposal);
     expect(rows.map((r) => [r.field, r.handling])).toEqual([
       ['narrator', 'maintainer'],
       ['published', 'maintainer'],
@@ -366,7 +396,7 @@ describe('sending', () => {
     const d = detailWith({ author: 'B. Sanderson', isbn: '9780765326355' });
     const c = candidate();
     const target = correctionRecording(c, d.fields);
-    const rows = correctionRows(d.fields, c, target);
+    const rows = correctionRows(d.fields, c, target, proposal);
     expect(correctionRequest(d, c, target, rows, new Set(['isbn']), '  A store page  ')).toEqual({
       kind: 'meta.correct',
       library_id: d.book.library_id,
@@ -387,7 +417,7 @@ describe('sending', () => {
     const d = detailWith({ author: 'B. \u202eSanderson', isbn: '9780765326355' });
     const c = candidate();
     const target = correctionRecording(c, d.fields);
-    const rows = correctionRows(d.fields, c, target);
+    const rows = correctionRows(d.fields, c, target, proposal);
     const req = correctionRequest(d, c, target, rows, new Set(['author', 'isbn']), 'e');
     expect(req.params).toMatchObject({
       changes: [{ field: 'isbn', current: '', corrected: '9780765326355' }],
@@ -400,7 +430,7 @@ describe('sending', () => {
     d.fields.isbn = { ...d.fields.isbn, value: '9780765326355' };
     const c = candidate();
     const none = { rec: undefined, known: false };
-    const rows = correctionRows(d.fields, c, none);
+    const rows = correctionRows(d.fields, c, none, proposal);
     const req = correctionRequest(d, c, none, rows, new Set(['title']), 'e');
     expect(req.params).toEqual({
       work_id: 'the-way-of-kings',

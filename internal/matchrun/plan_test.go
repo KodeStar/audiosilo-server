@@ -865,3 +865,111 @@ func TestQueryForTagHints(t *testing.T) {
 		}
 	}
 }
+
+func TestPreviewUsesOverwritePlan(t *testing.T) {
+	for _, st := range []*catalog.MatchState{
+		state(nil, nil, true),
+		state(map[string]string{"series": "My series"}, []string{"series"}, false),
+		state(map[string]string{"series": "City Watch"}, nil, true),
+	} {
+		c := martian
+		c.Series = []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: "City Watch", Position: "1-3"}}
+		rec := &c.Recordings[0]
+		got := Preview(st, &c, rec)
+		want := Plan(ScopeOverwrite, st, Propose(&c, rec))
+		if !maps.Equal(want.Set, got.Set) || !slices.Equal(want.Revert, got.Revert) || got.Cover != want.Cover || got.Match != (want.Anchor != nil) {
+			t.Fatalf("preview = %+v, plan = %+v", got, want)
+		}
+		switch st.Fields[catalog.FieldSeries].Value {
+		case "":
+			// Declining the offered series leaves the book none: Discworld is
+			// not listed among its other series either.
+			if got.Values["series_index"] != "8" || got.AlternateSeries.Values["series_index"] != "" ||
+				got.AlternateSeries.Values["more_series"] != `[{"name":"City Watch","position":1,"position_end":3}]` {
+				t.Fatalf("series-less book = %+v", got)
+			}
+		case "My series":
+			if got.Values["series_index"] != "" || got.AlternateSeries.Values["series_index"] != "8" {
+				t.Fatalf("edited main series = %+v", got)
+			}
+		case "City Watch":
+			if got.Values["series"] != "City Watch" || got.Values["series_index"] != "1-3" {
+				t.Fatalf("own main series = %+v", got)
+			}
+		}
+	}
+}
+
+// TestPlanClearedSeries: a book whose series an admin cleared (an empty edit)
+// keeps none, and the series offered as its main one isn't filed among its
+// other series instead; the work's other series still are.
+func TestPlanClearedSeries(t *testing.T) {
+	c := martian
+	c.Series = []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: "City Watch", Position: "1"}}
+	p := Propose(&c, nil)
+	st := state(nil, []string{"series"}, false)
+	for _, scope := range []string{ScopeFill, ScopeOverwrite} {
+		w := Plan(scope, st, p)
+		if _, ok := w.Set["series"]; ok || w.Set["series_index"] != "" ||
+			w.Set["more_series"] != `[{"name":"City Watch","position":1}]` {
+			t.Fatalf("%s over a cleared series = %v", scope, w.Set)
+		}
+	}
+	// Ticking the series in the dialog takes it with its position.
+	if alt := Preview(st, &c, nil).AlternateSeries; alt == nil || alt.Set["series_index"] != "8" ||
+		alt.Set["more_series"] != `[{"name":"City Watch","position":1}]` {
+		t.Fatalf("alternate = %+v", alt)
+	}
+}
+
+// TestPreviewKeptSeries: unticking the series a match would set keeps the
+// book's own series together: no position of the offered series beside it, the
+// offered series not added beside a series the community doesn't list (most
+// likely it, spelled the book's own way), and a respelling of the book's own
+// series keeping its position.
+func TestPreviewKeptSeries(t *testing.T) {
+	c := martian
+	c.Series = []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: "City Watch", Position: "1"}}
+	for _, tc := range []struct {
+		own, index string
+	}{
+		{own: "Red Planet"},
+		{own: "discworld", index: "8"},
+	} {
+		st := state(map[string]string{"series": tc.own}, nil, false)
+		got := Preview(st, &c, nil)
+		if got.Set["series"] != "Discworld" || got.Set["series_index"] != "8" {
+			t.Fatalf("%s: default = %+v", tc.own, got.Set)
+		}
+		alt := got.AlternateSeries
+		watch := `[{"name":"City Watch","position":1}]`
+		if alt == nil || alt.Values["series_index"] != tc.index || alt.Set["series_index"] != tc.index ||
+			alt.Values["more_series"] != watch || alt.Set["more_series"] != watch {
+			t.Fatalf("%s: alternate = %+v", tc.own, alt)
+		}
+	}
+}
+
+// TestPreviewMatchAlone: with nothing ticked, the dialog records a new match by
+// itself only for a book with no ASIN or ISBN of its own; never the match it
+// already has.
+func TestPreviewMatchAlone(t *testing.T) {
+	rec := &martian.Recordings[0]
+	for _, tc := range []struct {
+		name   string
+		st     *catalog.MatchState
+		anchor catalog.MatchAnchor
+		want   bool
+	}{
+		{name: "no identifiers", st: state(nil, nil, false), want: true},
+		{name: "own ASIN", st: state(map[string]string{"asin": "B0OTHER001"}, nil, false)},
+		{name: "own ISBN", st: state(map[string]string{"isbn": "9780000000002"}, nil, false)},
+		{name: "recorded match", st: state(nil, nil, false), anchor: catalog.MatchAnchor{WorkID: martian.WorkID, RecordingID: rec.ID}},
+		{name: "another recording", st: state(nil, nil, false), anchor: catalog.MatchAnchor{WorkID: martian.WorkID, RecordingID: "other"}, want: true},
+	} {
+		tc.st.Anchor = tc.anchor
+		if got := Preview(tc.st, &martian, rec); got.MatchAlone != tc.want || (got.MatchAlone && !got.Match) {
+			t.Errorf("%s: match_alone = %v (match %v), want %v", tc.name, got.MatchAlone, got.Match, tc.want)
+		}
+	}
+}

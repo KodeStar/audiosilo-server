@@ -36,6 +36,7 @@ import type {
   Import,
   FolderMode,
   MatchOutcome,
+  MatchApplyRequest,
   MatchRun,
   MatchRunList,
   MetaMirrorStatus,
@@ -1050,6 +1051,21 @@ export function useMatchRuns() {
   });
 }
 
+/**
+ * How many books an apply of these picks takes (POST /admin/match-runs/{id}/preview).
+ * A new pick keeps the last count on show while it is asked again (the review's
+ * Apply waits for the answer: isFetching).
+ */
+export function useMatchRunPreview(id: number, picks: MatchApplyRequest, enabled: boolean) {
+  return useQuery({
+    queryKey: [...keys.matchRuns, id, 'preview', picks],
+    queryFn: () => api.previewMatchRun(id, picks),
+    enabled,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+
 /** One outcome's books of a match run, a page at a time (the review). */
 export function useMatchRunItems(id: number, outcome: MatchOutcome) {
   return useInfiniteQuery({
@@ -1141,6 +1157,32 @@ export function useMatchCandidates(libraryId: number, path: string, by: MatchBy,
     enabled,
     retry: false,
     staleTime: 5 * 60_000,
+  });
+}
+
+/**
+ * The server's plan for matching the book to a work and recording (GET
+ * /admin/books/match-proposal): what each field would become, what is ticked to
+ * begin with, and the series laid out for either choice of main series. Planned
+ * against the book as it is now, so a closed dialog's answer is never kept
+ * (gcTime 0): one opened again after an edit asks afresh rather than showing a
+ * plan for the book as it was. Fresh as long as the search it comes from.
+ */
+export function useMatchProposal(
+  libraryId: number,
+  path: string,
+  by: MatchBy,
+  work = '',
+  recording = '',
+) {
+  const clean = compact(by);
+  return useQuery({
+    queryKey: [...keys.match(libraryId, path, clean), 'proposal', work, recording],
+    queryFn: () => api.matchProposal(libraryId, path, work, recording, clean),
+    enabled: !!work,
+    retry: false,
+    staleTime: 5 * 60_000,
+    gcTime: 0,
   });
 }
 

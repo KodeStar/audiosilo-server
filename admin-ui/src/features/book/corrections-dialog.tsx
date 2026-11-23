@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ArrowRight, FilePenLine, SearchX } from 'lucide-react';
-import { useMatchCandidates, useServerInfo } from '@/api/hooks';
+import { useMatchCandidates, useMatchProposal, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail, BridgeJob, CorrectionField } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { QueryError } from '@/components/query-error';
@@ -143,10 +143,16 @@ function CorrectionsForm({
   const qc = useQueryClient();
   const server = useServerInfo().data;
   const b = detail.book;
-  const search = useMatchCandidates(b.library_id, b.path, lookupBy(detail.fields), true);
+  const by = lookupBy(detail.fields);
+  const search = useMatchCandidates(b.library_id, b.path, by, true);
   const candidate = correctionCandidate(search.data);
   const recording = candidate ? correctionRecording(candidate, detail.fields) : undefined;
-  const rows = candidate && recording ? correctionRows(detail.fields, candidate, recording) : [];
+  const lookup = useMatchProposal(b.library_id, b.path, by, candidate?.work_id, recording?.rec?.id);
+  const proposal = lookup.data;
+  const rows =
+    candidate && recording && proposal
+      ? correctionRows(detail.fields, candidate, recording, proposal)
+      : [];
   const suggested = alreadySuggested(lastJob, detail.fields);
   // The ticks start from the rows once the lookup answers (null until the admin changes one).
   const [ticks, setTicks] = useState<Set<CorrectionField> | null>(null);
@@ -181,15 +187,16 @@ function CorrectionsForm({
       : undefined;
 
   let body: React.ReactNode;
-  if (search.isError) {
+  if (search.isError || lookup.isError) {
+    const failed = search.isError ? search : lookup;
     body = (
       <QueryError
         title={t('book.corrections.lookupError')}
-        error={search.error}
-        onRetry={() => void search.refetch()}
+        error={failed.error}
+        onRetry={() => void failed.refetch()}
       />
     );
-  } else if (search.isPending) {
+  } else if (search.isPending || (candidate && lookup.isPending)) {
     body = <div className="skel h-40 rounded-lg" role="status" aria-label={t('common.loading')} />;
   } else if (!candidate) {
     body = (

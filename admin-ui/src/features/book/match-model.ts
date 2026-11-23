@@ -2,6 +2,8 @@ import {
   OVERRIDE_FIELDS,
   isLabelField,
   type BookEditRequest,
+  type BookMatchProposal,
+  type SeriesPlan,
   type FieldSource,
   type FieldValue,
   type MatchCandidate,
@@ -9,14 +11,9 @@ import {
   type OverrideField,
 } from '@/api/types';
 import type { MatchBy } from '@/api/client';
-import { seriesKey } from '@/lib/series-key';
 import { ISBN, checkField } from './book-model';
-import { seriesRef } from './more-series';
 
-// The match dialog's logic (STYLEGUIDE.md "Match with community"): what the
-// search box asks for, which recording of a work is meant, what each field
-// would become, which fields are ticked by default (never the admin's own
-// edits), and how a recording's length compares with the files.
+// Display the server's proposal and collect the admin's choices.
 
 /** An ASIN (10 alphanumerics from B0) or an ISBN-10/13 is looked up exactly; anything else is words. */
 export function parseMatchQuery(input: string): MatchBy {
@@ -54,56 +51,6 @@ export function candidateAuthors(c: MatchCandidate): string {
   return (c.authors ?? []).map((a) => a.name).join(', ');
 }
 
-/**
- * What the community says for each field, from the work and the chosen recording
- * (as matchrun.Propose: the work's subtitle and language, the recording's
- * publisher, abridged only when it is marked so).
- * A work in several series offers one as the main series - the one the book is
- * filed under (`mainSeries`) when the work is in it, else the recording's first
- * (its own edition, when the community lists one) - and the rest as the book's other series (as matchrun.planSeries
- * does).
- */
-export function communityValues(
-  c: MatchCandidate,
-  rec: MatchRecording | undefined,
-  mainSeries = '',
-): Record<OverrideField, string> {
-  const all = rec?.series ?? c.series ?? [];
-  const key = seriesKey(mainSeries);
-  const series = (key && all.find((s) => seriesKey(s.name) === key)) || all[0];
-  // The others: a work listed again in its main series isn't another series.
-  const others = series ? all.filter((s) => seriesKey(s.name) !== seriesKey(series.name)) : [];
-  const year = (c.first_published || rec?.release_date || '').match(/^\d{4}/)?.[0];
-  return {
-    title: clean('title', c.title),
-    subtitle: clean('subtitle', c.subtitle),
-    author: clean('author', candidateAuthors(c)),
-    narrator: clean('narrator', (rec?.narrators ?? []).map((n) => n.name).join(', ')),
-    series: clean('series', series?.name),
-    series_index: clean('series_index', series?.position),
-    more_series: clean('more_series', otherSeries(others)),
-    published: clean('published', year),
-    publisher: clean('publisher', rec?.publisher),
-    language: clean('language', c.language),
-    // The community's false is also "not recorded": only true says anything.
-    abridged: rec?.abridged ? 'true' : '',
-    // A match candidate carries no genres, and the community has no tags.
-    genres: '',
-    tags: '',
-    description: clean('description', c.description),
-    asin: clean('asin', rec?.asins?.[0]),
-    isbn: clean('isbn', rec?.isbns?.[0]),
-  };
-}
-
-/**
- * Community series as a more_series value (a position the series_index field
- * would refuse is none; a range, "1-3", is kept).
- */
-function otherSeries(series: { name: string; position: string }[]): string {
-  return JSON.stringify(series.map((s) => seriesRef(s.name, clean('series_index', s.position))));
-}
-
 /** One row of the compare table. */
 export interface CompareRow {
   field: OverrideField;
@@ -112,8 +59,12 @@ export interface CompareRow {
   theirs: string;
   /** The community agrees with what the server has. */
   same: boolean;
-  /** The community has a different, non-empty value: a checkbox. */
+  /** A checkbox: the server plans a write, or the community has a different, non-empty value. */
   offered: boolean;
+  /** The planned write puts the scanned value back (a stale community value). */
+  revert: boolean;
+  /** The server's plan writes this field: the checkbox's default. */
+  planned: boolean;
 }
 
 /**
@@ -122,21 +73,31 @@ export interface CompareRow {
  */
 export function compareRows(
   fields: Record<OverrideField, FieldValue>,
-  c: MatchCandidate,
-  rec: MatchRecording | undefined,
+  proposal: SeriesPlan,
+  takeSeries?: boolean,
 ): CompareRow[] {
-  const theirs = communityValues(c, rec, fields.series.value);
-  const offerable = OVERRIDE_FIELDS.filter((f) => !isLabelField(f));
-  return offerable.map((f) => {
-    const mine = fields[f].value;
-    const same = !!theirs[f] && clean(f, mine) === theirs[f];
+  const seriesDefault = !!proposal.set.series || !!proposal.revert?.includes('series');
+  const alternate =
+    takeSeries !== undefined && takeSeries !== seriesDefault
+      ? proposal.alternate_series
+      : undefined;
+  return OVERRIDE_FIELDS.filter((f) => !isLabelField(f)).map((field) => {
+    const plan =
+      alternate && (field === 'more_series' || field === 'series_index') ? alternate : proposal;
+    const { value: mine, source, scanned } = fields[field];
+    const revert = plan.revert?.includes(field) ?? false;
+    const planned = revert || plan.set[field] !== undefined;
+    const theirs = revert ? scanned : (plan.values[field] ?? '');
+    const same = !planned && !!theirs && clean(field, mine) === theirs;
     return {
-      field: f,
+      field,
       mine,
-      source: fields[f].source,
-      theirs: theirs[f],
+      source,
+      theirs,
       same,
-      offered: !!theirs[f] && !same,
+      planned,
+      revert,
+      offered: planned || (!!theirs && !same),
     };
   });
 }
@@ -146,67 +107,28 @@ export function communityCover(c: MatchCandidate, rec: MatchRecording | undefine
   return rec?.cover_url || c.cover_url || '';
 }
 
-/**
- * Whether the community cover starts ticked: only for a book with no art of its
- * own. Art in the book's files, or one the admin uploaded, is kept unless ticked.
- * Nor one the server already couldn't fetch (`preview` null; undefined = not
- * answered yet): taking it would only fail.
- */
-export function defaultCoverTick(
-  hasCover: boolean,
-  coverUrl: string,
-  preview?: string | null,
-): boolean {
-  return !!coverUrl && !hasCover && preview !== null;
-}
-
-/** Ticked by default: every offered field the admin hasn't edited themselves. */
-export function defaultTicks(rows: CompareRow[]): Set<OverrideField> {
-  return new Set(rows.filter((r) => r.offered && r.source !== 'edited').map((r) => r.field));
-}
-
-/**
- * The PATCH that accepts the ticked fields from the community. Keeping the book's
- * own series over the one offered (Series unticked) keeps the series together as
- * matchrun.planSeries does: the offered position, which numbers the offered
- * series, isn't taken. The offered series isn't added as another either: a
- * series the community doesn't list is most likely the offered one spelled the
- * book's own way. Unticking only a respelling of the book's own series changes
- * nothing. The work and recording accepted go with it (`match`): the server
- * records them as the book's match, which is what makes a book the community holds
- * with no ASIN or ISBN (a store listing) matched. So do the ASIN and ISBN the
- * match offers, ticked or not, and also when the book already has them: one
- * unticked (or reverted later) is then never filled back by a refresh
- * (server#330).
- */
+/** Accept the selected writes and record the identifiers offered, even when unticked. */
 export function acceptRequest(
   rows: CompareRow[],
   ticks: Set<OverrideField>,
-  candidate: MatchCandidate,
-  recording: MatchRecording | undefined,
+  proposal: BookMatchProposal,
 ): BookEditRequest {
   const set: Partial<Record<OverrideField, string>> = {};
-  for (const r of rows) if (r.offered && ticks.has(r.field)) set[r.field] = r.theirs;
-  const row = (f: OverrideField) => rows.find((r) => r.field === f);
-  const series = row('series');
-  if (
-    series?.offered &&
-    !ticks.has('series') &&
-    seriesKey(series.theirs) !== seriesKey(series.mine)
-  ) {
-    delete set.series_index;
+  const revert: OverrideField[] = [];
+  for (const r of rows) {
+    if (!r.offered || !ticks.has(r.field)) continue;
+    if (r.revert) revert.push(r.field);
+    else set[r.field] = r.theirs;
   }
-  // The match's identifier whether it is a checkbox or already the book's (a
-  // match accepted again keeps it recorded): a value is what the match offers.
-  const offered = (f: 'asin' | 'isbn') => row(f)?.theirs ?? '';
   return {
     set,
+    ...(revert.length ? { revert } : {}),
     source: 'community',
     match: {
-      work_id: candidate.work_id,
-      recording_id: recording?.id ?? '',
-      asin: offered('asin'),
-      isbn: offered('isbn'),
+      work_id: proposal.work_id,
+      recording_id: proposal.recording_id,
+      asin: proposal.values.asin ?? '',
+      isbn: proposal.values.isbn ?? '',
     },
   };
 }

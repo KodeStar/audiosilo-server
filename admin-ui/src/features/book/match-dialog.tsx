@@ -21,6 +21,7 @@ import {
   useAdminBook,
   useCommunityCover,
   useMatchCandidates,
+  useMatchProposal,
 } from '@/api/hooks';
 import type { AdminBookDetail, MatchCandidate, MatchRecording, OverrideField } from '@/api/types';
 import { BookCover, CoverArt } from '@/components/book-cover';
@@ -50,9 +51,7 @@ import {
   candidateAuthors,
   communityCover,
   compareRows,
-  defaultCoverTick,
   defaultRecording,
-  defaultTicks,
   lengthComparison,
   onlyWeak,
   parseMatchQuery,
@@ -177,15 +176,11 @@ function MatchBody({
   onDone: () => void;
 }) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
   const b = detail.book;
   const [query, setQuery] = useState(detail.match_query);
   const [by, setBy] = useState<MatchBy>({});
   const [pickId, setPickId] = useState<string>();
   const [recId, setRecId] = useState<string>();
-  const [ticks, setTicks] = useState<Set<OverrideField>>(new Set());
-  const [coverTick, setCoverTick] = useState(false);
-  const [busy, setBusy] = useState(false);
   const search = useMatchCandidates(b.library_id, b.path, by, true);
   const candidates = search.data ?? [];
   // The book's recorded match: its work starts picked when the search finds it,
@@ -214,54 +209,129 @@ function MatchBody({
     );
   };
   const rec = picked ? recordingOf(picked) : undefined;
-  // A book with no ASIN or ISBN is matched by its recorded community work alone, so
-  // a pick that differs from it (work or recording) is itself something to accept.
-  const isRecorded =
-    !!picked &&
-    current?.work_id === picked.work_id &&
-    (current?.recording_id ?? '') === (rec?.id ?? '');
-  const recordsMatch =
-    !!picked && !detail.fields.asin.value && !detail.fields.isbn.value && !isRecorded;
-  const rows = picked ? compareRows(detail.fields, picked, rec) : [];
-  // The recorded match accepted again with nothing ticked records the ASIN and
-  // ISBN it offers (a match recorded before 2.7.0 holds none, server#355): worth
-  // a press when it offers one.
-  const recordsOffered =
-    isRecorded && rows.some((r) => (r.field === 'asin' || r.field === 'isbn') && !!r.theirs);
-  const coverUrl = picked ? communityCover(picked, rec) : '';
-  // defaultCoverTick never ticks a candidate without a cover.
+  return step === 'search' ? (
+    <>
+      <DialogBody className="flex flex-col gap-3.5">
+        <form
+          role="search"
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setBy(parseMatchQuery(query));
+            setPickId(undefined);
+            setRecId(undefined);
+          }}
+        >
+          <label className="flex h-[38px] min-w-0 flex-1 basis-64 items-center gap-2 rounded-md border border-input bg-card px-3 focus-within:border-ring focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_20%,transparent)]">
+            <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label={t('book.match.searchLabel')}
+              className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none"
+            />
+            <span className="hidden text-[12px] whitespace-nowrap text-subtle-foreground md:inline">
+              {t('book.match.idHint')}
+            </span>
+          </label>
+          <Button type="submit" variant="outline">
+            {t('book.match.search')}
+          </Button>
+        </form>
+        <Candidates
+          search={search}
+          candidates={candidates}
+          picked={picked}
+          pickedRef={pickId === undefined && !search.isFetching ? scrollToInitialPick : undefined}
+          bookSeconds={b.duration}
+          addUrl={addBookUrl({
+            asin: by.asin || b.asin,
+            query: by.q,
+            title: b.title,
+            author: b.author,
+          })}
+          bookTitle={b.title || b.path}
+          recordingOf={recordingOf}
+          onPick={(id) => {
+            setPickId(id);
+            setRecId(undefined);
+          }}
+        />
+      </DialogBody>
+      <DialogFooter>
+        <DialogClose render={<Button type="button" variant="ghost" />}>
+          {t('common.cancel')}
+        </DialogClose>
+        <Button onClick={() => setStep('compare')} disabled={!picked}>
+          {t('book.match.compareFields')}
+          <ArrowRight aria-hidden="true" />
+        </Button>
+      </DialogFooter>
+    </>
+  ) : picked ? (
+    <MatchCompare
+      key={JSON.stringify([picked.work_id, rec?.id])}
+      detail={detail}
+      picked={picked}
+      by={by}
+      rec={rec}
+      onRecording={setRecId}
+      onBack={() => setStep('search')}
+      onDone={onDone}
+    />
+  ) : null;
+}
+
+function MatchCompare({
+  by,
+  detail,
+  picked,
+  rec,
+  onRecording,
+  onBack,
+  onDone,
+}: {
+  detail: AdminBookDetail;
+  picked: MatchCandidate;
+  by: MatchBy;
+  rec?: MatchRecording;
+  onRecording: (id: string) => void;
+  onBack: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const b = detail.book;
+  const query = useMatchProposal(b.library_id, b.path, by, picked.work_id, rec?.id);
+  const proposal = query.data;
+  const [choices, setChoices] = useState<Partial<Record<OverrideField, boolean>>>({});
+  const [coverChoice, setCoverChoice] = useState<boolean>();
+  const [busy, setBusy] = useState(false);
+  const rows = proposal ? compareRows(detail.fields, proposal, choices.series) : [];
+  const ticks = new Set(
+    rows.filter((r) => r.offered && (choices[r.field] ?? r.planned)).map((r) => r.field),
+  );
+  const coverUrl = proposal?.cover_url ?? communityCover(picked, rec);
+  const coverTick =
+    coverChoice ?? (proposal?.cover === true && cachedCommunityCover(qc, coverUrl) !== null);
   const taking = ticks.size + Number(coverTick);
-
-  /** The default ticks for a recording of the picked candidate. */
-  const resetTicks = (c: MatchCandidate, r: MatchRecording | undefined) => {
-    setTicks(defaultTicks(compareRows(detail.fields, c, r)));
-    const cover = communityCover(c, r);
-    setCoverTick(defaultCoverTick(b.has_cover, cover, cachedCommunityCover(qc, cover)));
-  };
-
-  const compare = () => {
-    if (picked) resetTicks(picked, rec);
-    setStep('compare');
-  };
-
-  const pickRecording = (id: string) => {
-    setRecId(id);
-    if (picked) resetTicks(picked, recordingOf(picked, id));
-  };
+  const isRecorded = proposal?.match === false;
+  const recordsMatch = proposal?.match_alone === true;
+  const recordsOffered = isRecorded && !!(proposal?.values.asin || proposal?.values.isbn);
 
   const accept = async () => {
-    if (!picked) return;
+    if (!proposal) return;
     setBusy(true);
     // The work and recording go with the ticked fields (acceptRequest's match),
     // before the cover. With no field ticked the cover goes first, then the match
-    // alone when it records one (recordsMatch) or is the book's recorded match
-    // already (isRecorded: its offered ASIN and ISBN are recorded again, so one
+    // alone when the server's plan records it by itself (match_alone) or it is
+    // the book's recorded match already (isRecorded: its offered ASIN and ISBN are recorded again, so one
     // unticked is never filled back by a refresh, server#330), so a cover that
     // fails still leaves nothing changed. Another work beside the book's own
     // ASIN or ISBN leaves the recorded match as it is.
     const edit = () =>
       api
-        .editBook(b.library_id, b.path, acceptRequest(rows, ticks, picked, rec))
+        .editBook(b.library_id, b.path, acceptRequest(rows, ticks, proposal))
         .then((next) => settleBookEdit(qc, next));
     try {
       if (ticks.size) await edit();
@@ -317,66 +387,7 @@ function MatchBody({
     onDone();
   };
 
-  return step === 'search' ? (
-    <>
-      <DialogBody className="flex flex-col gap-3.5">
-        <form
-          role="search"
-          className="flex flex-wrap items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setBy(parseMatchQuery(query));
-            setPickId(undefined);
-            setRecId(undefined);
-          }}
-        >
-          <label className="flex h-[38px] min-w-0 flex-1 basis-64 items-center gap-2 rounded-md border border-input bg-card px-3 focus-within:border-ring focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_20%,transparent)]">
-            <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              aria-label={t('book.match.searchLabel')}
-              className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none"
-            />
-            <span className="hidden text-[12px] whitespace-nowrap text-subtle-foreground md:inline">
-              {t('book.match.idHint')}
-            </span>
-          </label>
-          <Button type="submit" variant="outline">
-            {t('book.match.search')}
-          </Button>
-        </form>
-        <Candidates
-          search={search}
-          candidates={candidates}
-          picked={picked}
-          pickedRef={pickId === undefined && !search.isFetching ? scrollToInitialPick : undefined}
-          bookSeconds={b.duration}
-          addUrl={addBookUrl({
-            asin: by.asin || b.asin,
-            query: by.q,
-            title: b.title,
-            author: b.author,
-          })}
-          bookTitle={b.title || b.path}
-          recordingOf={recordingOf}
-          onPick={(id) => {
-            setPickId(id);
-            setRecId(undefined);
-          }}
-        />
-      </DialogBody>
-      <DialogFooter>
-        <DialogClose render={<Button type="button" variant="ghost" />}>
-          {t('common.cancel')}
-        </DialogClose>
-        <Button onClick={compare} disabled={!picked}>
-          {t('book.match.compareFields')}
-          <ArrowRight aria-hidden="true" />
-        </Button>
-      </DialogFooter>
-    </>
-  ) : picked ? (
+  return (
     <>
       <DialogBody className="flex flex-col gap-4">
         <CompareHeader
@@ -384,30 +395,35 @@ function MatchBody({
           coverUrl={coverUrl}
           recording={rec}
           bookSeconds={b.duration}
-          onRecording={pickRecording}
+          onRecording={onRecording}
         />
-        <CompareTable
-          rows={rows}
-          ticks={ticks}
-          onToggle={(f, on) => {
-            const next = new Set(ticks);
-            if (on) next.add(f);
-            else next.delete(f);
-            setTicks(next);
-          }}
-          cover={
-            <CoverRow
-              detail={detail}
-              coverUrl={coverUrl}
-              candidate={picked}
-              on={coverTick}
-              onToggle={setCoverTick}
-            />
-          }
-        />
+        {query.isError ? (
+          <QueryError
+            title={t('book.match.compareError')}
+            error={query.error}
+            onRetry={() => void query.refetch()}
+          />
+        ) : !proposal ? (
+          <div role="status" aria-label={t('common.loading')} className="skel h-40 rounded-lg" />
+        ) : (
+          <CompareTable
+            rows={rows}
+            ticks={ticks}
+            onToggle={(field, on) => setChoices((was) => ({ ...was, [field]: on }))}
+            cover={
+              <CoverRow
+                detail={detail}
+                coverUrl={coverUrl}
+                candidate={picked}
+                on={coverTick}
+                onToggle={setCoverChoice}
+              />
+            }
+          />
+        )}
       </DialogBody>
       <DialogFooter>
-        <Button variant="ghost" className="mr-auto" onClick={() => setStep('search')}>
+        <Button variant="ghost" className="mr-auto" onClick={onBack}>
           <ChevronLeft aria-hidden="true" />
           {t('book.match.back')}
         </Button>
@@ -416,14 +432,20 @@ function MatchBody({
         </DialogClose>
         <Button
           onClick={() => void accept()}
-          disabled={busy || (taking === 0 && !recordsMatch && !recordsOffered)}
+          disabled={
+            busy ||
+            !proposal ||
+            query.isFetching ||
+            query.isError ||
+            (taking === 0 && !recordsMatch && !recordsOffered)
+          }
         >
           {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
           {taking ? t('book.match.accept', { count: taking }) : t('book.match.acceptMatch')}
         </Button>
       </DialogFooter>
     </>
-  ) : null;
+  );
 }
 
 function recordingLine(
@@ -833,7 +855,12 @@ function CompareTable({
                   </div>
                 }
                 theirs={
-                  r.same ? (
+                  r.revert ? (
+                    <span>
+                      {t('book.revert.label')} ·{' '}
+                      {r.theirs ? shownValue(t, r.field, r.theirs) : t('book.match.empty')}
+                    </span>
+                  ) : r.same ? (
                     <span className="text-subtle-foreground">{t('book.match.same')}</span>
                   ) : r.theirs ? (
                     clip(shownValue(t, r.field, r.theirs), 150)

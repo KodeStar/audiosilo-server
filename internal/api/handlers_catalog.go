@@ -869,38 +869,124 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	book, err := a.cat.GetBookByPath(r.Context(), lib.ID, p)
+	if cands, _, ok := a.adminMatchCandidates(w, r, lib.ID, p); ok {
+		writeJSON(w, http.StatusOK, map[string]any{"candidates": cands})
+	}
+}
+
+// adminMatchCandidates is the match search for the book at p (?q=, ?asin=,
+// ?isbn=, else the book's own facts), as handleAdminMatch answers it, having
+// answered the error itself when ok is false. The match proposal reads its
+// candidates rather than a lookup by work id, which lacks a search hit's cover
+// and the ASIN it matched; the query it sent comes back too, so a lookup by id
+// keeps the book's facts.
+func (a *API) adminMatchCandidates(w http.ResponseWriter, r *http.Request, libraryID int64, p string) ([]meta.MatchCandidate, meta.MatchQuery, bool) {
+	book, err := a.cat.GetBookByPath(r.Context(), libraryID, p)
 	if err != nil {
-		a.writeBookError(w, err, "load book for match failed", "could not load book", "library", lib.ID, "path", p)
-		return
+		a.writeBookError(w, err, "load book for match failed", "could not load book", "library", libraryID, "path", p)
+		return nil, meta.MatchQuery{}, false
 	}
 	query := r.URL.Query()
 	// The library's language, as a match run sends it for a book saying none: one
 	// grouped read, none for a book saying its own. Unreadable, the book is matched as
 	// saying none.
-	libLanguage, err := matchrun.LibraryLanguageOf(r.Context(), a.cat, lib.ID, book)
+	libLanguage, err := matchrun.LibraryLanguageOf(r.Context(), a.cat, libraryID, book)
 	if err != nil {
-		a.log.Warn("library languages for match failed", "err", err, "library", lib.ID)
+		a.log.Warn("library languages for match failed", "err", err, "library", libraryID)
 	}
 	mq := matchrun.QueryFor(book, a.config().Metadata.PreferredRegion(), libLanguage)
 	mq.Text, mq.ASIN = strings.TrimSpace(query.Get("q")), strings.TrimSpace(query.Get("asin"))
 	mq.ISBN = strings.TrimSpace(query.Get("isbn"))
 	if utf8.RuneCountInString(mq.Text) > maxMatchQuery || len(mq.ASIN) > maxMatchID || len(mq.ISBN) > maxMatchID {
 		writeError(w, http.StatusBadRequest, "query too long")
-		return
+		return nil, mq, false
 	}
 	cands, err := a.meta.Candidates(r.Context(), mq)
 	if err != nil {
-		a.log.Warn("match search failed", "err", err, "library", lib.ID, "path", p)
+		a.log.Warn("match search failed", "err", err, "library", libraryID, "path", p)
 		writeError(w, http.StatusBadGateway, "metadata service unavailable")
-		return
+		return nil, mq, false
 	}
 	if mq.Text == "" && mq.ASIN == "" && mq.ISBN == "" {
-		if c := a.recordedCandidate(r.Context(), lib.ID, p, mq, cands); c != nil {
+		if c := a.recordedCandidate(r.Context(), libraryID, p, mq, cands); c != nil {
 			cands = append(cands, *c)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"candidates": cands})
+	return cands, mq, true
+}
+
+// handleMatchProposal serves GET /admin/books/match-proposal?library_id=&path=
+// &work_id=[&recording_id=][&q=|&asin=|&isbn=]: the match dialog's comparison of
+// a chosen work and recording with the indexed book (matchrun.Preview, the
+// overwrite plan a run applies). An omitted recording means the admin is
+// comparing the work alone; the search parameters are the ones that found the
+// candidate.
+//
+// Responses: metadata off -> 404 (code metadata_off); no library_id, or a work
+// or recording id that isn't one -> 400; no book -> 404 (code book_not_found);
+// the work or recording not found -> 404 (code not_found); upstream down -> 502;
+// otherwise 200, with match_alone (matchrun.BookProposal) saying whether an
+// accept with nothing ticked records the match by itself.
+func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
+	if a.metadataOff(w) {
+		return
+	}
+	q := r.URL.Query()
+	id, ok := parseOptionalID(q.Get("library_id"))
+	if !ok || id == 0 {
+		writeError(w, http.StatusBadRequest, "invalid library_id")
+		return
+	}
+	work, recording := q.Get("work_id"), q.Get("recording_id")
+	if strings.TrimSpace(work) == "" || !validWorkID(work) || !validWorkID(recording) {
+		writeError(w, http.StatusBadRequest, "invalid work or recording id")
+		return
+	}
+	_, path, _, status, msg := a.scopedPath(r, id, q.Get("path"))
+	if status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	candidates, mq, ok := a.adminMatchCandidates(w, r, id, path)
+	if !ok {
+		return
+	}
+	i := slices.IndexFunc(candidates, func(c meta.MatchCandidate) bool { return c.WorkID == work })
+	var c *meta.MatchCandidate
+	if i >= 0 {
+		c = &candidates[i]
+	} else {
+		// A candidate found by a different search can also be named directly,
+		// with the book's facts beside the id as recordedCandidate keeps them.
+		byID := mq
+		byID.WorkID = work
+		named, err := a.meta.Candidates(r.Context(), byID)
+		if err != nil {
+			a.log.Warn("match proposal lookup failed", "work", work, "err", err)
+			writeError(w, http.StatusBadGateway, "metadata service unavailable")
+			return
+		}
+		if len(named) == 0 || named[0].WorkID != work {
+			writeErrorCode(w, http.StatusNotFound, codeNotFound, "match candidate not found")
+			return
+		}
+		c = &named[0]
+	}
+	var rec *meta.MatchRecording
+	if recording != "" {
+		i := slices.IndexFunc(c.Recordings, func(m meta.MatchRecording) bool { return m.ID == recording })
+		if i < 0 {
+			writeErrorCode(w, http.StatusNotFound, codeNotFound, "recording not found")
+			return
+		}
+		rec = &c.Recordings[i]
+	}
+	st, err := a.cat.BookMatchState(r.Context(), id, path)
+	if err != nil {
+		a.writeBookError(w, err, "load book for proposal failed", "could not load book", "library", id, "path", path)
+		return
+	}
+	writeJSON(w, http.StatusOK, matchrun.Preview(st, c, rec))
 }
 
 // recordedCandidate is the book's recorded community match as a match

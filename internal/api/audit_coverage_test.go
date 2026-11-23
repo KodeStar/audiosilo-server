@@ -21,6 +21,7 @@ var notAudited = map[string]string{
 	"handleUpdateCheck":            "asks GitHub; changes nothing",
 	"handleMetaMirrorCheck":        "asks GitHub for a newer metadata copy; changes nothing an admin chose (the copy is derived data)",
 	"handleAdminCovers":            "a read (a POST only for its batch body)",
+	"handlePreviewMatchRun":        "counts selected books, using POST for the list of picks",
 	"handleAdminBookWorks":         "a read (a POST only for its batch body)",
 	"handleCommunityCovers":        "a read (a POST only for its batch body)",
 	"handleTestNotifyTarget":       "sends a test message; its outcome is recorded on the destination",

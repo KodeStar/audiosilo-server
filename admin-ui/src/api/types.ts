@@ -2526,6 +2526,37 @@ export interface ClearedMatches {
   runs: number;
 }
 
+/** The proposal's values and the overwrite planner's selected writes. */
+export interface ProposalFields {
+  values: Partial<Record<OverrideField, string>>;
+  set: Partial<Record<OverrideField, string>>;
+  revert?: OverrideField[];
+}
+
+/** The planned fields, with the series plan for the other choice of main series. */
+export interface SeriesPlan extends ProposalFields {
+  alternate_series?: ProposalFields;
+}
+
+export interface BookMatchProposal extends SeriesPlan {
+  work_id: string;
+  recording_id: string;
+  cover_url: string;
+  cover: boolean;
+  match: boolean;
+  /**
+   * Accepting with nothing ticked records the match by itself: a new match for a
+   * book with no ASIN or ISBN of its own (matchrun.BookProposal.MatchAlone).
+   */
+  match_alone: boolean;
+}
+
+export interface MatchApplyRequest {
+  scope: MatchScope;
+  include?: number[];
+  exclude?: number[];
+}
+
 /** catalog.MatchProposal: what the best community candidate offers a book. */
 export interface MatchProposal {
   work_id?: string;

@@ -88,6 +88,12 @@ function routes(runs: MatchRun[], over: Record<string, MockRoute> = {}) {
     'GET /admin/match-runs': { body: { runs, region: 'uk' } },
     // A working run is asked for on its own (useMatchRuns).
     'GET /admin/match-runs/5': () => ({ body: runs.find((r) => r.id === 5) }),
+    'POST /admin/match-runs/5/preview': (req) => {
+      const { include, exclude } = req.body as { include: number[]; exclude: number[] };
+      return {
+        body: { ...runs[0], apply_count: runs[0].counts.pending + include.length - exclude.length },
+      };
+    },
     'GET /admin/match-runs/5/items': (req) => ({
       body: {
         items: req.query.get('outcome') === 'review' ? [doubtful] : [confident],
@@ -102,6 +108,38 @@ beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('bulk matching', () => {
+  it('shows the count returned for the current picks when an earlier preview arrives late', async () => {
+    const ready = run({ counts: { ...run().counts, auto: 7, pending: 7 } });
+    let release!: () => void;
+    const initial = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls = mockFetch(
+      routes([ready], {
+        'POST /admin/match-runs/5/preview': async (req) => {
+          const { exclude } = req.body as { exclude: number[] };
+          if (!exclude.length) await initial;
+          return { body: { ...ready, apply_count: exclude.length ? 3 : 4 } };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('checkbox', { name: 'Apply to The Martian' }));
+    const apply = await within(dialog).findByRole('button', { name: 'Apply to 3 books' });
+    await act(async () => {
+      release();
+      await initial;
+    });
+    expect(apply).toBeEnabled();
+    expect(calls.filter((c) => c.path.endsWith('/preview')).map((c) => c.body)).toEqual([
+      { scope: 'fill', include: [], exclude: [] },
+      { scope: 'fill', include: [], exclude: [10] },
+    ]);
+  });
+
   it('finishes an unchanged refresh with no exclusions and allows a different run', async () => {
     let current = run({
       mode: 'refresh',
@@ -110,6 +148,7 @@ describe('bulk matching', () => {
     const calls = mockFetch(
       routes([current], {
         'GET /admin/match-runs': () => ({ body: { runs: [current], region: 'uk' } }),
+        'POST /admin/match-runs/5/preview': { body: { ...current, apply_count: 0 } },
         'GET /admin/match-runs/5/items': {
           body: {
             items: [{ ...confident, changes: { fill: { fields: [], cover: false } } }],
@@ -172,6 +211,12 @@ describe('bulk matching', () => {
       routes(
         [run({ mode: 'refresh', counts: { ...run().counts, auto: 3, pending: 3, review: 0 } })],
         {
+          'POST /admin/match-runs/5/preview': (req) => ({
+            body: {
+              ...run(),
+              apply_count: (req.body as { scope: string }).scope === 'fill' ? 1 : 2,
+            },
+          }),
           'GET /admin/match-runs/5/items': async (req) => {
             if (req.query.get('after')) {
               await secondPage;
@@ -190,7 +235,7 @@ describe('bulk matching', () => {
     await within(dialog).findByRole('link', {
       name: 'Open the book page for The Martian in a new tab',
     });
-    expect(within(dialog).getByRole('button', { name: /^Apply to \d+ books?/ })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: /loading/i })).toBeDisabled();
     releasePage();
     await waitFor(() =>
       expect(within(dialog).getByRole('button', { name: 'Apply to 1 book' })).toBeEnabled(),
@@ -206,9 +251,9 @@ describe('bulk matching', () => {
     expect(within(dialog).queryByRole('checkbox', { name: /The Martian/ })).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole('radio', { name: /Use community values/ }));
     expect(await within(dialog).findByRole('checkbox', { name: /The Martian/ })).toBeChecked();
-    expect(within(dialog).getByRole('button', { name: 'Apply to 2 books' })).toBeEnabled();
+    expect(await within(dialog).findByRole('button', { name: 'Apply to 2 books' })).toBeEnabled();
     await user.click(within(dialog).getByRole('radio', { name: /Fill in what/ }));
-    await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+    await user.click(await within(dialog).findByRole('button', { name: 'Apply to 1 book' }));
     // No no-op ids in the body: the server leaves them out (server#332).
     await waitFor(() =>
       expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
@@ -232,6 +277,7 @@ describe('bulk matching', () => {
       routes(
         [run({ mode: 'refresh', counts: { ...run().counts, auto: 2, pending: 2, review: 0 } })],
         {
+          'POST /admin/match-runs/5/preview': { body: { ...run(), apply_count: 1 } },
           'GET /admin/match-runs/5/items': {
             body: { items: [{ ...confident, changes: {} }, healed], next_after: 0 },
           },
@@ -249,7 +295,7 @@ describe('bulk matching', () => {
     expect(within(dialog).getByText('Sets the community match')).toBeInTheDocument();
     expect(within(dialog).getByText('Nothing to change with this choice')).toBeInTheDocument();
     expect(within(dialog).queryByRole('checkbox', { name: /The Martian/ })).not.toBeInTheDocument();
-    const apply = within(dialog).getByRole('button', { name: 'Apply to 1 book' });
+    const apply = await within(dialog).findByRole('button', { name: 'Apply to 1 book' });
     await waitFor(() => expect(apply).toBeEnabled());
     await user.click(apply);
     await waitFor(() =>
@@ -293,7 +339,7 @@ describe('bulk matching', () => {
     await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
     const dialog = await screen.findByRole('dialog');
     expect(await within(dialog).findByRole('checkbox', { name: /The Martian/ })).toBeChecked();
-    await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+    await user.click(await within(dialog).findByRole('button', { name: 'Apply to 1 book' }));
     await waitFor(() =>
       expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
         scope: 'ids',
@@ -425,7 +471,7 @@ describe('bulk matching', () => {
     expect(
       await within(dialog).findByText("The community doesn't know this book's ASIN or ISBN"),
     ).toBeInTheDocument();
-    await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+    await user.click(await within(dialog).findByRole('button', { name: 'Apply to 1 book' }));
     await waitFor(() =>
       expect(
         calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs/5/apply')?.body,
@@ -792,7 +838,7 @@ describe('bulk matching', () => {
     // The apply finishes before the card's next poll: it never sees it working.
     let current = run();
     const calls = mockFetch(
-      routes([], {
+      routes([current], {
         'GET /admin/match-runs': () => ({ body: { runs: [current], region: 'uk' } }),
         'POST /admin/match-runs/5/apply': () => {
           current = run({
@@ -801,7 +847,7 @@ describe('bulk matching', () => {
             apply_total: 2,
             apply_done: 2,
           });
-          return { status: 202, body: run({ status: 'applying' }) };
+          return { status: 202, body: run({ status: 'applying', apply_total: 2 }) };
         },
       }),
     );
@@ -843,7 +889,7 @@ describe('bulk matching', () => {
 
     const issuesAsked = () => calls.filter((c) => c.path === '/admin/issues').length;
     const before = issuesAsked();
-    await user.click(within(dialog).getByRole('button', { name: 'Apply to 2 books' }));
+    await user.click(await within(dialog).findByRole('button', { name: 'Apply to 2 books' }));
     await waitFor(() =>
       expect(
         calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs/5/apply')?.body,
@@ -873,6 +919,18 @@ describe('bulk matching', () => {
         ],
       },
     },
+    'GET /admin/books/match-proposal': {
+      body: {
+        work_id: 'the-martian',
+        recording_id: '',
+        match: true,
+        match_alone: true,
+        cover: false,
+        cover_url: '',
+        values: { published: '2011' },
+        set: { published: '2011' },
+      },
+    },
     'POST /admin/meta/covers': { body: { covers: [''] } },
   };
 
@@ -883,7 +941,7 @@ describe('bulk matching', () => {
     await within(match).findByRole('radio', { name: /The Martian/ });
     await user.click(within(match).getByRole('button', { name: 'Compare fields' }));
     const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
-    await user.click(within(compare).getByRole('button', { name: /^Accept \d+ field/ }));
+    await user.click(await within(compare).findByRole('button', { name: /^Accept \d+ field/ }));
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Compare with community metadata' })).toBeNull(),
     );
@@ -930,7 +988,7 @@ describe('bulk matching', () => {
       within(after).getByText('Matched since this run: an apply leaves it as it is'),
     ).toBeInTheDocument();
     expect(within(after).queryByRole('checkbox')).toBeNull();
-    expect(within(review).getByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
+    expect(await within(review).findByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
   });
 
   it('asks the server again for a book a hand match left unmatched', async () => {
@@ -963,7 +1021,7 @@ describe('bulk matching', () => {
     const after = (await within(review).findByText('B0UK000001 · UK')).closest('li')!;
     expect(within(after).queryByText(/Matched since this run/)).toBeNull();
     expect(within(after).getByRole('checkbox')).not.toBeChecked();
-    expect(within(review).getByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
+    expect(await within(review).findByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
   });
 
   it('marks a book matched by hand to a store listing matched since at once (server#320)', async () => {
@@ -1039,7 +1097,7 @@ describe('bulk matching', () => {
     await user.click(box('Five'));
     await shiftClick(user, box('One'));
     for (const title of ['One', 'The Martian', 'Five']) expect(box(title)).toBeChecked();
-    expect(within(review).getByRole('button', { name: 'Apply to 3 books' })).toBeEnabled();
+    expect(await within(review).findByRole('button', { name: 'Apply to 3 books' })).toBeEnabled();
   });
 
   it('keeps a book matched by hand out of a range while its list reads again offline (server#198)', async () => {
@@ -1277,7 +1335,7 @@ describe('bulk matching', () => {
     expect(box('Five')).toBeChecked();
     // The applied one has no checkbox, so the range passes over it.
     expect(within(dialog).queryByRole('checkbox', { name: 'Apply to Three' })).toBeNull();
-    await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+    await user.click(await within(dialog).findByRole('button', { name: 'Apply to 1 book' }));
     await waitFor(() =>
       expect(
         calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs/5/apply')?.body,

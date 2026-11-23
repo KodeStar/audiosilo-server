@@ -222,8 +222,82 @@ func (a *API) handleMatchRunItems(w http.ResponseWriter, r *http.Request) {
 // cleared meanwhile); 409 match_run_busy while a run is working,
 // match_run_not_ready unless this one is ready.
 func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
-	if a.metadataOff(w) {
+	run, opts := a.readApplyRequest(w, r)
+	if run == nil {
 		return
+	}
+	started, err := a.matchRuns.Apply(r.Context(), a.baseCtx, run.ID, opts)
+	switch {
+	case errors.Is(err, matchrun.ErrBusy):
+		writeErrorCode(w, http.StatusConflict, codeMatchRunBusy, "a match run is already working")
+		return
+	case errors.Is(err, catalog.ErrNotFound): // cleared since matchRunFor loaded it
+		writeError(w, http.StatusNotFound, "no such match run")
+		return
+	case writeApplyRefusal(w, run, err):
+		return
+	case err != nil:
+		a.writeCatalogError(w, err, "apply match run failed", "could not apply the match run", "run", run.ID)
+		return
+	}
+	details := map[string]any{"run": started.ID, "books": started.ApplyTotal}
+	if matchrun.ScopesFor(started.Mode) != nil {
+		details["scope"] = opts.Scope // a repick writes its ASIN whatever the scope
+	}
+	a.audit(r, "book.match_apply", started.LibraryName, details)
+	writeJSON(w, http.StatusAccepted, started)
+}
+
+// handlePreviewMatchRun serves POST /admin/match-runs/{id}/preview, an apply's
+// body: the run with apply_count, the items that apply would take
+// (matchrun.Runner.PreviewApply: a run stuck marked working settled first, as
+// an apply settles it, then the selection Apply reads), changing nothing else.
+// It refuses what an apply refuses (matchrun.CheckApply: 409
+// match_run_not_ready, 400 for a scope the run's mode doesn't take); 404 for a
+// run that isn't there.
+func (a *API) handlePreviewMatchRun(w http.ResponseWriter, r *http.Request) {
+	run, opts := a.readApplyRequest(w, r)
+	if run == nil {
+		return
+	}
+	run, count, err := a.matchRuns.PreviewApply(r.Context(), run.ID, opts)
+	switch {
+	case errors.Is(err, catalog.ErrNotFound): // cleared since matchRunFor loaded it
+		writeError(w, http.StatusNotFound, "no such match run")
+		return
+	case run != nil && writeApplyRefusal(w, run, err):
+		return
+	case err != nil:
+		a.writeCatalogError(w, err, "count match apply failed", "could not count selected books")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		*catalog.MatchRun
+		ApplyCount int `json:"apply_count"`
+	}{run, count})
+}
+
+// writeApplyRefusal answers matchrun.CheckApply's refusals (409
+// match_run_not_ready, 400 for a scope run's mode doesn't take), reporting
+// whether err was one.
+func writeApplyRefusal(w http.ResponseWriter, run *catalog.MatchRun, err error) bool {
+	switch {
+	case errors.Is(err, matchrun.ErrScope):
+		writeError(w, http.StatusBadRequest, "scope must be one of "+strings.Join(matchrun.ScopesFor(run.Mode), ", "))
+	case errors.Is(err, catalog.ErrRunNotReady):
+		writeErrorCode(w, http.StatusConflict, codeMatchRunNotReady, "the match run is not ready to apply")
+	default:
+		return false
+	}
+	return true
+}
+
+// readApplyRequest reads an apply's (or its preview's) body and run, nil
+// having answered the error itself: metadata off, a body that doesn't decode, a
+// scope that isn't one, too many includes, no such run.
+func (a *API) readApplyRequest(w http.ResponseWriter, r *http.Request) (*catalog.MatchRun, matchrun.ApplyOptions) {
+	if a.metadataOff(w) {
+		return nil, matchrun.ApplyOptions{}
 	}
 	var req struct {
 		Scope   string  `json:"scope"`
@@ -232,46 +306,21 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r, &req, 1<<20); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
-		return
+		return nil, matchrun.ApplyOptions{}
 	}
 	if !matchrun.ValidScope(req.Scope) {
 		writeError(w, http.StatusBadRequest, `scope must be "ids", "fill" or "overwrite"`)
-		return
+		return nil, matchrun.ApplyOptions{}
 	}
 	if len(req.Include) > maxMatchPicks {
 		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many items in one apply")
-		return
+		return nil, matchrun.ApplyOptions{}
 	}
 	run := a.matchRunFor(w, r)
 	if run == nil {
-		return
+		return nil, matchrun.ApplyOptions{}
 	}
-	started, err := a.matchRuns.Apply(r.Context(), a.baseCtx, run.ID, matchrun.ApplyOptions{
-		Scope: req.Scope, Include: req.Include, Exclude: req.Exclude, UserID: userFrom(r.Context()).ID,
-	})
-	switch {
-	case errors.Is(err, matchrun.ErrBusy):
-		writeErrorCode(w, http.StatusConflict, codeMatchRunBusy, "a match run is already working")
-		return
-	case errors.Is(err, matchrun.ErrScope):
-		writeError(w, http.StatusBadRequest, "scope must be one of "+strings.Join(matchrun.ScopesFor(run.Mode), ", "))
-		return
-	case errors.Is(err, catalog.ErrRunNotReady):
-		writeErrorCode(w, http.StatusConflict, codeMatchRunNotReady, "the match run is not ready to apply")
-		return
-	case errors.Is(err, catalog.ErrNotFound): // cleared since matchRunFor loaded it
-		writeError(w, http.StatusNotFound, "no such match run")
-		return
-	case err != nil:
-		a.writeCatalogError(w, err, "apply match run failed", "could not apply the match run", "run", run.ID)
-		return
-	}
-	details := map[string]any{"run": started.ID, "books": started.ApplyTotal}
-	if matchrun.ScopesFor(started.Mode) != nil {
-		details["scope"] = req.Scope // a repick writes its ASIN whatever the scope
-	}
-	a.audit(r, "book.match_apply", started.LibraryName, details)
-	writeJSON(w, http.StatusAccepted, started)
+	return run, matchrun.ApplyOptions{Scope: req.Scope, Include: req.Include, Exclude: req.Exclude, UserID: userFrom(r.Context()).ID}
 }
 
 // handleCancelMatchRun serves POST /admin/match-runs/{id}/cancel: stop the run
