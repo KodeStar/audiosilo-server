@@ -825,7 +825,8 @@ func TestBackupFailedNamesTheOwnerProblem(t *testing.T) {
 	detail := "the server can't write to /backups: permission denied. The server runs as user 1000:1000 and the folder belongs to 1026:100. Set PUID=1026 and PGID=100 (the folder's owner) on the container, or give user 1000:1000 read and write access to the folder."
 	s.BackupFailed(ctx, "scheduled", "permission_denied", detail)
 	s.BackupFailed(ctx, "manual", "disk_full", "")
-	s.Flush()
+	// No Flush: BackupFailed returns once its event is recorded (the console
+	// reads the feed as soon as it sees the backup's run end).
 	events, _, err := cat.ListServerEvents(ctx, 0, 10, "")
 	if err != nil || len(events) != 2 {
 		t.Fatalf("events = %v, %v", events, err)

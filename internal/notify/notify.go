@@ -243,7 +243,8 @@ type emission struct {
 }
 
 // Emit records an event in the feed and queues it for every enabled destination
-// subscribed to its kind. It returns at once: the event is recorded in the
+// subscribed to its kind. It returns at once (unless emitQueue events are
+// already waiting: then once there is room): the event is recorded in the
 // background, in the order emitted (recordQueued), and never blocks on sending; a
 // full delivery queue leaves the delivery owed until the next sweep (logged).
 func (s *Service) Emit(ctx context.Context, e Event) {
@@ -274,7 +275,8 @@ func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
 }
 
 // Flush returns once every event emitted or delivered before it is recorded
-// and its deliveries queued (a test reads the feed after it).
+// and its deliveries queued (for a caller that reads the feed next: a test,
+// BackupFailed).
 func (s *Service) Flush() {
 	if s == nil {
 		return
@@ -1331,6 +1333,9 @@ func (s *Service) UpdateFound(ctx context.Context, version, name, url string) {
 // BackupFailed reports a backup that failed (trigger: scheduled or manual; reason
 // is backup.Result's short code, detail its Detail: the folder, the server's user,
 // the folder's owner and the fix when the folder refused the server, else "").
+// It returns once the event is recorded (Flush): the backup's run is marked over
+// after it, and the console reads the feed again as soon as it sees that
+// (useBackups), so the failure is in the feed by then.
 func (s *Service) BackupFailed(ctx context.Context, trigger, reason, detail string) {
 	if s == nil {
 		return
@@ -1340,6 +1345,7 @@ func (s *Service) BackupFailed(ctx context.Context, trigger, reason, detail stri
 		data["detail"] = detail
 	}
 	s.Emit(ctx, Event{Kind: KindBackupFailed, Data: data})
+	s.Flush()
 }
 
 // BridgeJob is a Bridge job that just finished, failed or parked, for

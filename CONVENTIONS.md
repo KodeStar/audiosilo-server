@@ -4764,7 +4764,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and the record one step under `dedupMu`, so two emits at once announce it once,
   server#408). `notify.Service.Emit` returns at once: one goroutine records the queued events in the
   order emitted (`emitQueue`, 1024; a burst past it waits for room, never drops one; `Deliver`, a
-  podcast notice recorded with its write, rides the same queue; `Flush` for a test), and
+  podcast notice recorded with its write, rides the same queue; `Flush` for a caller that reads the
+  feed next: a test, and `BackupFailed`, as the console reads the feed once it sees the run end), and
   `Service.Close`, deferred by the launcher before the database's, records what is still queued (an
   emit after it is recorded on its caller's goroutine), server#224. Each recorded event queues each
   enabled subscribed destination (4 workers, queue 256, left owed + logged when full); a delivery is
