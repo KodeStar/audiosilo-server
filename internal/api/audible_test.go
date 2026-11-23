@@ -488,8 +488,12 @@ func TestBridgeAudibleTitleDecisions(t *testing.T) {
 	b := newBridgeEnv(t)
 	setAudible(t, b.testEnv, b.adminTok, true)
 	const route = "/api/v1/bridge/audible/accounts/"
-	if resp, out := b.do(t, "GET", route+testAccount+"/titles", b.bridgeTok, ""); resp.StatusCode != http.StatusNotFound || codeOf(out) != "unknown_account" {
-		t.Fatalf("before mapping: %d %s", resp.StatusCode, out)
+	// An unknown account is unknown_account whatever the cursor: the Bridge
+	// reads only that as "map the account again".
+	for _, query := range []string{"", "?after=not-an-asin"} {
+		if resp, out := b.do(t, "GET", route+testAccount+"/titles"+query, b.bridgeTok, ""); resp.StatusCode != http.StatusNotFound || codeOf(out) != "unknown_account" {
+			t.Fatalf("before mapping %q: %d %s", query, resp.StatusCode, out)
+		}
 	}
 	for _, account := range []string{testAccount, "acct0002"} {
 		if code, out := b.putAccount(t, account, b.adminID, b.lib.ID); code != http.StatusOK {

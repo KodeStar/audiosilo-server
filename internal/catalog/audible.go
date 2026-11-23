@@ -515,15 +515,16 @@ type AudibleTitleDecision struct {
 // (including a new purchase) needs no row. A mark belongs to its account even
 // when the title has no match or several accounts use the same library.
 func (c *Catalog) BridgeAudibleTitleDecisions(ctx context.Context, account, after string, limit int) ([]AudibleTitleDecision, string, error) {
-	if after != "" && !ValidASIN(after) {
-		return nil, "", ErrInvalidCursor
-	}
+	// The account first: the Bridge reads only unknown_account as "map it again".
 	var exists bool
 	if err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audible_accounts WHERE account = ?)`, account).Scan(&exists); err != nil {
 		return nil, "", err
 	}
 	if !exists {
 		return nil, "", ErrUnknownAccount
+	}
+	if after != "" && !ValidASIN(after) {
+		return nil, "", ErrInvalidCursor
 	}
 	if limit <= 0 || limit > MaxAudibleTitles {
 		limit = MaxAudibleTitles
