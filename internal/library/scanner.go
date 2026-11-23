@@ -2765,11 +2765,7 @@ func (s *Scanner) ReindexPath(ctx context.Context, lib catalog.Library, relPath 
 		// A read can time out before discovery reaches the audio. Preserve the
 		// indexed book and give Health a problem to recheck after the share returns.
 		if metadata.GaveUp(err) {
-			detail := tagsUnreadDetail
-			if errors.Is(err, metadata.ErrReadRefused) {
-				detail = readRefusedDetail
-			}
-			if saveErr := s.cat.NoteUnreadablePath(ctx, lib, relPath, detail); saveErr != nil {
+			if saveErr := s.cat.NoteUnreadablePath(ctx, lib, relPath, gaveUpDetail(err)); saveErr != nil {
 				s.log.Warn("record re-read problem failed", "library", lib.Name, "path", relPath, "err", saveErr)
 			}
 		}

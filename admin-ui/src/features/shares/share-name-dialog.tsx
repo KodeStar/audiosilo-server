@@ -46,7 +46,7 @@ export function ShareNameDialog({
       <DialogContent
         icon={Share2}
         title={
-          share ? t('shares.renameTitle', { name: shareLabel(share, [], t) }) : t('shares.newTitle')
+          share ? t('shares.renameTitle', { name: shareLabel(share, t) }) : t('shares.newTitle')
         }
         description={share ? undefined : t('shares.newDescription')}
       >

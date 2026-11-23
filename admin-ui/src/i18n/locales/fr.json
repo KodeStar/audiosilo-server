@@ -411,7 +411,6 @@
   "user.access.description": "Bibliothèques entières et partages. Les nouveaux livres qu'ils contiennent apparaissent automatiquement.",
   "user.access.give": "Donner l'accès",
   "user.access.none": "Rien pour l'instant. {{name}} peut se connecter mais ne verra aucun livre.",
-  "user.access.wholeLibrary": "Bibliothèque entière",
   "user.access.podcastLibrary": "Bibliothèque entière · émissions de podcast",
   "user.access.emptyShare": "Ce partage n'a encore aucun dossier",
   "user.access.remove": "Retirer",

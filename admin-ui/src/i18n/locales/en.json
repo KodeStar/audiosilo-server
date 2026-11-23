@@ -394,7 +394,6 @@
   "user.access.description": "Whole libraries and shares. New books in them appear automatically.",
   "user.access.give": "Give access",
   "user.access.none": "Nothing yet. {{name}} can sign in but won't see any books.",
-  "user.access.wholeLibrary": "Whole library",
   "user.access.podcastLibrary": "Whole library · podcast shows",
   "user.access.emptyShare": "This share has no folders yet",
   "user.access.remove": "Remove",

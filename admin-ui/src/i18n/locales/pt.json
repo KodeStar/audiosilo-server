@@ -411,7 +411,6 @@
   "user.access.description": "Bibliotecas completas e partilhas. Os livros novos que contêm aparecem automaticamente.",
   "user.access.give": "Dar acesso",
   "user.access.none": "Ainda nada. {{name}} pode iniciar sessão, mas não vê nenhum livro.",
-  "user.access.wholeLibrary": "Biblioteca completa",
   "user.access.podcastLibrary": "Biblioteca completa · programas de podcast",
   "user.access.emptyShare": "Esta partilha ainda não tem pastas",
   "user.access.remove": "Remover",

@@ -100,7 +100,7 @@ function AddToShareForm({
         await api.addSharePaths(share.id, rules);
       }
       toast.add({
-        title: t('books.share.done', { name: shareLabel(share, [], t) }),
+        title: t('books.share.done', { name: shareLabel(share, t) }),
         description: t('books.share.doneBody', counted(books.length, lang)),
         type: 'success',
       });
@@ -155,7 +155,7 @@ function AddToShareForm({
             onValueChange={setPicked}
             options={named.map((s) => ({
               value: String(s.id),
-              title: shareLabel(s, [], t),
+              title: shareLabel(s, t),
               description: alreadyIn?.has(s.id)
                 ? t('books.share.already')
                 : [

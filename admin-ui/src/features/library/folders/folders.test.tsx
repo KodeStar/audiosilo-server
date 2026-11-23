@@ -27,6 +27,15 @@ const audio = (path: string): FsEntry => ({
   mod_time: 0,
 });
 
+// The one-page listing the server sends for path, with the folder's own entry.
+function listingOf(fs: Record<string, FsEntry[]>, path: string) {
+  const entries = fs[path] ?? [];
+  const folder = Object.values(fs)
+    .flat()
+    .find((f) => f.path === path);
+  return { path, folder, entries, total: entries.length, offset: 0 };
+}
+
 // Fiction: A/ holds the book B/ (three files); Other/ is empty.
 function fiction(override?: FolderMode) {
   const fs: Record<string, FsEntry[]> = {
@@ -37,20 +46,7 @@ function fiction(override?: FolderMode) {
   };
   return (req: MockRequest) => {
     const path = req.query.get('path') ?? '';
-    const entries = fs[path];
-    return entries
-      ? {
-          body: {
-            path,
-            folder: Object.values(fs)
-              .flat()
-              .find((f) => f.path === path),
-            entries,
-            total: entries.length,
-            offset: 0,
-          },
-        }
-      : { status: 404, body: { error: 'not found' } };
+    return fs[path] ? { body: listingOf(fs, path) } : { status: 404, body: { error: 'not found' } };
   };
 }
 
@@ -229,18 +225,7 @@ describe('folders', () => {
               dir('Dragonese/CD2', { is_book: !override }),
             ],
           };
-          const entries = fs[path] ?? [];
-          return {
-            body: {
-              path,
-              folder: Object.values(fs)
-                .flat()
-                .find((f) => f.path === path),
-              entries,
-              total: entries.length,
-              offset: 0,
-            },
-          };
+          return { body: listingOf(fs, path) };
         },
         'PUT /admin/libraries/1/folder-override': (req) => {
           override = (req.body as { mode: FolderMode }).mode;
@@ -331,19 +316,8 @@ describe('folders', () => {
         ],
         'Zed/New': [audio('Zed/New/01.mp3')],
       };
-      const entries = fs[path];
-      return entries
-        ? {
-            body: {
-              path,
-              folder: Object.values(fs)
-                .flat()
-                .find((f) => f.path === path),
-              entries,
-              total: entries.length,
-              offset: 0,
-            },
-          }
+      return fs[path]
+        ? { body: listingOf(fs, path) }
         : { status: 404, body: { error: 'not found' } };
     };
     const calls = mockFetch(

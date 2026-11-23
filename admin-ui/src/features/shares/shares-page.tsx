@@ -144,7 +144,7 @@ function ShareTile({
   // the avatars and the chip always add up to the share's count.
   const more = s.member_ids.length - Math.min(members.length, MAX_AVATARS);
   const isLibrary = wholeLibraryOf(s) !== undefined;
-  const name = shareLabel(s, libraries.data ?? [], t);
+  const name = shareLabel(s, t, libraries.data);
   return (
     <button
       type="button"
@@ -211,7 +211,7 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
   const people = users.data ?? [];
   const members = people.filter((u) => s.member_ids.includes(u.id));
   const others = people.filter((u) => !s.member_ids.includes(u.id) && u.role !== 'admin');
-  const name = shareLabel(s, libs, t);
+  const name = shareLabel(s, t, libs);
 
   const run = async (work: () => Promise<void>, done: string) => {
     try {

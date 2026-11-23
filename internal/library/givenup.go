@@ -38,11 +38,16 @@ func (g *givenUp) keep(b *catalog.Book) {
 		return
 	}
 	if !b.ReadCutShort || b.LengthOnly {
-		detail := tagsUnreadDetail
-		if errors.Is(g.err, metadata.ErrReadRefused) {
-			detail = readRefusedDetail
-		}
-		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = problemUnreadable, g.file, detail
+		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = problemUnreadable, g.file, gaveUpDetail(g.err)
 	}
 	b.ReadCutShort, b.LengthOnly = true, false
+}
+
+// gaveUpDetail is the Health detail for a file read given up on with err: a
+// read the share refused, or one that did not answer in time.
+func gaveUpDetail(err error) string {
+	if errors.Is(err, metadata.ErrReadRefused) {
+		return readRefusedDetail
+	}
+	return tagsUnreadDetail
 }

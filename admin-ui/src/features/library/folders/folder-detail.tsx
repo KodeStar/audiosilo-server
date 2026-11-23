@@ -37,7 +37,7 @@ export function FolderDetail({
   const { t } = useTranslation();
   const next = own.data?.next_offset;
   const rest = useQuery({
-    queryKey: [...keys.browse(library.id, path), 'remaining', next],
+    queryKey: keys.folderRest(library.id, path, next ?? 0),
     enabled: !!next,
     queryFn: async ({ signal }) => {
       let offset = next;
@@ -65,7 +65,7 @@ export function FolderDetail({
       </Notice>
     );
   }
-  const failed = own.isError ? own : next && rest.isError ? rest : undefined;
+  const failed = own.isError ? own : rest.isError ? rest : undefined;
   if (failed) {
     return (
       <QueryError
@@ -83,9 +83,7 @@ export function FolderDetail({
       </div>
     );
   }
-  const listing: FsListing = next
-    ? { ...own.data, entries: own.data.entries.concat(rest.data ?? []) }
-    : own.data;
+  const listing: FsListing = { ...own.data, entries: own.data.entries.concat(rest.data ?? []) };
   const entry = own.data.folder;
   const files = audioFilesOf(listing);
   return (

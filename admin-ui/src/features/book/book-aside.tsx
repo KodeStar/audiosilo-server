@@ -7,6 +7,7 @@ import { api } from '@/api/client';
 import {
   invalidateIssues,
   settleBookEdit,
+  useBookLibraries,
   useBookMeta,
   useLibraries,
   useServerInfo,
@@ -20,7 +21,6 @@ import { formatNumber, formatPercent, formatRelative, progressFraction } from '@
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { DescribeSection } from '@/features/bridge/describe-section';
-import { isBookLibrary } from '@/lib/library-kind';
 import { GenerateSection } from '@/features/bridge/generate-section';
 import { ShareSection } from '@/features/bridge/share-section';
 import { ProgressMenu } from '@/features/people/progress-actions';
@@ -169,7 +169,7 @@ function CommunityCard({
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const server = useServerInfo();
-  const library = useLibraries().data?.find((l) => l.id === detail.book.library_id);
+  const bookLibrary = useBookLibraries()?.some((l) => l.id === detail.book.library_id);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
   const asin = detail.fields.asin.value;
   const isbn = detail.fields.isbn.value;
@@ -334,7 +334,7 @@ function CommunityCard({
       )}
       {unlinkDialog}
       {matched ? <CorrectionsSection detail={detail} blocked={matchBlocked} /> : null}
-      {library && isBookLibrary(library) ? (
+      {bookLibrary ? (
         <>
           <GenerateSection book={detail.book} />
           <ShareSection book={detail.book} />

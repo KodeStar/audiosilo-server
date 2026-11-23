@@ -34,7 +34,7 @@ export function AddFolderDialog({
       <DialogContent
         size="lg"
         icon={FolderPlus}
-        title={t('shares.addFolderTitle', { name: shareLabel(share, [], t) })}
+        title={t('shares.addFolderTitle', { name: shareLabel(share, t) })}
         description={t('shares.addFolderDescription')}
       >
         <DialogBody>
@@ -97,7 +97,7 @@ function LibraryPicker({
       await api.addSharePath(share.id, { library_id: library.id, path: rulePath });
       invalidatePeople(qc);
       toast.add({
-        title: t('shares.toast.folderAdded', { what: label, share: shareLabel(share, [], t) }),
+        title: t('shares.toast.folderAdded', { what: label, share: shareLabel(share, t) }),
         type: 'success',
       });
       onDone();

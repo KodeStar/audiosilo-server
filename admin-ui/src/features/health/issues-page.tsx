@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { isBookLibrary } from '@/lib/library-kind';
 import { useTranslation } from 'react-i18next';
 import { RefreshCw } from 'lucide-react';
-import { useIssues, useLibraries } from '@/api/hooks';
+import { useBookLibraries, useIssues, useLibraries } from '@/api/hooks';
+import { offersLibraryChoice } from '@/features/library/library-param';
 import { scanActive } from '@/lib/library-scan';
 import type { IssueCount, IssueKind, OfflineLibrary } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
@@ -44,10 +44,11 @@ export function IssuesPage() {
   // Duplicates in other libraries too, when asked (#165): kept across a change
   // of category or of the ignored view, so its ignored groups can be reached
   // when the count (within each library) has none, and a reload keeps it.
-  const several = (libraries.data?.filter(isBookLibrary).length ?? 0) > 1;
+  const bookLibraries = useBookLibraries();
+  const several = offersLibraryChoice(bookLibraries ?? []);
   const across = several && !!search.across;
   useEffect(() => {
-    if (libraries.data && !several && search.across) {
+    if (bookLibraries && !several && search.across) {
       void navigate({
         to: '.',
         search: (prev) => ({ ...prev, across: undefined }),
@@ -55,7 +56,7 @@ export function IssuesPage() {
         resetScroll: false,
       });
     }
-  }, [libraries.data, several, search.across, navigate]);
+  }, [bookLibraries, several, search.across, navigate]);
   const go = (next: { issue?: IssueKind; ignored?: true }, on = across) =>
     void navigate({ to: '.', search: { ...next, across: on || undefined }, replace: true });
   const setAcross = (on: boolean) => go({ issue: search.issue, ignored: search.ignored }, on);

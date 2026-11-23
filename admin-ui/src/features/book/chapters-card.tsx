@@ -3,7 +3,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { AudioLines, Info, ListRestart, Lock, Pencil, Undo2 } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateIssues, keys, settleBookEdit, useLibraries, useServerInfo } from '@/api/hooks';
+import {
+  invalidateIssues,
+  keys,
+  settleBookEdit,
+  useBookLibraries,
+  useServerInfo,
+} from '@/api/hooks';
 import type { AdminBookDetail, AdminChapter, BookEditRequest, ChapterSource } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { InlineEdit } from '@/components/inline-edit';
@@ -18,7 +24,6 @@ import { useBookGenerateJob, useBridgeLink } from '@/features/bridge/use-generat
 import { DetectChaptersDialog } from '@/features/health/detect-chapters-dialog';
 import { toastError } from '@/lib/errors';
 import { formatClock, formatDateTime, formatDuration } from '@/lib/format';
-import { isBookLibrary } from '@/lib/library-kind';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -56,8 +61,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const server = useServerInfo().data;
   // An episode's chapters are its feed's: the server refuses an edit in a
   // podcast library (409 not_book_library), so none is offered there.
-  const library = useLibraries().data?.find((l) => l.id === b.library_id);
-  const bookLibrary = library !== undefined && isBookLibrary(library);
+  const bookLibrary = useBookLibraries()?.some((l) => l.id === b.library_id) ?? false;
   // The book's chapter detection: when its job ends the book is fetched again
   // (useBookGenerateJob), so the chapters it found show here, metadata or not.
   // Its state shows here while it is open or ended without chapters (a parked

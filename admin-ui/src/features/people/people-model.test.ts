@@ -97,13 +97,13 @@ describe('access', () => {
       expect(isLibraryGrant(s)).toBe(true);
     }
     // Its generated name identifies a folder share once its whole-library rule is gone.
-    expect(shareLabel(narrowed, libs, i18n.t)).toBe('Folder share (Kids)');
+    expect(shareLabel(narrowed, i18n.t, libs)).toBe('Folder share (Kids)');
   });
 
   it('names whole-library grants after their library', () => {
-    expect(shareLabel(whole, libs, i18n.t)).toBe('Kids');
-    expect(shareLabel(named, libs, i18n.t)).toBe('Cosy mysteries');
-    expect(shareLabel(whole, [], i18n.t)).toBe('Library: Kids');
+    expect(shareLabel(whole, i18n.t, libs)).toBe('Kids');
+    expect(shareLabel(named, i18n.t, libs)).toBe('Cosy mysteries');
+    expect(shareLabel(whole, i18n.t)).toBe('Library: Kids');
   });
 
   it('round-trips access choices', () => {

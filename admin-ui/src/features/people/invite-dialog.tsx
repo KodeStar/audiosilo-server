@@ -158,7 +158,7 @@ function InviteForm({
       : []),
     ...named.map((s) => ({
       value: accessValue({ kind: 'share', id: s.id }),
-      title: shareLabel(s, [], t),
+      title: shareLabel(s, t),
       description: t('invite.access.shareBody', { count: s.paths?.length ?? 0 }),
     })),
     { value: 'none', title: t('invite.access.none'), description: t('invite.access.noneBody') },

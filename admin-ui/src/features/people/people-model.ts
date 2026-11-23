@@ -87,8 +87,8 @@ export function parseAccessChoice(value: string): AccessChoice | undefined {
  */
 export function shareLabel(
   share: Share,
-  libraries: readonly Pick<Library, 'id' | 'name'>[],
   t: TFunction,
+  libraries: readonly Pick<Library, 'id' | 'name'>[] = [],
 ) {
   const id = wholeLibraryOf(share);
   if (id !== undefined) return libraries.find((l) => l.id === id)?.name || share.name;

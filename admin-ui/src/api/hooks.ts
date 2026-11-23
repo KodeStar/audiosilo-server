@@ -114,6 +114,9 @@ export const keys = {
   browseLibrary: (libraryId: number) => ['fs', libraryId] as const,
   browse: (libraryId: number, path: string) => ['fs', libraryId, path] as const,
   folderDetail: (libraryId: number, path: string) => ['fs', libraryId, path, 'detail'] as const,
+  /** The selected folder's pages after its first, from `offset`, for its totals. */
+  folderRest: (libraryId: number, path: string, offset: number) =>
+    ['fs', libraryId, path, 'rest', offset] as const,
   /** A later page of a folder's listing, from `offset` (under `browse`, so its refetches reach it). */
   browsePage: (libraryId: number, path: string, offset: number) =>
     ['fs', libraryId, path, offset] as const,

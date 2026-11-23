@@ -468,7 +468,7 @@ function AccessTab({ detail }: { detail: UserDetail }) {
           <ul className="divide-y">
             {grants.map((share) => {
               const library = wholeLibraryOf(share) !== undefined;
-              const label = shareLabel(share, libs, t);
+              const label = shareLabel(share, t, libs);
               return (
                 <AccessRow
                   key={share.id}
