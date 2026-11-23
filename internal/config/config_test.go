@@ -140,6 +140,8 @@ func TestValidate(t *testing.T) {
 	}{
 		{"missing data dir", func(c *Config) { c.DataDir = "" }, true},
 		{"negative mirror interval", func(c *Config) { c.Metadata.MirrorSettings.Interval = -time.Hour }, true},
+		{"mirror interval under an hour", func(c *Config) { c.Metadata.MirrorSettings.Interval = time.Minute }, true},
+		{"mirror interval of an hour", func(c *Config) { c.Metadata.MirrorSettings.Interval = time.Hour }, false},
 		{"bad bind", func(c *Config) { c.Bind = "no-port" }, true},
 		{"autocert needs hosts", func(c *Config) { c.TLS = TLSConfig{Mode: TLSAutocert} }, true},
 		{"autocert with hosts", func(c *Config) { c.TLS = TLSConfig{Mode: TLSAutocert, Hosts: []string{"x.example.com"}} }, false},

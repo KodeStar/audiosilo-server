@@ -224,7 +224,8 @@ metadata:
   # [AUDIOSILO_METADATA_MODE]
   mode: remote
   mirror:
-    # Time between successful release checks, read at startup. Zero uses one week.
+    # Time between successful release checks, read at startup: 0 for one week,
+    # else at least 1h.
     interval: 168h
   # Help complete the community database (Settings > Metadata; off by default,
   # applies at once): once a day, send the metadata service the Audible ASINs of

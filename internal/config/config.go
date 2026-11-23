@@ -378,6 +378,10 @@ type MetadataConfig struct {
 	ReportUnknown bool `yaml:"report_unknown"`
 }
 
+// MinMirrorInterval is the shortest metadata.mirror.interval: the mirror's
+// retry after a failed check.
+const MinMirrorInterval = time.Hour
+
 // The metadata.mode values.
 const (
 	MetadataRemote = "remote"
@@ -802,8 +806,11 @@ func (c *Config) Validate() error {
 		return fieldErr("upcoming.window_days", fmt.Errorf("upcoming.window_days must be from 1 to %d, got %d",
 			MaxUpcomingWindowDays, w))
 	}
-	if c.Metadata.MirrorSettings.Interval < 0 {
-		return fieldErr("metadata.mirror.interval", errors.New("metadata.mirror.interval must be non-negative"))
+	// Each new data release is a full download, and a failed check waits an
+	// hour: an interval below that would only ask GitHub more often.
+	if i := c.Metadata.MirrorSettings.Interval; i < 0 || (i > 0 && i < MinMirrorInterval) {
+		return fieldErr("metadata.mirror.interval", fmt.Errorf("metadata.mirror.interval must be 0 (one week) or at least %v, got %v",
+			MinMirrorInterval, i))
 	}
 	if mode := c.Metadata.ModeName(); !slices.Contains(MetadataModes, mode) {
 		return fieldErr("metadata.mode", fmt.Errorf("metadata.mode must be one of %s, got %q",
