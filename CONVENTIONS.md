@@ -2984,7 +2984,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   way. An item recorded before 0070 (`unchanged` '') is planned as before.
   The review posts the selected scope, includes and excludes to `POST /admin/match-runs/{id}/preview`.
   The returned run's `apply_count` counts the same selection the apply reads, including older
-  items with no recorded unchanged scopes. A refresh still reads the confident pages to exclude
+  items with no recorded unchanged scopes, and it refuses what the apply refuses
+  (`matchrun.CheckApply`: not ready, a scope the mode doesn't take). A refresh still reads the confident pages to exclude
   gone books, while leaving recorded no-ops to the shared SQL selection. A zero-count refresh
   finishes through Done. The apply's reply reports the number taken in `apply_total`.
   Apply caps manual includes at 20,000 ids; exclusions use the existing 1 MiB

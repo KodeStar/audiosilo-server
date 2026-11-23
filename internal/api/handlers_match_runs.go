@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -232,14 +231,10 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, matchrun.ErrBusy):
 		writeErrorCode(w, http.StatusConflict, codeMatchRunBusy, "a match run is already working")
 		return
-	case errors.Is(err, matchrun.ErrScope):
-		writeError(w, http.StatusBadRequest, "scope must be one of "+strings.Join(matchrun.ScopesFor(run.Mode), ", "))
-		return
-	case errors.Is(err, catalog.ErrRunNotReady):
-		writeErrorCode(w, http.StatusConflict, codeMatchRunNotReady, "the match run is not ready to apply")
-		return
 	case errors.Is(err, catalog.ErrNotFound): // cleared since matchRunFor loaded it
 		writeError(w, http.StatusNotFound, "no such match run")
+		return
+	case writeApplyRefusal(w, run, err):
 		return
 	case err != nil:
 		a.writeCatalogError(w, err, "apply match run failed", "could not apply the match run", "run", run.ID)
@@ -259,8 +254,7 @@ func (a *API) handlePreviewMatchRun(w http.ResponseWriter, r *http.Request) {
 	if run == nil {
 		return
 	}
-	if run.Status != catalog.MatchReady {
-		writeErrorCode(w, http.StatusConflict, codeMatchRunNotReady, "the match run is not ready to apply")
+	if writeApplyRefusal(w, run, matchrun.CheckApply(run, opts.Scope)) {
 		return
 	}
 	count, err := a.cat.CountMatchItemsToApply(r.Context(), run.ID, opts.Scope, opts.Include, opts.Exclude)
@@ -272,6 +266,21 @@ func (a *API) handlePreviewMatchRun(w http.ResponseWriter, r *http.Request) {
 		*catalog.MatchRun
 		ApplyCount int `json:"apply_count"`
 	}{run, count})
+}
+
+// writeApplyRefusal answers matchrun.CheckApply's refusals (409
+// match_run_not_ready, 400 for a scope run's mode doesn't take), reporting
+// whether err was one.
+func writeApplyRefusal(w http.ResponseWriter, run *catalog.MatchRun, err error) bool {
+	switch {
+	case errors.Is(err, matchrun.ErrScope):
+		writeError(w, http.StatusBadRequest, "scope must be one of "+strings.Join(matchrun.ScopesFor(run.Mode), ", "))
+	case errors.Is(err, catalog.ErrRunNotReady):
+		writeErrorCode(w, http.StatusConflict, codeMatchRunNotReady, "the match run is not ready to apply")
+	default:
+		return false
+	}
+	return true
 }
 
 func (a *API) readApplyRequest(w http.ResponseWriter, r *http.Request) (*catalog.MatchRun, matchrun.ApplyOptions) {
@@ -297,10 +306,6 @@ func (a *API) readApplyRequest(w http.ResponseWriter, r *http.Request) (*catalog
 	}
 	run := a.matchRunFor(w, r)
 	if run == nil {
-		return nil, matchrun.ApplyOptions{}
-	}
-	if scopes := matchrun.ScopesFor(run.Mode); scopes != nil && !slices.Contains(scopes, req.Scope) {
-		writeError(w, http.StatusBadRequest, "scope must be one of "+strings.Join(scopes, ", "))
 		return nil, matchrun.ApplyOptions{}
 	}
 	return run, matchrun.ApplyOptions{Scope: req.Scope, Include: req.Include, Exclude: req.Exclude, UserID: userFrom(r.Context()).ID}
