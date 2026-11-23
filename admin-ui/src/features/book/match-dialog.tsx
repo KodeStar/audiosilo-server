@@ -311,7 +311,7 @@ function MatchCompare({
   const ticks = new Set(
     rows.filter((r) => r.offered && (choices[r.field] ?? r.planned)).map((r) => r.field),
   );
-  const coverUrl = proposal?.cover_url ?? '';
+  const coverUrl = proposal?.cover_url ?? communityCover(picked, rec);
   const coverTick =
     coverChoice ?? (proposal?.cover === true && cachedCommunityCover(qc, coverUrl) !== null);
   const taking = ticks.size + Number(coverTick);
@@ -392,7 +392,7 @@ function MatchCompare({
       <DialogBody className="flex flex-col gap-4">
         <CompareHeader
           candidate={picked}
-          coverUrl={proposal?.cover_url ?? communityCover(picked, rec)}
+          coverUrl={coverUrl}
           recording={rec}
           bookSeconds={b.duration}
           onRecording={onRecording}

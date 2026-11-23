@@ -2533,13 +2533,17 @@ export interface ProposalFields {
   revert?: OverrideField[];
 }
 
-export interface BookMatchProposal extends ProposalFields {
+/** The planned fields, with the series plan for the other choice of main series. */
+export interface SeriesPlan extends ProposalFields {
+  alternate_series?: ProposalFields;
+}
+
+export interface BookMatchProposal extends SeriesPlan {
   work_id: string;
   recording_id: string;
   cover_url: string;
   cover: boolean;
   match: boolean;
-  alternate_series?: ProposalFields;
 }
 
 export interface MatchApplyRequest {

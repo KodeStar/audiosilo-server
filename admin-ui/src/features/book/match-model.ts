@@ -3,7 +3,7 @@ import {
   isLabelField,
   type BookEditRequest,
   type BookMatchProposal,
-  type ProposalFields,
+  type SeriesPlan,
   type FieldSource,
   type FieldValue,
   type MatchCandidate,
@@ -59,9 +59,11 @@ export interface CompareRow {
   theirs: string;
   /** The community agrees with what the server has. */
   same: boolean;
-  /** The community has a different, non-empty value: a checkbox. */
+  /** A checkbox: the server plans a write, or the community has a different, non-empty value. */
   offered: boolean;
+  /** The planned write puts the scanned value back (a stale community value). */
   revert: boolean;
+  /** The server's plan writes this field: the checkbox's default. */
   planned: boolean;
 }
 
@@ -71,7 +73,7 @@ export interface CompareRow {
  */
 export function compareRows(
   fields: Record<OverrideField, FieldValue>,
-  proposal: ProposalFields & Pick<BookMatchProposal, 'alternate_series'>,
+  proposal: SeriesPlan,
   takeSeries?: boolean,
 ): CompareRow[] {
   const seriesDefault = !!proposal.set.series || !!proposal.revert?.includes('series');

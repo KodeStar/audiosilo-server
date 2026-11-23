@@ -7,7 +7,7 @@ import {
   type FieldValue,
   type MatchCandidate,
   type MatchRecording,
-  type BookMatchProposal,
+  type SeriesPlan,
   type MetaCorrectChange,
   type MetaCorrectParams,
   type OverrideField,
@@ -301,7 +301,7 @@ export function correctionRows(
   fields: Record<OverrideField, FieldValue>,
   c: MatchCandidate,
   { rec, known }: CorrectionRecording,
-  proposal: Pick<BookMatchProposal, 'set' | 'values' | 'revert' | 'alternate_series'>,
+  proposal: SeriesPlan,
 ): CorrectionRow[] {
   const edited = new Set<string>(editedCorrectionFields(fields));
   // A correction compares the community's own series and position even when
