@@ -5391,8 +5391,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (the first with metadata on: no copy loads while it is off) waits for the local copy (`mirrorReady`,
   at most 10 min, server#282), so a start sends no lookups to the service while the copy loads. The book page's
   `community_check_failed` says the last check failed. Pause windows for a file run in one
-  ffmpeg process. They stop four minutes into the five-minute check, including lookup time.
-  The remaining boundaries keep their proportional positions while the fit is saved.
+  ffmpeg process (an ffmpeg older than 5.0, whose concat lists take no per-file options, runs
+  one a window). They stop four minutes into the five-minute check, including lookup time.
+  The remaining boundaries, and the window being read when the time ran out, keep their
+  proportional positions while the fit is saved.
   `refreshEffective` -> `applyChapterSource` (after an admin's edited list, Edited chapters below) puts the
   community chapters in the `chapters` rows when a current check fitted and either the admin chose them
   (`chapter_choices`: `files`|`community`, durable, path-keyed, moved with the book's

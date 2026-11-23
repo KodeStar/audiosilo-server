@@ -624,7 +624,9 @@ func TestRunWaitsForReady(t *testing.T) {
 
 // A 48 hour recording on a slow share can use every second left after the
 // lookup on pause detection. Scale down the check deadline to exercise the
-// same path as the five minute check without a five minute test.
+// same path as the five minute check without a five minute test. ffmpeg is cut
+// off inside a pause it reached 1000 s into the windows: the first window, read
+// whole, snaps; the pause still open and the windows past it don't.
 func TestLongBookSavesFitWhenProbesRunOutOfTime(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the slow ffmpeg stand-in is a shell script")
@@ -642,7 +644,7 @@ echo '  Duration: 48:00:00, start: 0.000000, bitrate: N/A' >&2
 cat >/dev/null
 echo '[silencedetect @ 0x1] silence_start: 1' >&2
 echo '[silencedetect @ 0x1] silence_end: 2' >&2
-echo '[silencedetect @ 0x1] silence_start: 3' >&2
+echo '[silencedetect @ 0x1] silence_start: 1000' >&2
 exec sleep 30
 `
 	if err := os.WriteFile(stand, []byte(script), 0o755); err != nil { //nolint:gosec // executable test helper

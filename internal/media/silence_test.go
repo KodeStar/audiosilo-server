@@ -6,12 +6,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 func TestParseSilences(t *testing.T) {
@@ -106,17 +109,8 @@ echo '  Duration: 00:01:00, start: 2.000000, bitrate: N/A' >&2
   cat
 } >> '` + record + `'
 `
-	syscall.ForkLock.RLock()
-	err := os.WriteFile(stand, []byte(script), 0o755) //nolint:gosec // executable test helper
-	syscall.ForkLock.RUnlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(dir, "a.mp3")
-	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err = DetectSilences(t.Context(), stand, dir, file, []metadata.TimeRange{{Start: 0, End: 5}, {Start: 11, End: 20}, {Start: 30, End: 32}})
+	file := writeStandIn(t, stand, script)
+	_, err := DetectSilences(t.Context(), stand, dir, file, []metadata.TimeRange{{Start: 0, End: 5}, {Start: 11, End: 20}, {Start: 30, End: 32}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,5 +124,95 @@ echo '  Duration: 00:01:00, start: 2.000000, bitrate: N/A' >&2
 		strings.Count(log, "option format_whitelist "+metadata.InputFormats+"\n") != 3 ||
 		!strings.Contains(log, "inpoint 13.000000\noutpoint 22.000000") {
 		t.Fatalf("ffmpeg calls and seek list:\n%s", log)
+	}
+}
+
+// writeStandIn writes an executable ffmpeg stand-in at stand and returns a
+// one-byte audio file beside it. The write is held so no exec another parallel
+// test forks meanwhile inherits the script still open for writing (ETXTBSY on
+// Linux, golang/go#22315).
+func writeStandIn(t *testing.T, stand, script string) string {
+	t.Helper()
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(stand, []byte(script), 0o755) //nolint:gosec // executable test helper
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(filepath.Dir(stand), "a.mp3")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// When the budget runs out mid-list, a window read whole keeps its pauses and
+// the window being read gets none, rather than the pauses of its first part.
+func TestDetectSilencesBudgetKeepsWholeWindows(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the ffmpeg stand-in is a shell script")
+	}
+	dir := t.TempDir()
+	stand := filepath.Join(dir, "ffmpeg")
+	file := writeStandIn(t, stand, `#!/bin/sh
+echo '  Duration: 00:10:00, start: 0.000000, bitrate: N/A' >&2
+cat >/dev/null
+echo '[silencedetect @ 0x1] silence_start: 2' >&2
+echo '[silencedetect @ 0x1] silence_end: 3 | silence_duration: 1' >&2
+echo '[silencedetect @ 0x1] silence_start: 12' >&2
+echo '[silencedetect @ 0x1] silence_end: 13 | silence_duration: 1' >&2
+echo '[silencedetect @ 0x1] silence_start: 14' >&2
+exec sleep 30
+`)
+	ctx, cancel := context.WithTimeout(t.Context(), testwait.Scaled(time.Second))
+	defer cancel()
+	got, err := DetectSilences(ctx, stand, dir, file, []metadata.TimeRange{{Start: 0, End: 10}, {Start: 100, End: 110}, {Start: 200, End: 210}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || len(got[0]) != 1 || got[0][0] != (metadata.TimeRange{Start: 2, End: 3}) || got[1] != nil || got[2] != nil {
+		t.Fatalf("pauses %v, want 2-3 in the first window and none in the window cut off", got)
+	}
+}
+
+// An ffmpeg older than 5.0 refuses the list's per-file options: each window
+// then runs on its own, seeking with -ss, still held to the audio demuxers.
+func TestDetectSilencesOldFFmpegRunsEachWindow(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the ffmpeg stand-in is a shell script")
+	}
+	dir := t.TempDir()
+	stand, record := filepath.Join(dir, "ffmpeg"), filepath.Join(dir, "calls")
+	file := writeStandIn(t, stand, `#!/bin/sh
+case " $* " in
+*" concat "*)
+  echo '  Duration: 00:10:00, start: 0.000000, bitrate: N/A' >&2
+  cat >/dev/null
+  echo "[concat @ 0x1] Line 2: unknown keyword 'option'" >&2
+  echo 'pipe:0: Invalid data found when processing input' >&2
+  exit 1;;
+esac
+{ echo invocation; printf '%s\n' "$@"; } >> '`+record+`'
+echo '[silencedetect @ 0x1] silence_start: 1' >&2
+echo '[silencedetect @ 0x1] silence_end: 2 | silence_duration: 1' >&2
+`)
+	got, err := DetectSilences(t.Context(), stand, dir, file, []metadata.TimeRange{{Start: 10, End: 20}, {Start: 30, End: 35}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]metadata.TimeRange{{{Start: 11, End: 12}}, {{Start: 31, End: 32}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pauses %v, want %v", got, want)
+	}
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if strings.Count(log, "invocation\n") != 2 || !strings.Contains(log, "-ss\n30.000\n-t\n5.000\n") ||
+		strings.Count(log, "-format_whitelist\n"+metadata.InputFormats+"\n-i\n") != 2 {
+		t.Fatalf("per-window runs:\n%s", log)
 	}
 }
