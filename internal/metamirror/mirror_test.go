@@ -290,6 +290,27 @@ func TestMirrorSchemaNewer(t *testing.T) {
 	}
 }
 
+// publishedSchema is the artifact schema audiosilo-meta's data releases carry
+// (14 since v0.27.0: work alternate titles, recording abridgement, page
+// revision dates). Raise it with the pin when the releases move on.
+const publishedSchema = 14
+
+// Today's data releases are understood: a mirror holding one is ready, never
+// flagged as newer than this code ("Needs attention" in the console).
+func TestMirrorUnderstandsThePublishedSchema(t *testing.T) {
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(mirrortest.Fixture(t, publishedSchema), "data-v2026.11.22-ccccccc-ddddddd")...)
+	m := newMirror(t, t.TempDir(), gh, Options{})
+	m.check(context.Background())
+	st := m.Status()
+	if st.State != StateReady || st.SchemaNewer || st.SchemaVersion != publishedSchema {
+		t.Fatalf("status = %+v", st)
+	}
+	b, _ := json.Marshal(st)
+	if strings.Contains(string(b), "schema_newer") {
+		t.Fatalf("wire = %s", b)
+	}
+}
+
 // The disk guard refuses a download the volume has no room for, before any
 // byte is fetched.
 func TestMirrorDiskGuard(t *testing.T) {
