@@ -360,33 +360,40 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 
 // TestConcurrentEmitsDedupOnce (server#408): emits of one kind and dedup key
 // at the same moment (two callbacks for one waiting sign-in) announce it
-// once; another key is still announced.
+// once; another key is still announced. Queued (one goroutine records them)
+// and once closed, where each records on its caller's goroutine, at once
+// (dedupMu).
 func TestConcurrentEmitsDedupOnce(t *testing.T) {
-	s, cat, ctx := newService(t)
-	const n = 16
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			key := "pending:1"
-			if i == 0 {
-				key = "pending:2"
+	for _, closed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("closed=%v", closed), func(t *testing.T) {
+			s, cat, ctx := newService(t)
+			if closed {
+				s.Close()
 			}
-			s.Emit(ctx, Event{Kind: KindOIDCPending, Data: map[string]any{"provider": "Keycloak"}, Dedup: key})
-		}()
-	}
-	close(start)
-	wg.Wait()
-	s.Flush()
-	events, _, err := cat.ListServerEvents(ctx, 0, 50, KindOIDCPending)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 2 {
-		t.Fatalf("%d events for two keys emitted %d times at once, want 2", len(events), n)
+			const n = 16
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			for i := range n {
+				wg.Go(func() {
+					<-start
+					key := "pending:1"
+					if i == 0 {
+						key = "pending:2"
+					}
+					s.Emit(ctx, Event{Kind: KindOIDCPending, Data: map[string]any{"provider": "Keycloak"}, Dedup: key})
+				})
+			}
+			close(start)
+			wg.Wait()
+			s.Flush()
+			events, _, err := cat.ListServerEvents(ctx, 0, 50, KindOIDCPending)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 2 {
+				t.Fatalf("%d events for two keys emitted %d times at once, want 2", len(events), n)
+			}
+		})
 	}
 }
 

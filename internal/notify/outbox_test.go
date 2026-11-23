@@ -234,7 +234,9 @@ func TestNoticeQueuedTwiceAtStartGoesOnce(t *testing.T) {
 	addTarget(t, cat, TargetWebhook, held.URL, "", KindScanFailed)
 
 	s := newTestService(cat)
+	t.Cleanup(s.Close)
 	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
+	s.Flush() // recorded (and queued by its own Deliver) before the start's read
 	runCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	s.Run(runCtx)
@@ -433,5 +435,59 @@ func TestEmitDoesNotWaitForTheWriter(t *testing.T) {
 	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Late"}, Status: catalog.RunFailed})
 	if events, _, _ := cat.ListServerEvents(ctx, 0, 10, KindScanFailed); len(events) != 4 {
 		t.Fatalf("an event emitted after Close isn't recorded at once: %d events", len(events))
+	}
+}
+
+// An event emitted while Close is still recording the queue is recorded after
+// what was queued, not beside it: the order emitted holds through the stop,
+// and a Flush then still means every earlier event is in the feed.
+func TestEmitDuringCloseKeepsTheOrder(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	s := newTestService(cat)
+
+	held, gate := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(release) // before the database closes, on a test that failed holding it
+	writer := make(chan error, 1)
+	go func() {
+		writer <- db.WithTx(ctx, "hold", func(*sql.Tx) error {
+			close(held)
+			<-gate
+			return nil
+		})
+	}()
+	<-held
+	for _, name := range []string{"First", "Second"} {
+		s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: name}, Status: catalog.RunFailed})
+	}
+	closed := make(chan struct{})
+	go func() { s.Close(); close(closed) }()
+	testwait.Eventually(t, "Close to begin", 5*time.Second, func() bool {
+		s.emitMu.RLock()
+		defer s.emitMu.RUnlock()
+		return s.closed
+	})
+	late := make(chan struct{})
+	go func() {
+		s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Late"}, Status: catalog.RunFailed})
+		s.Flush()
+		close(late)
+	}()
+	release()
+	if err := <-writer; err != nil {
+		t.Fatal(err)
+	}
+	<-closed
+	<-late
+	events, _, err := cat.ListServerEvents(ctx, 0, 10, KindScanFailed)
+	if err != nil || len(events) != 3 {
+		t.Fatalf("events = %+v, %v; want three", events, err)
+	}
+	for i, want := range []string{"Late", "Second", "First"} { // newest first
+		if got := events[i].Data["library"]; got != want {
+			t.Fatalf("event %d is %v's, want %s's (recorded out of order)", i, got, want)
+		}
 	}
 }

@@ -4767,7 +4767,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   podcast notice recorded with its write, rides the same queue; `Flush` for a caller that reads the
   feed next: a test, and `BackupFailed`, as the console reads the feed once it sees the run end), and
   `Service.Close`, deferred by the launcher before the database's, records what is still queued (an
-  emit after it is recorded on its caller's goroutine), server#224. Each recorded event queues each
+  emit after it is recorded on its caller's goroutine once the queue is drained, so the order holds), server#224. Each recorded event queues each
   enabled subscribed destination (4 workers, queue 256, left owed + logged when full); a delivery is
   retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
   worker), three attempts in all, restarts included. Every delivery is kept in the **outbox**

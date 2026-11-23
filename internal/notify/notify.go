@@ -23,7 +23,7 @@
 // (recordQueued), so events are recorded in the order they were emitted. A burst
 // past emitQueue waits for room rather than dropping one. Close, before the
 // database closes, records what is still queued; an event emitted after it is
-// recorded on its caller's goroutine, as before.
+// recorded on its caller's goroutine, as before, once the queue is drained.
 //
 // One destination's notices go one at a time, in the order their events were
 // recorded (drain): a later one waits while an earlier one is still owed, its
@@ -303,11 +303,14 @@ func (s *Service) Close() {
 }
 
 // enqueue puts m on the record queue (waiting for room when it is full), or
-// handles it here once Close has run.
+// handles it here once Close has run: after the events still queued then, so
+// they stay in the order emitted and a Flush still means every earlier one is
+// recorded.
 func (s *Service) enqueue(m emission) {
 	s.emitMu.RLock()
 	if s.closed {
 		s.emitMu.RUnlock()
+		s.recording.Wait()
 		s.handle(m)
 		return
 	}
