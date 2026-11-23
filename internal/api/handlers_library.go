@@ -649,15 +649,18 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	if rel != "" && !early && !a.fsGiven(w, r, lib, rel, allow) {
 		return
 	}
-	// Annotate the folder and its children in the same catalog lookup.
-	entries := listing.Entries
+	// Annotate the folder and its children in the same catalog lookup, the folder
+	// first: the pending-book look has a time budget, and its own entry is the
+	// one the detail shows.
 	if detail && listing.Offset == 0 {
+		entries := make([]library.Entry, 0, len(listing.Entries)+1)
 		entries = append(entries, library.Entry{Path: rel, Name: filepath.Base(rel), IsDir: true})
-		listing.Folder = &entries[len(entries)-1]
+		entries = append(entries, listing.Entries...)
+		a.annotateWithBooks(r, lib, scope, ignore, entries)
+		listing.Folder, listing.Entries = &entries[0], entries[1:]
+	} else {
+		a.annotateWithBooks(r, lib, scope, ignore, listing.Entries)
 	}
-	a.annotateWithBooks(r, lib, scope, ignore, entries)
-	// Appending the folder may have allocated a new backing array.
-	listing.Entries = entries[:len(listing.Entries)]
 	if detail && len(listing.Entries) > 0 && listing.Entries[len(listing.Entries)-1].IsAudio {
 		if err := a.folderFileLengths(r.Context(), lib.ID, listing); err != nil {
 			a.writeCatalogError(w, err, "read folder file lengths failed", "Could not read the folder.")
@@ -669,8 +672,15 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 
 // folderFileLengths fills lengths for parts of a folder book. Separate books
 // already carry theirs from MarkBooks. A joined disc belongs to its parent.
+// Only the page's parts are asked for: a folder of 50,000 files is read 500 a page.
 func (a *API) folderFileLengths(ctx context.Context, lib int64, listing *library.Listing) error {
-	lengths, err := a.cat.FolderFileLengths(ctx, lib, listing.Path)
+	var parts []string
+	for _, e := range listing.Entries {
+		if !e.IsBook && e.IsAudio {
+			parts = append(parts, e.Path)
+		}
+	}
+	lengths, err := a.cat.FolderFileLengths(ctx, lib, listing.Path, parts)
 	if err != nil {
 		return err
 	}

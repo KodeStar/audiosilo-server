@@ -77,11 +77,22 @@ func (c *Catalog) DeleteFolderOverride(ctx context.Context, libraryID int64, pat
 	return err
 }
 
-// FolderFileLengths returns indexed part lengths for a folder or one disc of a joined book.
-func (c *Catalog) FolderFileLengths(ctx context.Context, libraryID int64, folder string) (map[string]float64, error) {
+// FolderFileLengths returns the indexed lengths of files (a page of a listing,
+// at most a few hundred) as parts of the folder book at folder, or of the
+// joined book its folder is one disc of.
+func (c *Catalog) FolderFileLengths(ctx context.Context, libraryID int64, folder string, files []string) (map[string]float64, error) {
+	if len(files) == 0 {
+		return map[string]float64{}, nil
+	}
+	args := make([]any, 0, len(files)+3)
+	args = append(args, libraryID, folder, path.Dir(folder))
+	for _, f := range files {
+		args = append(args, f)
+	}
 	rows, err := c.db.QueryContext(ctx, `SELECT f.rel_path, f.duration FROM books b
         JOIN book_files f ON f.book_id = b.id WHERE b.library_id = ? AND b.is_folder = 1
-        AND b.rel_path IN (?, ?) ORDER BY length(b.rel_path)`, libraryID, folder, path.Dir(folder))
+        AND b.rel_path IN (?, ?) AND f.rel_path IN (`+placeholders(len(files))+`)
+        ORDER BY length(b.rel_path)`, args...)
 	if err != nil {
 		return nil, err
 	}
