@@ -1102,6 +1102,24 @@ func TestServerCancelReasonOutlivesReports(t *testing.T) {
 			t.Fatalf("%s after the server's cancel = %+v, %v; want %s with error %q", end.state, j, err, end.wantState, end.want)
 		}
 	}
+
+	// A row an older server stored as failed once asked to stop, keeping the
+	// reason, reads as the server's cancel on the single and the list read.
+	if _, _, err := q.describe("", ptr("Author/Old")); err != nil {
+		t.Fatal(err)
+	}
+	old := q.work(t, KindDescribe, "")
+	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET state = 'failed', cancel_requested = 1, error = ?,
+	        lease_until = NULL, finished_at = updated_at WHERE id = ?`, reason, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := q.Job(ctx, old.ID); err != nil || j.ErrorCode != ErrorServerCancelled {
+		t.Fatalf("old failed row = %+v, %v; want error_code %s", j, err, ErrorServerCancelled)
+	}
+	list, _, err := q.List(ctx, Filter{State: StateFailed})
+	if err != nil || len(list) != 1 || list[0].ID != old.ID || list[0].ErrorCode != ErrorServerCancelled {
+		t.Fatalf("listed failed jobs = %+v, %v; want the old row with error_code %s", list, err, ErrorServerCancelled)
+	}
 }
 
 // A claimed job of any kind whose stored params are not JSON (a damaged row)

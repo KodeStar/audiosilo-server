@@ -568,7 +568,9 @@ func scanJob(row rowScanner) (*Job, error) {
 	j.Params, j.Progress, j.Result = json.RawMessage(params), json.RawMessage(progress), json.RawMessage(result)
 	j.LeaseUntil, j.ClaimedAt, j.FinishedAt = nullable(lease), nullable(claimed), nullable(finished)
 	// A colliding move cancels immediately, without requesting a worker stop.
-	if (j.State == StateCancelled || (j.CancelRequested && IsOpenState(j.State))) && IsCancelReason(j.Error) {
+	// Any state with the stop asked: a server before server#491 stored a job
+	// that failed once asked to stop as failed, keeping the reason.
+	if (j.State == StateCancelled || j.CancelRequested) && IsCancelReason(j.Error) {
 		j.ErrorCode = ErrorServerCancelled
 	}
 	j = readableJob(j)
