@@ -248,7 +248,12 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, started)
 }
 
-// handlePreviewMatchRun returns the run with the count for this apply request.
+// handlePreviewMatchRun serves POST /admin/match-runs/{id}/preview, an apply's
+// body: the run with apply_count, the items that apply would take
+// (catalog.CountMatchItemsToApply, the selection Apply reads), changing nothing.
+// It refuses what an apply refuses (matchrun.CheckApply: 409
+// match_run_not_ready, 400 for a scope the run's mode doesn't take); 404 for a
+// run that isn't there.
 func (a *API) handlePreviewMatchRun(w http.ResponseWriter, r *http.Request) {
 	run, opts := a.readApplyRequest(w, r)
 	if run == nil {
@@ -283,6 +288,9 @@ func writeApplyRefusal(w http.ResponseWriter, run *catalog.MatchRun, err error) 
 	return true
 }
 
+// readApplyRequest reads an apply's (or its preview's) body and run, nil
+// having answered the error itself: metadata off, a body that doesn't decode, a
+// scope that isn't one, too many includes, no such run.
 func (a *API) readApplyRequest(w http.ResponseWriter, r *http.Request) (*catalog.MatchRun, matchrun.ApplyOptions) {
 	if a.metadataOff(w) {
 		return nil, matchrun.ApplyOptions{}

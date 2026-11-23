@@ -956,9 +956,9 @@ func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// A candidate found by a different search can also be named directly,
 		// with the book's facts beside the id as recordedCandidate keeps them.
-		q := mq
-		q.WorkID = work
-		named, err := a.meta.Candidates(r.Context(), q)
+		byID := mq
+		byID.WorkID = work
+		named, err := a.meta.Candidates(r.Context(), byID)
 		if err != nil {
 			a.log.Warn("match proposal lookup failed", "work", work, "err", err)
 			writeError(w, http.StatusBadGateway, "metadata service unavailable")
@@ -972,7 +972,7 @@ func (a *API) handleMatchProposal(w http.ResponseWriter, r *http.Request) {
 	}
 	var rec *meta.MatchRecording
 	if recording != "" {
-		i := slices.IndexFunc(c.Recordings, func(r meta.MatchRecording) bool { return r.ID == recording })
+		i := slices.IndexFunc(c.Recordings, func(m meta.MatchRecording) bool { return m.ID == recording })
 		if i < 0 {
 			writeError(w, http.StatusNotFound, "recording not found")
 			return
