@@ -87,6 +87,7 @@ func TestAudibleBridgeRoutesRefuseOtherCredentials(t *testing.T) {
 		{"PUT", "/api/v1/bridge/audible/accounts/" + testAccount,
 			fmt.Sprintf(`{"label":"x","marketplace":"us","user_id":%d,"library_id":%d,"policy":"manual","sync":true}`, b.adminID, b.lib.ID)},
 		{"PUT", "/api/v1/bridge/audible/accounts/" + testAccount + "/titles", `{"poll_id":"p1","final":false,"titles":[]}`},
+		{"GET", "/api/v1/bridge/audible/accounts/" + testAccount + "/titles", ""},
 		{"GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/books", b.lib.ID), ""},
 		{"PUT", fmt.Sprintf("/api/v1/bridge/libraries/%d/enrichment?path=%s", b.lib.ID, url.QueryEscape(mistbornBook)), `{"asin":"B000000001"}`},
 		{"DELETE", "/api/v1/bridge/audible/accounts/" + testAccount, ""},
@@ -479,6 +480,64 @@ func TestAudibleAccountPut(t *testing.T) {
 	// A refusal changed nothing; a re-map keeps created_at.
 	if code, out := b.putAccount(t, testAccount, b.adminID, b.lib.ID); code != http.StatusOK || !strings.Contains(out, a.CreatedAt) {
 		t.Fatalf("re-map: %d %s", code, out)
+	}
+}
+
+func TestBridgeAudibleTitleDecisions(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	setAudible(t, b.testEnv, b.adminTok, true)
+	const route = "/api/v1/bridge/audible/accounts/"
+	// An unknown account is unknown_account whatever the cursor: the Bridge
+	// reads only that as "map the account again".
+	for _, query := range []string{"", "?after=not-an-asin"} {
+		if resp, out := b.do(t, "GET", route+testAccount+"/titles"+query, b.bridgeTok, ""); resp.StatusCode != http.StatusNotFound || codeOf(out) != "unknown_account" {
+			t.Fatalf("before mapping %q: %d %s", query, resp.StatusCode, out)
+		}
+	}
+	for _, account := range []string{testAccount, "acct0002"} {
+		if code, out := b.putAccount(t, account, b.adminID, b.lib.ID); code != http.StatusOK {
+			t.Fatalf("account: %d %s", code, out)
+		}
+		if code, out := b.putTitles(t, account, "p1", false,
+			title("B000000001", "One", "available", b.lib.ID, mistbornBook),
+			title("B000000002", "Two", "available", 0, ""),
+			title("B000000003", "Three", "available", 0, "")); code != http.StatusOK {
+			t.Fatalf("titles: %d %s", code, out)
+		}
+	}
+	for _, asin := range []string{"B000000001", "B000000003"} {
+		resp, out := b.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/"+asin, b.adminTok, `{"rejected":true}`)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatal(out)
+		}
+	}
+	for _, tc := range []struct{ account, query, asin, next string }{
+		{testAccount, "?limit=1", "B000000001", "B000000001"},
+		{testAccount, "?limit=1&after=B000000001", "B000000003", ""},
+		{"acct0002", "", "", ""},
+	} {
+		resp, out := b.do(t, "GET", route+tc.account+"/titles"+tc.query, b.bridgeTok, "")
+		var page struct {
+			Titles []catalog.AudibleTitleDecision
+			Next   string
+		}
+		decodeInto(t, out, &page)
+		if resp.StatusCode != http.StatusOK || page.Next != tc.next || page.Titles == nil {
+			t.Fatalf("page: %d %s", resp.StatusCode, out)
+		}
+		if tc.asin == "" {
+			if len(page.Titles) != 0 {
+				t.Fatalf("another account's decisions: %s", out)
+			}
+		} else if len(page.Titles) != 1 || page.Titles[0].ASIN != tc.asin || !page.Titles[0].Rejected {
+			t.Fatalf("want only %s marked rejected: %s", tc.asin, out)
+		}
+	}
+	for query, code := range map[string]string{"?after=not-an-asin": "invalid_cursor", "?limit=0": "invalid_request"} {
+		if resp, out := b.do(t, "GET", route+testAccount+"/titles"+query, b.bridgeTok, ""); resp.StatusCode != http.StatusBadRequest || codeOf(out) != code {
+			t.Fatalf("%s: %d %s, want 400 %s", query, resp.StatusCode, out, code)
+		}
 	}
 }
 
@@ -921,6 +980,57 @@ func TestBridgeSeriesFolderCode(t *testing.T) {
 	none := &catalog.Book{RelPath: "A/Standalone"}
 	if got := bridgeSeries(none); len(got) != 0 {
 		t.Errorf("no series = %+v", got)
+	}
+}
+
+// The book an account marked a title "Not this book" on never takes that
+// title's ASIN (an older Bridge still asks): 409 asin_set, which every Bridge
+// takes as a skip, and nothing written. Undo lets it.
+func TestBridgeEnrichmentRefusesRejectedMatch(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	ctx := context.Background()
+	setAudible(t, b.testEnv, b.adminTok, true)
+	if _, err := b.db.ExecContext(ctx, `UPDATE books SET asin='' WHERE library_id=? AND rel_path=?`, b.lib.ID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := b.putAccount(t, testAccount, b.adminID, b.lib.ID); code != http.StatusOK {
+		t.Fatalf("account: %d %s", code, out)
+	}
+	if code, out := b.putTitles(t, testAccount, "p1", true, title("B000000001", "One", "available", b.lib.ID, mistbornBook)); code != http.StatusOK {
+		t.Fatalf("titles: %d %s", code, out)
+	}
+	patch := func(rejected string) {
+		t.Helper()
+		if resp, out := b.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001", b.adminTok, `{"rejected":`+rejected+`}`); resp.StatusCode != http.StatusOK {
+			t.Fatal(out)
+		}
+	}
+	enrich := func(asin string) (int, string) {
+		resp, out := b.do(t, "PUT", fmt.Sprintf("/api/v1/bridge/libraries/%d/enrichment?path=%s", b.lib.ID, url.QueryEscape(mistbornBook)), b.bridgeTok, `{"asin":"`+asin+`"}`)
+		return resp.StatusCode, out
+	}
+	patch("true")
+	gen := b.db.ContentGeneration()
+	if code, out := enrich("B000000001"); code != http.StatusConflict || codeOf(out) != "asin_set" {
+		t.Fatalf("the rejected book: %d %s", code, out)
+	}
+	if book, err := b.cat.GetBookByPath(ctx, b.lib.ID, mistbornBook); err != nil || book.ASIN != "" || b.db.ContentGeneration() != gen {
+		t.Fatalf("after the refusal: asin %q, %v, generation %d -> %d", book.ASIN, err, gen, b.db.ContentGeneration())
+	}
+	// Another ASIN on that book is no business of the mark.
+	if code, out := enrich("B000000009"); code != http.StatusNoContent {
+		t.Fatalf("another title's ASIN: %d %s", code, out)
+	}
+	if _, err := b.db.ExecContext(ctx, `UPDATE books SET asin='' WHERE library_id=? AND rel_path=?`, b.lib.ID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.db.ExecContext(ctx, `DELETE FROM book_enrichment WHERE library_id=? AND path=?`, b.lib.ID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	patch("false")
+	if code, out := enrich("B000000001"); code != http.StatusNoContent {
+		t.Fatalf("after Undo: %d %s", code, out)
 	}
 }
 

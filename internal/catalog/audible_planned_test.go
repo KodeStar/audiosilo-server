@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 )
@@ -110,6 +111,148 @@ func TestAudiblePlanned(t *testing.T) {
 	}
 	if tt := f.title(t, "B000000003"); tt.Planned != nil || tt.Contested != nil {
 		t.Fatalf("paused = planned %+v, contested %+v", tt.Planned, tt.Contested)
+	}
+}
+
+func TestRejectedMatchKeepsBackupPlan(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	ti := avail("B000000001", "Wrong edition")
+	book := AudibleMatch{LibraryID: f.lib.ID, Path: "Existing edition", How: "fuzzy"}
+	ti.Match = &book
+	f.poll(t, "p1", ti)
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	ti.Match, ti.Planned = nil, planned(f, "Own edition/Book.m4b")
+	other := contested("B000000002", "")
+	other.ContestedPath = book.Path
+	f.poll(t, "p2", ti, other)
+	if got := f.title(t, ti.ASIN); !got.Rejected || got.Match == nil || *got.Match != book ||
+		got.Planned == nil || *got.Planned != *ti.Planned || !got.CanBackup {
+		t.Fatalf("after the poll: %+v", got)
+	}
+	if got := f.title(t, other.ASIN); got.Contested == nil || len(got.Contested.With) != 0 {
+		t.Fatalf("rejected title still in contest: %+v", got.Contested)
+	}
+	got, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(false)})
+	if err != nil || got.Rejected || got.Match == nil || *got.Match != book || got.Planned != nil || got.CanBackup {
+		t.Fatalf("after Undo: %+v, %v", got, err)
+	}
+}
+
+// A backup's match marked "Not this book" is no kept import match: a poll
+// that names none stores the title's plan, and the match stays for Undo.
+func TestRejectedImportMatchKeepsBackupPlan(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib.ID, RelPath: "Author/Book", Title: "Book"}); err != nil {
+		t.Fatal(err)
+	}
+	ti := avail("B000000001", "")
+	book := AudibleMatch{LibraryID: f.lib.ID, Path: "Author/Book", How: "asin"}
+	ti.Match = &book
+	f.poll(t, "p1", ti)
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET match_how = ? WHERE asin = ?`,
+		AudibleMatchImport, ti.ASIN); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	ti.Match, ti.Planned = nil, planned(f, "Own edition/Book.m4b")
+	f.poll(t, "p2", ti)
+	book.How = AudibleMatchImport
+	if got := f.title(t, ti.ASIN); !got.Rejected || got.Match == nil || *got.Match != book ||
+		got.Planned == nil || *got.Planned != *ti.Planned {
+		t.Fatalf("after the poll: %+v", got)
+	}
+}
+
+// An Undo that lands while a poll runs: the poll read the title as rejected
+// and reports no match, so the match Undo accepted stays (no plan, and no
+// policy backup of a book already here) until the account's next complete
+// poll, which reads the decisions after the Undo.
+func TestRejectedMatchUndoDuringPoll(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "all")
+	f.tick(time.Hour)
+	f.poll(t, "p1") // the account's first complete poll: policy_since
+	f.tick(time.Hour)
+	ti := avail("B000000001", "")
+	book := AudibleMatch{LibraryID: f.lib.ID, Path: "Existing edition", How: "fuzzy"}
+	ti.Match = &book
+	f.poll(t, "p2", ti, avail("B000000002", ""))
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	// The poll reads the decisions (rejected), then the Undo lands, then the
+	// poll's titles: the first call before the Undo, the title in the second.
+	other := avail("B000000002", "")
+	if err := f.c.PutAudibleTitles(f.ctx, "acct0001", "p3", false, []AudibleTitleInput{other}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(false)}); err != nil {
+		t.Fatal(err)
+	}
+	ti.Match, ti.Planned = nil, planned(f, "Own edition/Book.m4b")
+	if err := f.c.PutAudibleTitles(f.ctx, "acct0001", "p3", true, []AudibleTitleInput{ti}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.title(t, ti.ASIN); got.Rejected || got.Match == nil || *got.Match != book || got.Planned != nil {
+		t.Fatalf("after the poll Undo raced: %+v", got)
+	}
+	if got := f.title(t, other.ASIN); got.State != AudibleAvailable {
+		t.Fatalf("the poll's first call's title went %q", got.State)
+	}
+	if got := f.policyImports(t); slices.Contains(got, ti.ASIN) {
+		t.Fatalf("policy queues %v: the title is on this server", got)
+	}
+	// The next complete poll is the verdict again.
+	f.poll(t, "p4", ti, other)
+	if got := f.title(t, ti.ASIN); got.Match != nil || got.Planned == nil {
+		t.Fatalf("a later poll matching nothing: %+v", got)
+	}
+}
+
+// An Undo of a title not marked "Not this book" pins nothing: a poll that
+// matches nothing is the verdict.
+func TestUndoOfUnrejectedTitleKeepsNoMatch(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	ti := avail("B000000001", "")
+	ti.Match = &AudibleMatch{LibraryID: f.lib.ID, Path: "Existing edition", How: "fuzzy"}
+	f.poll(t, "p1", ti)
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(false)}); err != nil {
+		t.Fatal(err)
+	}
+	ti.Match = nil
+	f.poll(t, "p2", ti)
+	if got := f.title(t, ti.ASIN); got.Match != nil {
+		t.Fatalf("kept %+v", got.Match)
+	}
+}
+
+// An older Bridge still claims a rejected title and can leave it contested:
+// Undo accepts the kept match, so the contest goes with it.
+func TestRejectedMatchUndoDropsContest(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	ti := avail("B000000001", "")
+	book := AudibleMatch{LibraryID: f.lib.ID, Path: "Existing edition", How: "fuzzy"}
+	ti.Match = &book
+	f.poll(t, "p1", ti)
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	ti.Match, ti.Reason, ti.ContestedPath = nil, AudibleReasonContested, "Other book"
+	f.poll(t, "p2", ti)
+	if got := f.title(t, ti.ASIN); got.Contested == nil || got.Match == nil || *got.Match != book {
+		t.Fatalf("rejected and contested: %+v", got)
+	}
+	got, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", ti.ASIN, AudibleTitlePatch{Rejected: new(false)})
+	if err != nil || got.Match == nil || *got.Match != book || got.Contested != nil || got.Reason != "" {
+		t.Fatalf("after Undo: %+v, %v", got, err)
 	}
 }
 

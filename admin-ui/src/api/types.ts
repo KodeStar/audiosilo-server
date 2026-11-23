@@ -3463,7 +3463,7 @@ export interface AudibleTitle {
   fold_refused_at?: string;
   /** A preorder still not available 14 days after its release date. */
   needs_attention: boolean;
-  /** Where a backup would go, as the Bridge planned it at its last check; null when matched or not planned. */
+  /** Where a backup would go, as the Bridge planned it at its last check; null when on this server or not planned (a match marked Not this book can carry one). */
   planned: AudiblePlan | null;
   /** For a title left unmatched as contested: the book it tied for and the account's other titles on it. */
   contested: AudibleContest | null;

@@ -112,7 +112,7 @@ func (c *Catalog) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEvent, i
 	if err != nil {
 		return nil, 0, err
 	}
-	events, next := pageBefore(events, f.Limit, func(e AuditEvent) int64 { return e.ID })
+	events, next := keysetPage(events, f.Limit, func(e AuditEvent) int64 { return e.ID })
 	return events, next, nil
 }
 

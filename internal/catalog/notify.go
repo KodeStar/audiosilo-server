@@ -359,7 +359,7 @@ func (c *Catalog) ListServerEvents(ctx context.Context, before int64, limit int,
 	if err != nil {
 		return nil, 0, err
 	}
-	events, next := pageBefore(events, limit, func(e ServerEvent) int64 { return e.ID })
+	events, next := keysetPage(events, limit, func(e ServerEvent) int64 { return e.ID })
 	return events, next, nil
 }
 

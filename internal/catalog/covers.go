@@ -437,7 +437,7 @@ func (c *Catalog) CoverColorsDue(ctx context.Context, afterID int64, limit int) 
 	if err != nil {
 		return nil, 0, err
 	}
-	due, next := pageBefore(due, limit, func(d CoverColorDue) int64 { return d.id })
+	due, next := keysetPage(due, limit, func(d CoverColorDue) int64 { return d.id })
 	return due, next, nil
 }
 

@@ -421,14 +421,16 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// pageBefore ends a newest-first keyset page read with LIMIT limit+1: the first
-// limit items, and the id the next page reads below (0 when this is the last).
-func pageBefore[T any](items []T, limit int, id func(T) int64) ([]T, int64) {
+// keysetPage ends a keyset page read with LIMIT limit+1: the first limit
+// items, and the key the next page reads past (the zero key when this is the
+// last).
+func keysetPage[T any, K any](items []T, limit int, key func(T) K) ([]T, K) {
 	if len(items) <= limit {
-		return items, 0
+		var none K
+		return items, none
 	}
 	items = items[:limit]
-	return items, id(items[len(items)-1])
+	return items, key(items[len(items)-1])
 }
 
 // queryRows runs query and scans every row into a T with scan. Never nil on

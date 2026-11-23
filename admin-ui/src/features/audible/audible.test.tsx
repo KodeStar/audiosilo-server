@@ -1269,6 +1269,8 @@ describe('needs a look', () => {
     expect(needsLook(title({ match: null, planned: quiet }), '')).toBe(false);
     // Here already, or nothing to back up: never listed.
     expect(needsLook(title({ planned: newAuthor }), '')).toBe(false);
+    // A match marked Not this book isn't here: its plan still warns.
+    expect(needsLook(title({ rejected: true, planned: newAuthor }), '')).toBe(true);
     expect(needsLook(title({ match: null, state: 'gone', planned: newAuthor }), '')).toBe(false);
     expect(needsLook(title({ match: null, state: 'unavailable', planned: newAuthor }), '')).toBe(
       false,

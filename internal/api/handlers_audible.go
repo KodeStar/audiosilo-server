@@ -262,6 +262,28 @@ func (a *API) handleBridgeAudibleTitles(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// handleBridgeAudibleTitleDecisions serves GET /bridge/audible/accounts/
+// {account}/titles?after=&limit=: the account's titles marked "Not this book",
+// by ASIN, at most 500 a page. {"titles": [{asin, rejected}], "next": ""
+// at the end}; 404 unknown_account; 400 invalid_cursor, invalid_request.
+func (a *API) handleBridgeAudibleTitleDecisions(w http.ResponseWriter, r *http.Request) {
+	id, ok := audibleAccountID(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := positiveLimit(w, r)
+	if !ok {
+		return
+	}
+	titles, next, err := a.cat.BridgeAudibleTitleDecisions(r.Context(), id, r.URL.Query().Get("after"), limit)
+	if err != nil {
+		a.writeAudibleError(w, err, "read audible title decisions failed")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"titles": titles, "next": next})
+}
+
 // bridgeListBook is one book of GET /bridge/libraries/{id}/books: what the
 // Bridge's matcher reads.
 type bridgeListBook struct {
@@ -342,8 +364,8 @@ func (a *API) handleBridgeBooks(w http.ResponseWriter, r *http.Request) {
 // {"asin": ".."}: the ASIN of an Audible title the Bridge matched to the book
 // without doubt, for a book with none. 204; 400 "path is too long" past
 // catalog.MaxPathBytes (pathTooLong), invalid_request with no path or ASIN; 404
-// no such book (none in a books library); 409 asin_set when it has another, or
-// an admin's ASIN edit.
+// no such book (none in a books library); 409 asin_set when it has another, an
+// admin's ASIN edit, or the ASIN's title is marked "Not this book" on it.
 func (a *API) handleBridgeEnrichment(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
