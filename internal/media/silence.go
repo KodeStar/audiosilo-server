@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -24,7 +25,8 @@ const SilenceTimeout = 30 * time.Second
 // The concat input is a server-written list of excerpts from the same opened
 // file. Each excerpt allows only audio demuxers. ffmpeg reads the excerpts in
 // order, with one excerpt open at a time even on a book with many chapters.
-// An ffmpeg older than 5.0 runs once a window instead (detectEachWindow).
+// An ffmpeg older than 5.0, or one built without the concat demuxer, runs once
+// a window instead (detectEachWindow), from then on for that ffmpeg.
 func DetectSilences(ctx context.Context, ffmpegPath, root, absPath string, windows []metadata.TimeRange) ([][]metadata.TimeRange, error) {
 	out := make([][]metadata.TimeRange, len(windows))
 	offsets := make([]float64, len(windows)+1)
@@ -48,6 +50,9 @@ func DetectSilences(ctx context.Context, ffmpegPath, root, absPath string, windo
 	}
 	defer cleanup()
 
+	if _, unbatched := unbatchedFFmpeg.Load(ffmpegPath); unbatched {
+		return detectEachWindow(ctx, ffmpegPath, input, extra, windows)
+	}
 	// ffconcat is line-oriented. Quote the held input's name as a literal
 	// file URL, including any quote in its private directory or Windows path.
 	if strings.ContainsAny(input, "\r\n") {
@@ -55,6 +60,7 @@ func DetectSilences(ctx context.Context, ffmpegPath, root, absPath string, windo
 	}
 	pauses, reached, err := detectExcerpts(ctx, ffmpegPath, input, extra, windows, end)
 	if errors.Is(err, errConcatOptions) {
+		unbatchedFFmpeg.Store(ffmpegPath, true)
 		return detectEachWindow(ctx, ffmpegPath, input, extra, windows)
 	}
 	if err != nil {
@@ -90,9 +96,14 @@ func DetectSilences(ctx context.Context, ffmpegPath, root, absPath string, windo
 const silenceFilter = "silencedetect=noise=-40dB:d=0.4"
 
 var (
-	// errConcatOptions is an ffmpeg older than 5.0: its concat lists take no
-	// per-file option, so no excerpt could be held to the audio demuxers.
+	// errConcatOptions is an ffmpeg that can't run the list of excerpts: one
+	// older than 5.0, whose concat lists take no per-file option (so no
+	// excerpt could be held to the audio demuxers), or one built without the
+	// concat demuxer.
 	errConcatOptions = errors.New("ffmpeg's concat lists take no options")
+	// unbatchedFFmpeg holds the ffmpeg paths that answered errConcatOptions,
+	// so their later files go straight to a run a window.
+	unbatchedFFmpeg sync.Map
 	// errNoTimeline is a run whose file header never came, so the list of
 	// excerpts was never sent.
 	errNoTimeline = errors.New("ffmpeg did not report the audio timeline")
@@ -147,10 +158,11 @@ func detectExcerpts(ctx context.Context, ffmpeg, input string, extra []*os.File,
 				wrote <- err
 			}()
 		}
-		if strings.HasPrefix(last, "[silencedetect") || strings.HasPrefix(last, "[Parsed_silencedetect_") {
+		if isSilenceLine(last) {
 			pauses.add(last)
 		}
-		tooOld = tooOld || strings.Contains(last, "unknown keyword 'option'")
+		tooOld = tooOld || strings.Contains(last, "unknown keyword 'option'") ||
+			strings.Contains(last, "Unknown input format: 'concat'")
 	}
 	if sc.Err() != nil {
 		cancel(nil)
@@ -187,46 +199,76 @@ func detectExcerpts(ctx context.Context, ffmpeg, input string, extra []*os.File,
 	return pauses.finish(end), end, nil
 }
 
-// detectEachWindow is DetectSilences on an ffmpeg older than 5.0: one run a
-// window, seeking with -ss, held to the audio demuxers as an input option. A
-// budget that runs out leaves that window and the rest unanswered.
+// detectEachWindow is DetectSilences on an ffmpeg that can't run the list of
+// excerpts (errConcatOptions): one run a window, seeking with -ss, held to the
+// audio demuxers as an input option, each within SilenceTimeout. A window
+// whose run fails is left unanswered, as it would be on its own; the error is
+// returned only when no window answered. A budget that runs out leaves that
+// window and the rest unanswered.
 func detectEachWindow(ctx context.Context, ffmpeg, input string, extra []*os.File, windows []metadata.TimeRange) ([][]metadata.TimeRange, error) {
 	out := make([][]metadata.TimeRange, len(windows))
 	answered := false
+	var failed error
 	for i, w := range windows {
 		if w.End <= w.Start {
 			continue
 		}
-		args := append([]string{"-nostdin", "-hide_banner", "-nostats",
-			"-ss", strconv.FormatFloat(w.Start, 'f', 3, 64),
-			"-t", strconv.FormatFloat(w.End-w.Start, 'f', 3, 64),
-		}, metadata.InputFormatArgs()...)
-		args = append(args, "-i", input, "-vn", "-af", silenceFilter, "-f", "null", "-")
-		cmd := exec.CommandContext(ctx, ffmpeg, args...)
-		cmd.ExtraFiles = extra
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			switch {
-			case ctx.Err() == nil:
-				log := strings.TrimSpace(stderr.String())
-				return nil, fmt.Errorf("ffmpeg silencedetect: %w: %s", err, log[strings.LastIndexByte(log, '\n')+1:])
-			case answered:
-				return out, nil
-			default:
-				return nil, ctx.Err()
-			}
+		pauses, err := detectWindow(ctx, ffmpeg, input, extra, w)
+		switch {
+		case ctx.Err() != nil && answered:
+			return out, nil
+		case ctx.Err() != nil:
+			return nil, ctx.Err()
+		case err != nil:
+			failed = err
+			continue
 		}
-		answered = true
-		var pauses silenceLog
-		for line := range strings.SplitSeq(stderr.String(), "\n") {
-			pauses.add(line)
-		}
-		for _, p := range pauses.finish(w.End - w.Start) {
-			out[i] = append(out[i], metadata.TimeRange{Start: w.Start + p.Start, End: w.Start + p.End})
-		}
+		answered, out[i] = true, pauses
+	}
+	if !answered && failed != nil {
+		return nil, failed
 	}
 	return out, nil
+}
+
+// detectWindow is one window's run (detectEachWindow), its pauses in file
+// seconds.
+func detectWindow(ctx context.Context, ffmpeg, input string, extra []*os.File, w metadata.TimeRange) ([]metadata.TimeRange, error) {
+	ctx, cancel := context.WithTimeout(ctx, SilenceTimeout)
+	defer cancel()
+	args := append([]string{"-nostdin", "-hide_banner", "-nostats",
+		"-ss", strconv.FormatFloat(w.Start, 'f', 3, 64),
+		"-t", strconv.FormatFloat(w.End-w.Start, 'f', 3, 64),
+	}, metadata.InputFormatArgs()...)
+	args = append(args, "-i", input, "-vn", "-af", silenceFilter, "-f", "null", "-")
+	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	cmd.ExtraFiles = extra
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		log := strings.TrimSpace(stderr.String())
+		return nil, fmt.Errorf("ffmpeg silencedetect: %w: %s", err, log[strings.LastIndexByte(log, '\n')+1:])
+	}
+	var pauses silenceLog
+	for line := range strings.SplitSeq(stderr.String(), "\n") {
+		if isSilenceLine(line) {
+			pauses.add(line)
+		}
+	}
+	var out []metadata.TimeRange
+	for _, p := range pauses.finish(w.End - w.Start) {
+		out = append(out, metadata.TimeRange{Start: w.Start + p.Start, End: w.Start + p.End})
+	}
+	return out, nil
+}
+
+// isSilenceLine is a line silencedetect logged, not one of the file's tags
+// ffmpeg prints indented under its details.
+func isSilenceLine(line string) bool {
+	return strings.HasPrefix(line, "[silencedetect") || strings.HasPrefix(line, "[Parsed_silencedetect_")
 }
 
 func writeExcerpts(dst io.Writer, input string, windows []metadata.TimeRange, start float64) error {

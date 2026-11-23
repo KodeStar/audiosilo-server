@@ -216,3 +216,43 @@ echo '[silencedetect @ 0x1] silence_end: 2 | silence_duration: 1' >&2
 		t.Fatalf("per-window runs:\n%s", log)
 	}
 }
+
+// An ffmpeg built without the concat demuxer runs each window too, from the
+// first file on: later files don't try the list again. A window whose run
+// fails is left unanswered while the others keep their pauses.
+func TestDetectSilencesWithoutConcatRunsEachWindowOnce(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the ffmpeg stand-in is a shell script")
+	}
+	dir := t.TempDir()
+	stand, record := filepath.Join(dir, "ffmpeg"), filepath.Join(dir, "calls")
+	file := writeStandIn(t, stand, `#!/bin/sh
+case " $* " in
+*" concat "*)
+  echo concat >> '`+record+`'
+  echo '  Duration: 00:10:00, start: 0.000000, bitrate: N/A' >&2
+  echo "[in#1 @ 0x1] Unknown input format: 'concat'" >&2
+  exit 1;;
+*" -ss 30.000 "*)
+  echo 'cannot read this window' >&2
+  exit 1;;
+esac
+echo '[silencedetect @ 0x1] silence_start: 1' >&2
+echo '[silencedetect @ 0x1] silence_end: 2 | silence_duration: 1' >&2
+`)
+	want := [][]metadata.TimeRange{{{Start: 11, End: 12}}, nil}
+	for range 2 {
+		got, err := DetectSilences(t.Context(), stand, dir, file, []metadata.TimeRange{{Start: 10, End: 20}, {Start: 30, End: 35}})
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("pauses %v, %v; want %v", got, err, want)
+		}
+	}
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(data), "concat\n"); n != 1 {
+		t.Fatalf("the list was tried %d times, want once", n)
+	}
+}

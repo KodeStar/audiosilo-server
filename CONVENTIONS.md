@@ -5392,8 +5392,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (the first with metadata on: no copy loads while it is off) waits for the local copy (`mirrorReady`,
   at most 10 min, server#282), so a start sends no lookups to the service while the copy loads. The book page's
   `community_check_failed` says the last check failed. Pause windows for a file run in one
-  ffmpeg process (an ffmpeg older than 5.0, whose concat lists take no per-file options, runs
-  one a window). They stop four minutes into the five-minute check, including lookup time.
+  ffmpeg process (an ffmpeg older than 5.0, whose concat lists take no per-file options, or one
+  without the concat demuxer, runs one a window, each within 30 s). They stop four minutes into the five-minute check, including lookup time.
   The remaining boundaries, and the window being read when the time ran out, keep their
   proportional positions while the fit is saved.
   `refreshEffective` -> `applyChapterSource` (after an admin's edited list, Edited chapters below) puts the
