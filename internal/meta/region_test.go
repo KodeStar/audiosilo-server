@@ -486,6 +486,7 @@ func TestPersonNarrator(t *testing.T) {
 }
 
 func TestRecordingCreditAndLength(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		book, credit string
 		minutes      int

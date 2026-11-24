@@ -761,6 +761,7 @@ func diagOf(local *meta.Service, b *lfBook, m *lfMatched, res *lfResult, region,
 }
 
 func TestErroredMatchHasNoRank(t *testing.T) {
+	t.Parallel()
 	m := lfMatched{book: &catalog.Book{}, err: errors.New("match failed")}
 	d := diagOf(nil, &lfBook{}, &m, &lfResult{}, "", "")
 	out, err := json.Marshal(d)
