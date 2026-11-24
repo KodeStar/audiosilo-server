@@ -1,0 +1,25 @@
+{
+  "route": "POST /api/v1/auth/redeem (a listener's invite with an expiry and uses left, home and away addresses)",
+  "shape": {
+    "addresses": {
+      "away": "string",
+      "home": "string"
+    },
+    "base_url": "string",
+    "code_expires_at": "string",
+    "links": {
+      "admin": "string",
+      "android": "string",
+      "apk": "string",
+      "ios": "string",
+      "web": "string"
+    },
+    "pairing_token": "string",
+    "qr_png_data_uri": "string",
+    "server_id": "string",
+    "server_name": "string",
+    "uri": "string",
+    "uses_remaining": "number",
+    "web_url": "string"
+  }
+}

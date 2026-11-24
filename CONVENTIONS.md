@@ -46,7 +46,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `npm run wire:sync`) its parity test checks against `types.ts`, so a wire change re-syncs it. A new
   envelope worth guarding is a `wireCases` entry; a value that only appears with data (an `omitempty` field)
   needs a seed that sets it, and an empty array, an empty object or a null fails unless its case names it in
-  `empty` (it pins nothing of the real value).
+  `empty` (it pins nothing of the real value). Each case names the Go `types` its envelope encodes (by path)
+  and the functions whose map literals build it (`keys`, `fn@path` when the map is not the envelope), and the
+  coverage guard (`wire_coverage_test.go`) fails on a field of those types, or a key those functions write,
+  that no golden carries: seed it, in a variant case of its own (`wire_variants_test.go`) when it would change
+  another case's shape, or list it in `wireUnseen` with the reason.
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
   The executor sorts filenames and skips exact recorded names, allowing a missing lower-numbered

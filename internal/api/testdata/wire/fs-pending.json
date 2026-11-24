@@ -1,0 +1,21 @@
+{
+  "route": "GET /api/v1/libraries/{id}/fs?path=Author X&offset=1&limit=2 (a folder override, a book not indexed yet, more after the page)",
+  "shape": {
+    "entries": [
+      {
+        "is_audio": "boolean",
+        "is_dir": "boolean",
+        "mod_time": "number",
+        "name": "string",
+        "override": "string",
+        "path": "string",
+        "pending_book": "boolean",
+        "size": "number"
+      }
+    ],
+    "next_offset": "number",
+    "offset": "number",
+    "path": "string",
+    "total": "number"
+  }
+}

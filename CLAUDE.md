@@ -392,7 +392,7 @@ keep this index in step (one line per topic).
 
 - **Conventions**
   - Every feature ships with a test
-  - Wire goldens (`internal/api/wire_golden_test.go`, `testdata/wire/`: the player envelopes' shapes, `-update`, the player's copy)
+  - Wire goldens (`internal/api/wire_golden_test.go`, `testdata/wire/`: the player envelopes' shapes, `-update`, the player's copy; `TestWireGolden/coverage` fails when a wire field or map key appears in no golden)
   - Migrations are append-only
   - Secrets
   - The server's own 401s are marked (`X-AudioSilo-Unauthorized`, capability `unauthorized_mark`; an unchecked token is a 503)

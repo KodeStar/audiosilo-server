@@ -1,0 +1,49 @@
+{
+  "route": "GET /api/v1/libraries/{id}/item?path=<a book whose read-along map is stale>",
+  "shape": {
+    "added_at": "string",
+    "author": "string",
+    "chapters": [
+      {
+        "book_offset": "number",
+        "end": "number",
+        "file_index": "number",
+        "file_path": "string",
+        "index": "number",
+        "start": "number",
+        "title": "string"
+      }
+    ],
+    "codec": "string",
+    "cover_version": "string",
+    "direct_playable": "boolean",
+    "duration": "number",
+    "ebook": {
+      "path": "string",
+      "size": "number"
+    },
+    "files": [
+      {
+        "duration": "number",
+        "format": "string",
+        "rel_path": "string",
+        "seq": "number",
+        "size": "number"
+      }
+    ],
+    "format": "string",
+    "id": "number",
+    "is_folder": "boolean",
+    "library_id": "number",
+    "narrator": "string",
+    "readalong": {
+      "reason": "string",
+      "state": "string"
+    },
+    "rel_path": "string",
+    "series": "string",
+    "series_index": "number",
+    "size": "number",
+    "title": "string"
+  }
+}

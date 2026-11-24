@@ -1,0 +1,40 @@
+{
+  "route": "GET /api/v1/libraries/{id}/meta?path=<a book with no community match and generated content>",
+  "shape": {
+    "matched": "boolean",
+    "work": {
+      "authors": [],
+      "characters": [
+        {
+          "id": "string",
+          "name": "string",
+          "reveal": {
+            "chapter": "number"
+          }
+        }
+      ],
+      "generated": {
+        "characters": "boolean",
+        "description": "boolean",
+        "generated_at": "string",
+        "recap_summary": "boolean",
+        "recaps": "boolean"
+      },
+      "id": "string",
+      "language": "string",
+      "recap_summary": {
+        "ending": "string",
+        "in_short": "string"
+      },
+      "recaps": [
+        {
+          "text": "string",
+          "through": {
+            "chapter": "number"
+          }
+        }
+      ],
+      "title": "string"
+    }
+  }
+}
