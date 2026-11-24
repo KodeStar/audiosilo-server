@@ -801,19 +801,22 @@ func (s *Service) SubscribeRequests(ctx context.Context, user int64) ([]Job, err
 }
 
 // ErrRequestNotDismissable is a follow request DismissSubscribe may not
-// remove yet: still open, ended done (its row opens the show), or ended but
-// not folded yet (the fold still reads it).
+// remove yet: still open, ended done (its row opens the show), or ended within
+// PollFoldWindow and not folded yet (the sweep still reads it).
 var ErrRequestNotDismissable = errors.New("the follow request has not failed or been cancelled")
 
 // DismissSubscribe removes user's own follow request id once it failed or was
-// cancelled and its outcome is folded (fe#126: a listener clears a failed row
-// from Shows being added). One statement, so a request that changes state
-// meanwhile is never removed open. ErrNotFound for no such request of user's;
-// ErrRequestNotDismissable for one that may not go (yet). A following import
-// may queue the feed again: the listener let the failure go.
+// cancelled and its outcome is folded, or its fold can no longer land (it
+// ended before PollFoldWindow, which EndedPodcasts no longer sweeps, while the
+// listener's list still shows it for a week) (fe#126: a listener clears a
+// failed row from Shows being added). One statement, so a request that
+// changes state meanwhile is never removed open. ErrNotFound for no such
+// request of user's; ErrRequestNotDismissable for one that may not go (yet).
+// A following import may queue the feed again: the listener let the failure
+// go.
 func (s *Service) DismissSubscribe(ctx context.Context, user, id int64) error {
 	mine := `j.id=? AND j.kind='` + KindPodcastSubscribe + `' AND j.requested_by=?`
-	res, err := s.db.ExecContext(ctx, `DELETE FROM bridge_jobs AS j WHERE `+mine+` AND j.state IN ('`+StateFailed+`','`+StateCancelled+`') AND NOT `+UnfoldedSQL, id, user)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM bridge_jobs AS j WHERE `+mine+` AND j.state IN ('`+StateFailed+`','`+StateCancelled+`') AND (NOT `+UnfoldedSQL+` OR j.finished_at<?)`, id, user, at(s.now().Add(-PollFoldWindow)))
 	if err != nil {
 		return err
 	}

@@ -134,7 +134,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"podcast_fetch":           true,                 // on-demand podcast fetch/status (GET/POST /libraries/{id}/podcasts/fetch; 503 fetch on /stream)
 		"podcast_discovery":       a.discoveryOn(),      // podcast directory search (/podcasts/discovery/*): discovery enabled at start AND the podcasts module on
 		"podcast_opml":            true,                 // OPML subscription transfer (POST /podcasts/opml/import needs the module, GET /podcasts/opml/export does not)
-		"podcast_request_dismiss": true,                 // DELETE /podcasts/requests/{id}: a listener removes their failed or cancelled follow request (works with the module off)
+		"podcast_request_dismiss": true,                 // DELETE /podcasts/requests/{id}: a listener removes their failed or cancelled follow request (works with the module off); also POST /podcasts/follow's optional title, which the player sends only when this is true (an older server refuses the field)
 		"queue":                   true,                 // the up-next queue (/me/queue)
 		"collections":             true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
 		"user_stats":              true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)

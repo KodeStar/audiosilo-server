@@ -927,6 +927,7 @@ func TestSubscribeClaimUnreadableParamsFailed(t *testing.T) {
 // A subscribe request keeps the title its follower gave, cleaned to one line,
 // never for a private feed; the params check refuses a title that isn't so.
 func TestSubscribeTitle(t *testing.T) {
+	t.Parallel()
 	q := podcastQueue(t)
 	ctx := context.Background()
 	j, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/titled.xml", Title: "  The\nShow  "})
@@ -942,17 +943,29 @@ func TestSubscribeTitle(t *testing.T) {
 		t.Fatalf("private %s %v", priv.Params, err)
 	}
 	base := `"feed_url_sha256":"` + strings.Repeat("a", 64) + `","feed_host":"example.com"`
-	for _, raw := range []string{`{` + base + `,"private":true,"title":"x"}`, `{` + base + `,"private":true,"title":" padded "}`} {
-		if _, err := subscribeParams(json.RawMessage(raw)); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("%s = %v", raw, err)
+	if _, err := subscribeParams(json.RawMessage(`{` + base + `,"private":true,"title":"x"}`)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("private title = %v", err)
+	}
+	// The public params Subscribe stored pass the check as they are; the same
+	// params with a title that isn't cleaned to one line are refused.
+	if _, err := subscribeParams(j.Params); err != nil {
+		t.Fatalf("stored params = %v", err)
+	}
+	for _, title := range []string{" padded ", "The\nShow", strings.Repeat("x", MaxSubscribeTitleBytes+1)} {
+		bad := p
+		bad.Title = title
+		raw, _ := json.Marshal(bad)
+		if _, err := subscribeParams(raw); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("title %q = %v", title, err)
 		}
 	}
 }
 
 // DismissSubscribe removes only the caller's own request, and only once it
-// failed or was cancelled and its outcome was folded: never an open or done
-// one, never another user's.
+// failed or was cancelled and its outcome was folded (or can no longer be,
+// past PollFoldWindow): never an open or done one, never another user's.
 func TestDismissSubscribe(t *testing.T) {
+	t.Parallel()
 	q := podcastQueue(t)
 	ctx := context.Background()
 	other := q.admin + 1000
@@ -1011,6 +1024,18 @@ func TestDismissSubscribe(t *testing.T) {
 	fold(done.ID)
 	if err := q.DismissSubscribe(ctx, q.admin, done.ID); !errors.Is(err, ErrRequestNotDismissable) {
 		t.Fatalf("done = %v", err)
+	}
+	// A failure whose fold never landed stays while the sweep may still fold
+	// it, and may go once it ended before PollFoldWindow (the sweep no longer
+	// reads it, the listener's list still shows it).
+	stale := end("https://example.com/stale.xml", StateFailed)
+	q.advance(PollFoldWindow - time.Minute)
+	if err := q.DismissSubscribe(ctx, q.admin, stale.ID); !errors.Is(err, ErrRequestNotDismissable) {
+		t.Fatalf("unfolded within the window = %v", err)
+	}
+	q.advance(2 * time.Minute)
+	if err := q.DismissSubscribe(ctx, q.admin, stale.ID); err != nil {
+		t.Fatalf("unfolded past the window = %v", err)
 	}
 	reqs, err := q.SubscribeRequests(ctx, q.admin)
 	if err != nil || len(reqs) != 1 || reqs[0].ID != done.ID {
