@@ -1588,7 +1588,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **In-process probe (server#261, `metadata/fastprobe*.go`)**: `metadata.ExtractTimeout` opens a
   file once and reads its tags, the iTunes narrator and the probe through one 64 KiB block cache
   (at most 4 MiB kept; a read of more than four blocks goes to the file, but for what it shares with
-  dhowden's last such read, kept up to 16 MiB when a probe follows, so an ID3 picture dhowden read whole is not read again inside
+  dhowden's last such read, kept up to 16 MiB when an MP3's probe follows, so an ID3 picture dhowden read whole is not read again inside
   the probe's whole-tag read, server#269); the probe answers what ffprobe would (format duration as its `"%f"`
   string, first audio stream's codec, chapters, the format tags `applyProbe` reads:
   `probeTagKeys`) for MP3, M4B/M4A/MP4, FLAC, Ogg Vorbis/Opus/FLAC and MKA, as ports of FFmpeg's
