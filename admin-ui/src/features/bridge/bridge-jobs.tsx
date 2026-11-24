@@ -164,7 +164,7 @@ function JobRow({
   // A generate, describe or detect job words its progress and result its own way (GenerateStatus).
   const generate = isBookKind(job.kind);
   const progress: ReturnType<typeof listedProgress> = generate ? {} : listedProgress(job);
-  const said = progressText(t, progress);
+  const step = progressText(t, progress);
   const summary = generate ? null : resultSummary(job.result);
   const sync = syncSummary(job);
   const asin = backupAsin(job);
@@ -257,10 +257,10 @@ function JobRow({
               )}
             </span>
           ) : null}
-          {said || progress.total ? (
+          {step || progress.total ? (
             <span className="text-[12.5px] text-muted-foreground">
               {[
-                said && progress.last ? t('bridge.jobs.lastStep', { step: said }) : said,
+                step && progress.last ? t('bridge.jobs.lastStep', { step }) : step,
                 progress.total
                   ? t('bridge.jobs.count', {
                       done: formatNumber(progress.done ?? 0, lang),

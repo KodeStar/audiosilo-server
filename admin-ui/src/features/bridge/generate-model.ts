@@ -10,6 +10,7 @@ import type {
   SidecarsGenerateParams,
 } from '@/api/types';
 import { refKey } from '@/lib/book-route';
+import type { Phrase } from '@/lib/phrase';
 import { relBaseName } from '@/lib/paths';
 import { spanIn } from '@/features/library/series/series-model';
 import {
@@ -20,7 +21,6 @@ import {
   progressOf,
   safeHttpUrl,
   text,
-  type ProgressSaid,
 } from './bridge-model';
 
 // Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a), the
@@ -603,7 +603,7 @@ export interface GenerateProgress {
   stage?: string;
   message?: string;
   /** The message by its code, which the card words in the admin's language (progressText). */
-  said?: ProgressSaid;
+  said?: Phrase;
   done?: number;
   total?: number;
   etaSeconds?: number;

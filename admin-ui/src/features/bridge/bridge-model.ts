@@ -5,6 +5,7 @@ import type { StatusTone } from '@/components/status-text';
 import type { Badge } from '@/components/ui/badge';
 import { isLoopbackUrl } from '@/features/setup/setup-model';
 import { absoluteBaseName } from '@/lib/paths';
+import type { Phrase } from '@/lib/phrase';
 
 // Settings > Bridge: the small rules the page shows the Bridge and its jobs by
 // (internal/bridge, handlers_bridge.go). Pure: no React, no i18n instance; the
@@ -297,33 +298,27 @@ export const PROGRESS_CODES = {
   placing_book: [],
 } as const satisfies Record<string, readonly string[]>;
 
-export type ProgressCode = keyof typeof PROGRESS_CODES;
-
-/** A progress sentence by its code, with the values its locale key fills in. */
-export interface ProgressSaid {
-  code: ProgressCode;
-  params: Record<string, string | number>;
-}
+type ProgressCode = keyof typeof PROGRESS_CODES;
 
 /**
  * The sentence a progress names by code, when this console knows the code and
  * the progress carries every value it fills in (each a string or a finite
  * number); undefined otherwise, and from an older Bridge, which sends none.
  */
-function saidOf(p: Record<string, unknown>): ProgressSaid | undefined {
+function saidOf(p: Record<string, unknown>): Phrase | undefined {
   const code = text(p.message_code);
   if (!code || !Object.hasOwn(PROGRESS_CODES, code)) return undefined;
   const sent =
     p.message_params && typeof p.message_params === 'object'
       ? (p.message_params as Record<string, unknown>)
       : {};
-  const params: Record<string, string | number> = {};
+  const values: Record<string, string | number> = {};
   for (const name of PROGRESS_CODES[code as ProgressCode]) {
     const v = typeof sent[name] === 'string' ? text(sent[name]) : num(sent[name]);
     if (v === undefined) return undefined;
-    params[name] = v;
+    values[name] = v;
   }
-  return { code: code as ProgressCode, params };
+  return { key: `bridge.progress.${code}`, values };
 }
 
 /**
@@ -334,7 +329,7 @@ function saidOf(p: Record<string, unknown>): ProgressSaid | undefined {
  */
 export function progressOf(progress: unknown): {
   text?: string;
-  said?: ProgressSaid;
+  said?: Phrase;
   done?: number;
   total?: number;
 } {
@@ -357,9 +352,9 @@ export function progressOf(progress: unknown): {
  */
 export function progressText(
   t: Translate,
-  p: { text?: string; said?: ProgressSaid },
+  p: { text?: string; said?: Phrase },
 ): string | undefined {
-  return p.said ? t(`bridge.progress.${p.said.code}`, p.said.params) : p.text;
+  return p.said ? t(p.said.key, p.said.values) : p.text;
 }
 
 /**

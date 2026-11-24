@@ -338,7 +338,7 @@ describe('progress and result', () => {
     ).toEqual({
       stage: 'sharing',
       message: 'Sharing with the community',
-      said: { code: 'sharing', params: {} },
+      said: { key: 'bridge.progress.sharing', values: {} },
     });
     expect(
       generateProgress({ step: 'writing', message: 'Saving', message_code: 'saving_chapters' }),

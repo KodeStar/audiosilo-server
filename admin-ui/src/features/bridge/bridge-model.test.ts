@@ -290,7 +290,7 @@ describe('progress codes (server#224)', () => {
     });
     expect(p).toEqual({
       text: 'Downloading section 2 of 3 from archive.org',
-      said: { code: 'downloading_section', params: { section: 2, sections: 3 } },
+      said: { key: 'bridge.progress.downloading_section', values: { section: 2, sections: 3 } },
       done: 1,
       total: 3,
     });
@@ -301,7 +301,7 @@ describe('progress codes (server#224)', () => {
     expect(
       progressOf({ message: 'Finding', message_code: 'finding_library', message_params: { x: 1 } })
         .said,
-    ).toEqual({ code: 'finding_library', params: {} });
+    ).toEqual({ key: 'bridge.progress.finding_library', values: {} });
   });
 
   it("shows the Bridge's text for an older Bridge, an unknown code or missing params", () => {
@@ -352,9 +352,13 @@ describe('progress codes (server#224)', () => {
     };
     expect(listedProgress({ state: 'failed', progress })).toEqual({
       text: 'Compared the files',
-      said: { code: 'compared_files', params: {} },
+      said: { key: 'bridge.progress.compared_files', values: {} },
       last: true,
     });
+    // A code alone (no message or step) is still the last step.
+    expect(
+      listedProgress({ state: 'failed', progress: { message_code: 'compared_files' } }),
+    ).toEqual({ said: { key: 'bridge.progress.compared_files', values: {} }, last: true });
   });
 });
 
