@@ -117,6 +117,17 @@ func TestSplitABSSeries(t *testing.T) {
 		{"The #1 Ladies Detective Agency #3", ABSSeries{"The #1 Ladies Detective Agency", "3"}},
 		{"Room #12 Mysteries", ABSSeries{"Room #12 Mysteries", ""}},
 		{"Arc #1 - x", ABSSeries{"Arc #1 - x", ""}},
+		// One bracketed note after a sequence is the sequence's, as revision 2 read it.
+		{"Discworld #1 (Omnibus)", ABSSeries{"Discworld", "1 (Omnibus)"}},
+		{"Saga #2.5 [Novella]", ABSSeries{"Saga", "2.5 [Novella]"}},
+		{"Arc #1-3 (Box set)", ABSSeries{"Arc", "1-3 (Box set)"}},
+		{"Arc #1 - 3 (Box set)", ABSSeries{"Arc", "1 - 3 (Box set)"}},
+		{"Saga #2b  ()", ABSSeries{"Saga", "2b  ()"}},
+		{"The #1 Ladies Detective Agency (Book 3)", ABSSeries{"The #1 Ladies Detective Agency (Book 3)", ""}},
+		{"Discworld #1 (Omnibus) (Gollancz)", ABSSeries{"Discworld #1 (Omnibus) (Gollancz)", ""}},
+		{"Discworld #1 (Omnibus) extra", ABSSeries{"Discworld #1 (Omnibus) extra", ""}},
+		{"Discworld #1 (Omni (bus))", ABSSeries{"Discworld #1 (Omni (bus))", ""}},
+		{"Discworld #1 [Omnibus)", ABSSeries{"Discworld #1 [Omnibus)", ""}},
 		{"", ABSSeries{}},
 	} {
 		if got := SplitABSSeries(tc.in); got != tc.want {

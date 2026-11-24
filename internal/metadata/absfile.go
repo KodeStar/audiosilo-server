@@ -117,7 +117,8 @@ func ABSSignature(info fs.FileInfo) string {
 // (server#454). Revision 3 keeps a series name that holds " #" with no
 // sequence after it whole (SplitABSSeries: "The #1 Ladies Detective Agency"),
 // which revision 2 split into a series "The" at position "1 Ladies Detective
-// Agency".
+// Agency"; a sequence with one bracketed note ("Discworld #1 (Omnibus)") it
+// splits as revision 2 did.
 const absReadRev = "3"
 
 // ReadABSFile reads the ABS metadata.json at path under root (ParseABSFile): a
@@ -285,11 +286,11 @@ func absNames(list json.RawMessage) []string {
 
 // SplitABSSeries reads one series as ABS writes it, "Name #sequence" (the name
 // alone with no sequence): the name before the last " #", the sequence after it
-// when that reads as one (absSequence: "2.5", "1-3", "2b", "1 - 3"). Otherwise
-// the " #" is the name's own and all of it is the name: "The #1 Ladies
-// Detective Agency" has no position, "The #1 Ladies Detective Agency #3" is
-// that series' 3. The one ABS series parser: a metadata.json's (absSeries) and
-// the listening import's seriesName.
+// when that reads as one (absSequence: "2.5", "1-3", "2b", "1 - 3", "1
+// (Omnibus)"). Otherwise the " #" is the name's own and all of it is the name:
+// "The #1 Ladies Detective Agency" has no position, "The #1 Ladies Detective
+// Agency #3" is that series' 3. The one ABS series parser: a metadata.json's
+// (absSeries) and the listening import's seriesName.
 func SplitABSSeries(s string) ABSSeries {
 	s = strings.TrimSpace(s)
 	if i := strings.LastIndex(s, " #"); i > 0 {
@@ -305,10 +306,17 @@ func SplitABSSeries(s string) ABSSeries {
 // sequence absSequence takes with whitespace in it.
 var absSpacedRange = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?\s*[-–]\s*[0-9]+(?:\.[0-9]+)?$`)
 
+// absSequenceNote is one bracketed note closing a sequence, after whitespace:
+// " (Omnibus)", " [Novella]".
+var absSequenceNote = regexp.MustCompile(`\s+(?:\([^()]*\)|\[[^\[\]]*\])$`)
+
 // absSequence reports whether the text after a seriesName's last " #" reads as
 // its sequence: a single word ("3", "1.5", "1-3", "2b") or a spaced numeric
-// range. Words after the mark ("1 Ladies Detective Agency") are the name's.
+// range, either one followed by one bracketed note ("1 (Omnibus)", "1-3 (Box
+// set)"; the note stays in the sequence). Words after the mark ("1 Ladies
+// Detective Agency") are the name's.
 func absSequence(seq string) bool {
+	seq = absSequenceNote.ReplaceAllString(seq, "")
 	return !strings.ContainsFunc(seq, unicode.IsSpace) || absSpacedRange.MatchString(seq)
 }
 

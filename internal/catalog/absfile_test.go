@@ -97,6 +97,7 @@ func TestABSFileSeriesPosition(t *testing.T) {
 		{"A/Own", "Other Series", "7", "7"},
 		{"A/Range", "Omnibus", "1-3", "1-3"},
 		{"A/Bad", "Bad Position", "Book One", ""},
+		{"A/Note", "Discworld", "1 (Omnibus)", ""}, // a noted sequence stores no position, as revision 2
 	} {
 		if _, err := c.UpsertBook(ctx, &Book{
 			LibraryID: lib.ID, RelPath: tc.path, IsFolder: true, Title: "T", Series: "The Cradle", SeriesIndex: 4,

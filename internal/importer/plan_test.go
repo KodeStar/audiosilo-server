@@ -113,6 +113,8 @@ func TestDescribeMetadata(t *testing.T) {
 			"The #1 Ladies Detective Agency", ""},
 		{absMetadata{Title: "T", SeriesName: "The #1 Ladies Detective Agency #3"}, "T", "",
 			"The #1 Ladies Detective Agency", "3"},
+		// One bracketed note after the sequence is the sequence's.
+		{absMetadata{Title: "T", SeriesName: "Discworld #1 (Omnibus)"}, "T", "", "Discworld", "1 (Omnibus)"},
 		{absMetadata{Title: "T", Authors: []struct {
 			Name string `json:"name"`
 		}{{"X"}, {"Y"}}, Series: []struct {
