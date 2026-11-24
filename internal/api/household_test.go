@@ -205,7 +205,7 @@ func TestHouseListening(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		t.Fatal(err)
 	}
-	if keys := slices.Sorted(maps.Keys(raw.Listening[0])); strings.Join(keys, ",") != "author,chapter,chapter_index,duration,library_id,path,position,state,title,updated_at,user_id,username" {
+	if keys := slices.Sorted(maps.Keys(raw.Listening[0])); strings.Join(keys, ",") != "author,chapter,chapter_index,cover_version,duration,library_id,path,position,state,title,updated_at,user_id,username" {
 		t.Fatalf("row keys = %v", keys)
 	}
 	for _, leak := range []string{"ip", "device", "client", "token", "last_ip", "device_name", "device_id"} {

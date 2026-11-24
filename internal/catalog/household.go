@@ -61,6 +61,9 @@ type HouseListeningRow struct {
 	Chapter      *string  `json:"chapter"`
 	ChapterIndex *int     `json:"chapter_index"`
 	UpdatedAt    string   `json:"updated_at"`
+	// CoverVersion is the book's Book.CoverVersion when the row's path is an
+	// indexed book (the cover URL's cache buster); omitted otherwise.
+	CoverVersion string `json:"cover_version,omitempty"`
 }
 
 // HouseholdSharing reports whether userID shares their listening.
@@ -151,8 +154,13 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 	// The scope check is in Go, on each person's newest book only: one the caller
 	// can't see drops the person rather than letting an older one stand in.
 	rows, err := queryRows(ctx, c.db, func(rs *sql.Rows, r *houseRow) error {
-		return rs.Scan(&r.UserID, &r.Username, &r.LibraryID, &r.Path, &r.Title, &r.Author,
-			&r.Position, &r.Duration, &r.UpdatedAt, &r.bookID)
+		var art string
+		if err := rs.Scan(&r.UserID, &r.Username, &r.LibraryID, &r.Path, &r.Title, &r.Author,
+			&r.Position, &r.Duration, &r.UpdatedAt, &r.bookID, &art); err != nil {
+			return err
+		}
+		r.CoverVersion = CoverVersion(art)
+		return nil
 	}, houseListeningSQL, formatSessionTime(c.now().Add(-houseWindow)), callerID)
 	if err != nil {
 		return nil, err
@@ -244,7 +252,8 @@ func (c *Catalog) isPodcastLibrary(ctx context.Context, id int64, known map[int6
 // caller); TestHouseListeningPlan checks the plan HouseListening records.
 const houseListeningSQL = `
 SELECT h.user_id, u.username, w.library_id, w.rel_path, COALESCE(b.title, ''), NULLIF(b.author, ''),
-       w.end_pos, NULLIF(COALESCE(NULLIF(b.duration, 0), w.duration), 0), w.last_at, COALESCE(b.id, 0)
+       w.end_pos, NULLIF(COALESCE(NULLIF(b.duration, 0), w.duration), 0), w.last_at, COALESCE(b.id, 0),
+       COALESCE(b.cover_art, '')
   FROM household_sharing me
  CROSS JOIN household_sharing h ON h.share_listening = 1 AND h.user_id <> me.user_id
  CROSS JOIN users u ON u.id = h.user_id AND u.disabled = 0 AND u.is_demo = 0

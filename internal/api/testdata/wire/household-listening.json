@@ -21,6 +21,7 @@
             "number"
           ]
         },
+        "cover_version": "string",
         "duration": "number",
         "library_id": "number",
         "outside_grant": "boolean",

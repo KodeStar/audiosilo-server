@@ -38,7 +38,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   keeps their ratios (`TestBudgetStartsAfterAnotherDiscovery`, `TestRequestWaitsOutAnotherReadsProbe`).
 - **Wire goldens (`internal/api/wire_golden_test.go`, `internal/api/testdata/wire/`, audiosilo#96, server#347)**: the
   shape of each important player envelope (`/server`, the session and pairing envelopes, `/me`, the library
-  lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, `/meta`, `/me/upcoming`,
+  lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, favourites, `/meta`, `/me/upcoming`,
   `/household/listening`), produced by the real handlers against seeded envs: each field's JSON type, never a
   value, so ids and times never churn it. `TestWireGolden` fails on any change: a field removed or retyped
   breaks shipped clients (CROSS-REPO.md §15), and an addition must show in the diff. After an intended change
@@ -3172,7 +3172,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   own version as `cover_art`, so `cover_version` follows a sidecar replaced in place
   and equals the thumbnail ETag's hash; `catalog.RecordCoverColors` is
   compare-and-set on the identity it was read under and bounded (250 ms, detached
-  from the request). Both are on the player `Book` JSON (`omitempty`).
+  from the request). Both are on the player `Book` JSON (`omitempty`). The player rows
+  that name a book without carrying one, `GET /me/progress` (`ListProgress` only: never
+  `GetProgress` or a save's echo, which `scanProgress` clears), `GET /me/favourites`, a
+  `/fs` book entry (`library.MarkBooks`) and a `/household/listening` row on an indexed
+  book, carry its `cover_version` too, omitted where the path is no indexed book
+  (server#215).
   Migration 0094 adds `books.cover_color_art`, the raw identity of the last art read,
   including a read that found no colour. `CoverColorsDue` pages the partial index
   of rows whose identity differs. At upgrade, `BackfillCoverColorArt` checks the
