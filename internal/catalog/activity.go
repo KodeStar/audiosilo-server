@@ -19,6 +19,18 @@ import (
 // completion (from progress), the devices in use (from tokens) and the state of
 // the collection. Listening is bucketed in server time (loc).
 type Activity struct {
+	ListeningActivity
+	Funnel        Funnel         `json:"funnel"`
+	DropOffs      []DropOff      `json:"drop_offs"`
+	Growth        []GrowthPoint  `json:"growth"`
+	Storage       Storage        `json:"storage"`
+	Coverage      Coverage       `json:"coverage"`
+	InactiveUsers []InactiveUser `json:"inactive_users"`
+}
+
+// ListeningActivity is an Activity's listening, what ListeningActivityFor
+// answers alone (Year in listening, server#225).
+type ListeningActivity struct {
 	Period
 	Totals ActivityTotals `json:"totals"`
 	// Estimated is how much of Totals.Listened is an estimate (seconds): listening
@@ -37,15 +49,9 @@ type Activity struct {
 	TopAuthors     []TopPerson     `json:"top_authors"`
 	TopNarrators   []TopPerson     `json:"top_narrators"`
 	TopUsers       []TopUser       `json:"top_users"`
-	Funnel         Funnel          `json:"funnel"`
-	DropOffs       []DropOff       `json:"drop_offs"`
 	Playback       []PlaybackShare `json:"playback"`
 	PeakConcurrent Peak            `json:"peak_concurrent"`
 	Clients        []ClientCount   `json:"clients"`
-	Growth         []GrowthPoint   `json:"growth"`
-	Storage        Storage         `json:"storage"`
-	Coverage       Coverage        `json:"coverage"`
-	InactiveUsers  []InactiveUser  `json:"inactive_users"`
 }
 
 // Period labels a stats period (the Activity page, a person's stats): the range
@@ -297,7 +303,7 @@ func (c *Catalog) listeningDays(ctx context.Context, label string, acc *listenAc
 // (server#225): two reader connections at most, the page in about the time of
 // the longer of the two. Each writes only its own fields of the answer.
 func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*Activity, error) {
-	out := &Activity{Period: periodOf(label, from, to, loc)}
+	out := &Activity{ListeningActivity: ListeningActivity{Period: periodOf(label, from, to, loc)}}
 	var stepsErr error
 	var stepsPanic string
 	var wg sync.WaitGroup
@@ -320,7 +326,7 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 			}
 		}
 	})
-	err := c.activityListening(ctx, out, from, to, loc)
+	err := c.activityListening(ctx, &out.ListeningActivity, from, to, loc)
 	wg.Wait()
 	if stepsPanic != "" {
 		panic(stepsPanic)
@@ -332,11 +338,10 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 }
 
 // ListeningActivityFor is ActivityFor without its steps over the library and
-// progress (funnel, drop-offs, growth, storage, coverage and inactive users,
-// left at their zero values): the period's listening alone, what Year in
-// listening shows (server#225).
-func (c *Catalog) ListeningActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*Activity, error) {
-	out := &Activity{Period: periodOf(label, from, to, loc)}
+// progress (funnel, drop-offs, growth, storage, coverage and inactive users):
+// the period's listening alone, what Year in listening shows (server#225).
+func (c *Catalog) ListeningActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*ListeningActivity, error) {
+	out := &ListeningActivity{Period: periodOf(label, from, to, loc)}
 	if err := c.activityListening(ctx, out, from, to, loc); err != nil {
 		return nil, err
 	}
@@ -345,7 +350,7 @@ func (c *Catalog) ListeningActivityFor(ctx context.Context, label string, from, 
 
 // activityListening is ActivityFor's listening: the period's, the totals of the
 // one before it, and the books finished in each.
-func (c *Catalog) activityListening(ctx context.Context, out *Activity, from, to time.Time, loc *time.Location) error {
+func (c *Catalog) activityListening(ctx context.Context, out *ListeningActivity, from, to time.Time, loc *time.Location) error {
 	cur := newListenAcc(from, to, loc, listenAll)
 	prev, err := c.listenPeriods(ctx, cur)
 	if err != nil {
@@ -708,7 +713,7 @@ func bookCounts[V any](listened map[Ref]V, finished map[Ref]bool) (books, done i
 }
 
 // result writes the accumulated listening into out.
-func (a *listenAcc) result(out *Activity, finished finishedSet) {
+func (a *listenAcc) result(out *ListeningActivity, finished finishedSet) {
 	out.Totals = a.totals(finished)
 	out.Estimated = a.estimated
 	out.HourWeekday = a.hw

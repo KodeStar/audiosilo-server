@@ -330,7 +330,7 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 // Activity page for the period (7d, 30d, 90d, 1y or a calendar year) in server
 // time, without the Overview's figures (the console reads those from the plain
 // /admin/stats). &parts=listening answers the period's listening alone
-// (listeningActivity: Year in listening, server#225).
+// (catalog.ListeningActivity: Year in listening, server#225).
 func (a *API) handleActivityStats(w http.ResponseWriter, r *http.Request) {
 	parts := r.URL.Query().Get("parts")
 	if parts != "" && parts != "listening" {
@@ -338,33 +338,21 @@ func (a *API) handleActivityStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	label, from, to, err := catalog.ParseActivityRange(r.URL.Query().Get("range"), time.Now(), time.Local)
-	if err == nil {
-		var activity *catalog.Activity
-		if parts == "listening" {
-			if activity, err = a.cat.ListeningActivityFor(r.Context(), label, from, to, time.Local); err == nil {
-				writeJSON(w, http.StatusOK, map[string]any{"activity": listeningActivity{Activity: activity}})
-				return
-			}
-		} else if activity, err = a.cat.ActivityFor(r.Context(), label, from, to, time.Local); err == nil {
-			writeJSON(w, http.StatusOK, map[string]any{"activity": activity})
-			return
-		}
+	if err != nil {
+		a.writeCatalogError(w, err, "activity stats failed", "could not load activity")
+		return
 	}
-	a.writeCatalogError(w, err, "activity stats failed", "could not load activity")
-}
-
-// listeningActivity is an Activity of ListeningActivityFor's on the wire: the
-// fields it doesn't compute are left out rather than sent as zeros. Each field
-// here names one of Activity's at a shallower depth, so it hides that one from
-// the encoding, and is nil, so it is omitted.
-type listeningActivity struct {
-	*catalog.Activity
-	Funnel        *struct{} `json:"funnel,omitempty"`
-	DropOffs      *struct{} `json:"drop_offs,omitempty"`
-	Growth        *struct{} `json:"growth,omitempty"`
-	Storage       *struct{} `json:"storage,omitempty"`
-	Coverage      *struct{} `json:"coverage,omitempty"`
-	InactiveUsers *struct{} `json:"inactive_users,omitempty"`
+	var activity any
+	if parts == "listening" {
+		activity, err = a.cat.ListeningActivityFor(r.Context(), label, from, to, time.Local)
+	} else {
+		activity, err = a.cat.ActivityFor(r.Context(), label, from, to, time.Local)
+	}
+	if err != nil {
+		a.writeCatalogError(w, err, "activity stats failed", "could not load activity")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"activity": activity})
 }
 
 // handleListeningDays answers GET /admin/listening?range=&user_id=: listening per
