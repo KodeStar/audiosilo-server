@@ -242,7 +242,7 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 		if err != nil {
 			return nil, err
 		}
-		var ids []any
+		var ids []int64
 		for _, set := range sets {
 			if set.ignored {
 				ic.Ignored++
@@ -318,25 +318,35 @@ type DuplicatePage struct {
 
 // sampleCoverVersions sets each sample's CoverVersion from the book with the
 // id at the same index of ids.
-func (c *Catalog) sampleCoverVersions(ctx context.Context, samples []IssueSample, ids []any) error {
+func (c *Catalog) sampleCoverVersions(ctx context.Context, samples []IssueSample, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	type idArt struct {
-		id  int64
-		art string
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
 	}
-	found, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *idArt) error { return rows.Scan(&r.id, &r.art) },
-		`SELECT id, cover_art FROM books WHERE id IN (`+placeholders(len(ids))+`)`, ids...)
+	rows, err := c.db.QueryContext(ctx, `SELECT id, cover_art FROM books WHERE id IN (`+placeholders(len(ids))+`)`, args...)
 	if err != nil {
 		return err
 	}
-	for i := range samples {
-		for _, r := range found {
-			if r.id == ids[i] {
-				samples[i].CoverVersion = CoverVersion(r.art)
-			}
+	defer rows.Close()
+	art := make(map[int64]string, len(ids))
+	for rows.Next() {
+		var (
+			id int64
+			a  string
+		)
+		if err := rows.Scan(&id, &a); err != nil {
+			return err
 		}
+		art[id] = a
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i, id := range ids {
+		samples[i].CoverVersion = CoverVersion(art[id])
 	}
 	return nil
 }

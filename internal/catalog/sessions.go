@@ -295,7 +295,7 @@ const sessionColumns = `s.id, s.user_id, u.username, s.library_id, s.rel_path,
 	COALESCE(b.title, ''), COALESCE(b.author, ''), s.token_id, s.device_name,
 	s.client_app, s.client_version, s.client_platform, s.started_at, s.last_at,
 	s.start_pos, s.end_pos, s.duration, s.speed, s.listened, s.codec, s.transcoded, s.finished, s.backfilled,
-	s.import_id, COALESCE(b.cover_art, ''), COALESCE(t.kind, '') = '` + tokenKindAPI + `'`
+	s.import_id, COALESCE(b.cover_art, ''), ` + sessionKeyDeviceSQL
 
 // listenedSQL keeps a session out of every list and total until it has recorded
 // some listening: a single save (a player's "mark finished", another app syncing
@@ -307,9 +307,10 @@ const sessionFrom = ` FROM listening_sessions s
 	LEFT JOIN books b ON b.library_id = s.library_id AND b.rel_path = s.rel_path
 	LEFT JOIN tokens t ON t.id = s.token_id`
 
-// tokenKindAPI is auth.KindAPI, a personal API key's token kind (this package
-// doesn't import auth).
-const tokenKindAPI = "api"
+// sessionKeyDeviceSQL is whether a session's device (tokens t, joined on its
+// token_id) is a personal API key, while its token is kept: auth.KindAPI, which
+// this package doesn't import.
+const sessionKeyDeviceSQL = `COALESCE(t.kind, '') = 'api'`
 
 // scanSession scans sessionColumns (plus extra destinations after them) and
 // derives the client and the state.

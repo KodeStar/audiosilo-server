@@ -564,10 +564,8 @@ const (
 )
 
 func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
-	cols, joins := listenRowColumns, listenRowJoins("s")
-	// Whether the session's device is an API key (while its token is kept),
-	// for the clients breakdown.
-	apiKey := `COALESCE((SELECT t.kind FROM tokens t WHERE t.id = s.token_id), '') = '` + tokenKindAPI + `'`
+	// sessionKeyDeviceSQL (on tokens t) is for the clients breakdown.
+	cols, joins, apiKey := listenRowColumns, listenRowJoins("s")+` LEFT JOIN tokens t ON t.id = s.token_id`, sessionKeyDeviceSQL
 	if a.level < listenAll { // totals or days only: no names needed
 		cols, joins, apiKey = listenRowBlanks, "", "0"
 	}
@@ -744,11 +742,15 @@ func (a *listenAcc) topBooks(keep func(Ref) bool) []TopBook {
 			continue
 		}
 		out = append(out, TopBook{LibraryID: ref.LibraryID, Path: ref.Path, Title: b.title,
-			Author: b.author, Listened: b.listened, Listeners: len(b.listeners), CoverVersion: CoverVersion(b.coverArt)})
+			Author: b.author, Listened: b.listened, Listeners: len(b.listeners)})
 	}
-	return topN(out, func(x, y TopBook) int {
+	out = topN(out, func(x, y TopBook) int {
 		return cmp.Or(cmp.Compare(y.Listened, x.Listened), cmp.Compare(x.Title, y.Title), cmp.Compare(x.Path, y.Path))
 	})
+	for i := range out { // the kept few's only
+		out[i].CoverVersion = CoverVersion(a.books[Ref{LibraryID: out[i].LibraryID, Path: out[i].Path}].coverArt)
+	}
+	return out
 }
 
 func bookAuthor(b *bookAcc) string   { return b.author }
