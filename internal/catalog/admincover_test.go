@@ -163,13 +163,16 @@ func TestSessionAPIKey(t *testing.T) {
 			t.Errorf("%s api_key by device = %v, want only the key (%d)", name, got, key)
 		}
 	}
+	// The key's session from a script that named its app counts by that name.
+	f.addClientSession(t, f.user, key, "Dash", "1.0", "linux")
+	named := ClientCount{App: "Dash", Version: "1.0", Platform: "linux", Devices: 1}
 	// The Activity page's apps count the keys that named no app as one row of
 	// their own, apart from the other devices that named none.
 	a, err := f.c.ActivityFor(f.ctx, "7d", f.clock.Add(-7*24*time.Hour), f.clock, time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []ClientCount{{Devices: 2}, {APIKey: true, Devices: 1}}
+	want := []ClientCount{{Devices: 2}, {APIKey: true, Devices: 1}, named}
 	if !reflect.DeepEqual(a.Clients, want) {
 		t.Errorf("clients = %+v, want %+v", a.Clients, want)
 	}
@@ -178,7 +181,7 @@ func TestSessionAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []ClientCount{{Devices: 3}}; !reflect.DeepEqual(us.Clients, want) {
+	if want := []ClientCount{{Devices: 3}, named}; !reflect.DeepEqual(us.Clients, want) {
 		t.Errorf("user stats clients = %+v, want %+v", us.Clients, want)
 	}
 }
