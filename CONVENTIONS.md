@@ -3396,7 +3396,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   drop-off carry the book's `cover_version`, omitted off an indexed book, as a Book's, server#270;
   a session on a personal API key carries `api_key` (the token's kind while the token is kept:
   `device_name` is the key's label, a script sends no app header), and the Activity page's
-  `clients` counts the keys that named no app as their own `api_key` row, server#224): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `metadata.IsGenericTitle`, which reads every script; "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
+  `clients` counts the keys that named no app as their own `api_key` row (`listenAcc.splitKeys`, never on `/me/stats`), server#224): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `metadata.IsGenericTitle`, which reads every script; "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
   /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
   /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
   /admin/devices/{id}` (409 `current_device` for the caller's own token), `GET
@@ -3501,7 +3501,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   per-user query spellings, served by `idx_sessions_user_last` / `idx_daily_user` / the progress key).
   `GET /me/stats?range=` → `{"stats": catalog.UserStats}` (totals/previous without
   `listeners`, `days` as `{date, listened}`, hours, top books/authors/narrators/series, `finished_books`
-  ≤ 100, playback, clients; none of the admin-only steps run). **Privacy**: the types have no field that
+  ≤ 100, playback, clients (unsplit: no `api_key` row or field, the Activity page's split is admin-only); none of the admin-only steps run). **Privacy**: the types have no field that
   can carry another user, user 0 is refused (`errNoUser`: 0 is "everyone" to the
   accumulator), and the rows naming a book pass the caller's CURRENT access (`UserScopes` +
   `ScopesAllow` / `scopesFilterSQL`): a revoked share's book leaves `top_books`/`finished_books` and the

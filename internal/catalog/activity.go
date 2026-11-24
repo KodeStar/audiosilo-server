@@ -174,7 +174,8 @@ type Peak struct {
 // ClientCount is how many devices listened in the period with one app build (as
 // each session recorded it, so a later upgrade doesn't rewrite the past). App ""
 // is a client that never named itself (released before the header); APIKey
-// sets apart the personal API keys among those (server#224), counted as one row.
+// sets apart the personal API keys among those (server#224), counted as one row
+// on the console's Activity only (listenAcc.splitKeys; never on /me/stats).
 type ClientCount struct {
 	App      string `json:"app"`
 	Version  string `json:"version"`
@@ -352,6 +353,7 @@ func (c *Catalog) ListeningActivityFor(ctx context.Context, label string, from, 
 // one before it, and the books finished in each.
 func (c *Catalog) activityListening(ctx context.Context, out *ListeningActivity, from, to time.Time, loc *time.Location) error {
 	cur := newListenAcc(from, to, loc, listenAll)
+	cur.splitKeys = true
 	prev, err := c.listenPeriods(ctx, cur)
 	if err != nil {
 		return err
@@ -404,6 +406,10 @@ type listenAcc struct {
 	// onlyUser keeps only this user's listening (0 = everyone's; a person's own
 	// stats build theirs with newUserListenAcc).
 	onlyUser int64
+	// splitKeys counts the personal API keys that name no app as their own
+	// clients row (ClientCount.APIKey, server#224): the console's Activity only.
+	// A person's own stats (GET /me/stats, the player's) keep clients unsplit.
+	splitKeys bool
 
 	listened  float64
 	estimated float64 // the part of listened that is estimated (listening_daily.estimated)
@@ -564,10 +570,11 @@ const (
 )
 
 func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
-	// sessionKeyDeviceSQL (on tokens t) is for the clients breakdown.
-	cols, joins, apiKey := listenRowColumns, listenRowJoins("s")+` LEFT JOIN tokens t ON t.id = s.token_id`, sessionKeyDeviceSQL
+	cols, joins, apiKey := listenRowColumns, listenRowJoins("s"), "0"
 	if a.level < listenAll { // totals or days only: no names needed
-		cols, joins, apiKey = listenRowBlanks, "", "0"
+		cols, joins = listenRowBlanks, ""
+	} else if a.splitKeys { // sessionKeyDeviceSQL (on tokens t) is for the clients breakdown
+		joins, apiKey = joins+` LEFT JOIN tokens t ON t.id = s.token_id`, sessionKeyDeviceSQL
 	}
 	where, args := sessionsOfEveryone, []any{formatSessionTime(a.to), formatSessionTime(a.from)}
 	if a.onlyUser != 0 {

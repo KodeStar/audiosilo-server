@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -266,6 +267,59 @@ func TestAdminEditProgressNeedsTheUsersAccess(t *testing.T) {
 		url.QueryEscape(cradle) + "&user_id=" + strconv.FormatInt(e.adminID, 10)
 	if resp, body := e.do(t, "PATCH", self, e.console, `{"finished":true}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("edit for an admin = %d %s, want 200", resp.StatusCode, body)
+	}
+}
+
+// The console's Activity counts the API keys that name no app as their own
+// clients row (api_key, server#224); the player's GET /me/stats keeps its clients
+// unsplit, with no api_key field (its Stable wire shape).
+func TestStatsClientsSplitAPIKeysForAdminOnly(t *testing.T) {
+	t.Parallel()
+	e := newActivityEnv(t)
+	_, key := e.mintAPIKey(t, e.playerTok, "script")
+	other, err := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "Old phone", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range []string{key, other} { // two devices, neither naming its app
+		for _, pos := range []string{"10", "20"} {
+			resp, body := e.do(t, "PUT", e.libPath()+"/progress?path="+url.QueryEscape(unsouled), tok,
+				`{"position":`+pos+`,"duration":120}`)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("progress save = %d %s", resp.StatusCode, body)
+			}
+		}
+	}
+
+	resp, body := e.do(t, "GET", "/api/v1/admin/stats?range=7d", e.console, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin stats = %d %s", resp.StatusCode, body)
+	}
+	var admin struct {
+		Activity catalog.Activity `json:"activity"`
+	}
+	if err := json.Unmarshal([]byte(body), &admin); err != nil {
+		t.Fatal(err)
+	}
+	if want := []catalog.ClientCount{{Devices: 1}, {APIKey: true, Devices: 1}}; !reflect.DeepEqual(admin.Activity.Clients, want) {
+		t.Fatalf("admin clients = %+v, want %+v", admin.Activity.Clients, want)
+	}
+
+	resp, body = e.do(t, "GET", "/api/v1/me/stats?range=7d", e.playerTok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("my stats = %d %s", resp.StatusCode, body)
+	}
+	if strings.Contains(body, `"api_key"`) {
+		t.Fatalf("my stats carries api_key: %s", body)
+	}
+	var mine struct {
+		Stats catalog.UserStats `json:"stats"`
+	}
+	if err := json.Unmarshal([]byte(body), &mine); err != nil {
+		t.Fatal(err)
+	}
+	if want := []catalog.ClientCount{{Devices: 2}}; !reflect.DeepEqual(mine.Stats.Clients, want) {
+		t.Fatalf("my clients = %+v, want %+v", mine.Stats.Clients, want)
 	}
 }
 

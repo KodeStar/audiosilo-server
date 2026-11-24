@@ -173,4 +173,12 @@ func TestSessionAPIKey(t *testing.T) {
 	if !reflect.DeepEqual(a.Clients, want) {
 		t.Errorf("clients = %+v, want %+v", a.Clients, want)
 	}
+	// A person's own stats (the player's GET /me/stats) keep them unsplit.
+	us, err := f.c.UserStatsFor(f.ctx, "7d", f.clock.Add(-7*24*time.Hour), f.clock, time.UTC, f.user, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []ClientCount{{Devices: 3}}; !reflect.DeepEqual(us.Clients, want) {
+		t.Errorf("user stats clients = %+v, want %+v", us.Clients, want)
+	}
 }
