@@ -22,6 +22,23 @@ name: ""
 #                                                     [AUDIOSILO_UPDATE_CHECK]
 update_check: true
 
+# Listening history: raw listening sessions (which device and app, the time of
+# day, the playback mode) are kept this many days, 30 to 3650, then summed into
+# per-day totals per listener and book (Settings > General; the daily retention
+# job applies a change).
+activity:
+  session_days: 400                                 # [AUDIOSILO_SESSION_DAYS]
+
+# Database backups. schedule is "" (off), "daily:HH:MM" or "weekly:DAY:HH:MM"
+# (day as sun..sat) in the server's time zone; keep is how many scheduled
+# backups are kept, 1 to 365 (manual ones stay until deleted); dir is the
+# backups folder, empty = <data-dir>/backups, set only here or by its variable,
+# never in the console (Settings > Backups changes the other two).
+backups:
+  schedule: "daily:03:00"                           # [AUDIOSILO_BACKUP_SCHEDULE]
+  keep: 7                                           # [AUDIOSILO_BACKUP_KEEP]
+  dir: ""                                           # [AUDIOSILO_BACKUP_DIR]
+
 # Address to listen on.                              [AUDIOSILO_BIND]
 bind: "0.0.0.0:8080"
 
@@ -164,7 +181,7 @@ demo:
   enabled: false       # [AUDIOSILO_DEMO_ENABLED]
   library: ""          # name of a library above to grant demo users [AUDIOSILO_DEMO_LIBRARY]
   # max_users: 200     # cap on live demo users; omit for the safe default of 200, explicit 0 = unlimited (opt-in risk) [AUDIOSILO_DEMO_MAX_USERS]
-  idle_ttl: "24h"      # reap demo users idle longer than this [AUDIOSILO_DEMO_IDLE_TTL]
+  idle_ttl: ""         # reap demo users idle longer than this, e.g. "48h"; empty = 24h [AUDIOSILO_DEMO_IDLE_TTL]
 
 # Household members. Anyone with an account (not a demo account) can add the
 # people they live with from the player (Me > Household): a kid, signed in on
@@ -227,8 +244,8 @@ metadata:
   mode: remote
   mirror:
     # Time between successful release checks, read at startup: 0 for one week,
-    # else at least 1h.
-    interval: 168h
+    # else at least 1h (such as 48h).
+    interval: 0
   # Help complete the community database (Settings > Metadata; off by default,
   # applies at once): once a day, send the metadata service the Audible ASINs of
   # your books the community database doesn't know, and nothing else (no titles,

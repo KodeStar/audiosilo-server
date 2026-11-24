@@ -430,3 +430,24 @@ func TestSaveWritesOnlyWhatDiffers(t *testing.T) {
 		t.Fatalf("values set back to their defaults were saved:\n%s", raw)
 	}
 }
+
+// config.example.yaml lists every key with its default, as Default holds it
+// (server#252): loaded and saved, it leaves nothing in the file, so a copy of
+// it follows a later release's defaults as a server's own file does.
+func TestExampleHoldsTheDefaults(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := cfg.savedYAML(); err != nil || string(out) != "{}\n" {
+		t.Fatalf("the example's values that are not the defaults (%v):\n%s", err, out)
+	}
+}
