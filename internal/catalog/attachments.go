@@ -77,8 +77,10 @@ func sigParts(sig string) metadata.AttachmentParts {
 // (BookAttachmentParts, EarlierInSeries). A file with only a whole-book summary
 // has none, as a community work with only a recap_summary has none on /meta.
 // The CASE keeps json_array_length (which fails the query on anything but
-// JSON) off an empty value and one that no longer decodes, which read as none,
-// as decodeAttachment reads them.
+// JSON) off an empty value and one that isn't JSON at all, which read as none,
+// as decodeAttachment reads them. A value that is JSON but no longer decodes
+// into model.Recaps (a later server's, say) still counts its list here, where
+// decodeAttachment (and so /meta) reads none.
 func recapListExpr(col string) string {
 	return `COALESCE(CASE WHEN json_valid(` + col + `) THEN json_array_length(` + col + `, '$.recaps') > 0 END, 0)`
 }
