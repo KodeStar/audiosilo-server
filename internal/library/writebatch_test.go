@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
@@ -22,12 +23,12 @@ func indexCounts(t *testing.T, db *store.DB) (books, files, bare int) {
 	return books, files, bare
 }
 
-// A scan of more books than a batch writes them all, no batch over writeBatch,
+// A scan of more books than a batch writes them all, no batch over catalog.UpsertBatch,
 // with its progress at the end as before; a scan finding them unchanged writes
 // none.
 func TestScanWritesInBatches(t *testing.T) {
 	t.Parallel()
-	const n = 2*writeBatch + 22
+	const n = 2*catalog.UpsertBatch + 22
 	s, _, lib, db := newTestScanner(t, smallLibrary(t, n, 1), "", 8)
 	var most, taken atomic.Int64
 	s.batched = func(size int) {
@@ -43,8 +44,8 @@ func TestScanWritesInBatches(t *testing.T) {
 	if res.Added != n || res.Errors != 0 {
 		t.Fatalf("added %d (%d errors), want %d", res.Added, res.Errors, n)
 	}
-	if taken.Load() != n || most.Load() > writeBatch {
-		t.Errorf("%d books taken into batches, the largest %d; want %d, at most %d", taken.Load(), most.Load(), n, writeBatch)
+	if taken.Load() != n || most.Load() > catalog.UpsertBatch {
+		t.Errorf("%d books taken into batches, the largest %d; want %d, at most %d", taken.Load(), most.Load(), n, catalog.UpsertBatch)
 	}
 	if books, files, bare := indexCounts(t, db); books != n || files != n || bare != 0 {
 		t.Errorf("index has %d books, %d files, %d without files; want %d, %d, 0", books, files, bare, n, n)
@@ -98,7 +99,7 @@ func TestScanWriteFailureIsTheBooksAlone(t *testing.T) {
 // were read before the stop), and writes nothing after.
 func TestScanStoppedMidBatchKeepsTheBatch(t *testing.T) {
 	t.Parallel()
-	const n = 3 * writeBatch
+	const n = 3 * catalog.UpsertBatch
 	s, _, lib, db := newTestScanner(t, smallLibrary(t, n, 1), "", 4)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

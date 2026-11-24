@@ -93,6 +93,13 @@ func TestRunRateLimitWaitsOutsideTheBudget(t *testing.T) {
 // shared budget, however much of its own it has left, so two composes for one
 // request can't take the API's whole request budget; and running out of it is
 // the upstream's failure, cached as one (the caller is still there).
+//
+// Nothing here waits on the clock: on a loaded host the shared budget can run
+// out before the lookup reaches the server (no lookup at all), so the test
+// holds the answer that is cached, not the number of lookups the first call
+// made. The upstream never answers (release closes only at cleanup) and the
+// client's own per-request timeout is off, so only the shared budget can end
+// the first call, and a second call that asked again would never return.
 func TestSharedBudget(t *testing.T) {
 	t.Parallel()
 	var lookups atomic.Int32
@@ -109,20 +116,38 @@ func TestSharedBudget(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	s := NewService(srv.URL, nil)
 	s.composeBudget = time.Hour
+	s.client.http.Timeout = 0
+	enrich := func(ctx context.Context) error {
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.Enrich(ctx, "B00SLOW001", "")
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(time.Minute): // a hang, not a slow host
+			t.Fatal("Enrich never ended: the shared budget didn't bound it")
+			return nil
+		}
+	}
 
 	ctx := WithSharedBudget(context.Background(), 50*time.Millisecond)
-	start := time.Now()
-	if _, err := s.Enrich(ctx, "B00SLOW001", ""); err == nil || errors.Is(err, ErrNotFound) {
-		t.Fatalf("Enrich past the shared budget = %v, want a failure", err)
-	}
-	if took := time.Since(start); took > 5*time.Second {
-		t.Fatalf("Enrich took %v, want it ended by the shared budget", took)
+	first := enrich(ctx)
+	if first == nil || errors.Is(first, ErrNotFound) {
+		t.Fatalf("Enrich past the shared budget = %v, want a failure", first)
 	}
 	if ctx.Err() != nil {
 		t.Fatal("the caller's context ended")
 	}
-	if _, err := s.Enrich(context.Background(), "B00SLOW001", ""); err == nil || lookups.Load() != 1 {
-		t.Fatalf("again = %v after %d lookups, want the cached failure", err, lookups.Load())
+	if _, hit, err := cacheGet[Enrichment](s.cache, cacheKey("B00SLOW001", "")); !hit || err != first {
+		t.Fatalf("cached = %v (hit %v), want the shared budget's failure cached", err, hit)
+	}
+	if again := enrich(context.Background()); again != first {
+		t.Fatalf("again = %v, want the cached failure %v", again, first)
+	}
+	if n := lookups.Load(); n > 1 {
+		t.Fatalf("%d lookups, want at most the first call's", n)
 	}
 }
 

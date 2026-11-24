@@ -133,7 +133,7 @@ describe('the action gate', () => {
     expect(detectJobsKnown(undefined)).toBe(false);
   });
 
-  it('follows the one offer rule: covered by the community, else Regenerate over local data, else Generate', () => {
+  it('follows the one offer rule: covered by the community, else Regenerate over generated data shown, else Generate', () => {
     const cov = (characters: boolean, recaps: boolean) => ({
       characters,
       recaps,
@@ -151,6 +151,12 @@ describe('the action gate', () => {
       [false, true, false, false, 'generate'],
       [true, false, false, true, 'regenerate'],
       [false, true, true, false, 'regenerate'],
+      // A file the community's dimension masks shows nowhere: no Regenerate for it
+      // (server#218, as the player reads /meta's work.generated).
+      [true, false, true, false, 'generate'],
+      [false, true, false, true, 'generate'],
+      [true, false, true, true, 'regenerate'],
+      [false, true, true, true, 'regenerate'],
       // The community has neither.
       [false, false, false, false, 'generate'],
       [false, false, true, false, 'regenerate'],

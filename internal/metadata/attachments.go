@@ -112,8 +112,10 @@ func (f AttachmentFiles) Generated() bool {
 }
 
 // AttachmentParts names a book's generated parts: which ones a reader wants
-// (catalog.BookAttachments reads only those) or which ones a book has
-// (catalog.BookAttachmentParts).
+// (catalog.BookAttachments reads only those) or which ones a book has. Two
+// readings of "has": catalog.BookAttachmentParts counts recaps only with a
+// recap list (the estimate's has.local), while Book.GeneratedParts (the
+// signature) counts any recaps.json, a summary alone included.
 type AttachmentParts struct {
 	Characters  bool
 	Recaps      bool
@@ -421,12 +423,14 @@ func cleanTime(v string) string {
 // maxProvenanceText or carries a control character: these are shown in the
 // console and logged, and a value is no reason to refuse the file.
 func cleanProvenance(v string) string {
-	return cleanText(v, maxProvenanceText)
+	return strictText(v, maxProvenanceText)
 }
 
-// cleanText is v trimmed, or "" when it is longer than limit bytes, isn't
-// UTF-8 or carries a control character.
-func cleanText(v string, limit int) string {
+// strictText is v trimmed, or "" when it is longer than limit bytes, isn't
+// UTF-8 or carries a control character. Unlike textclean.Clean it never cuts
+// or rewrites a value: a read-along's ebook file is a path, which a cut would
+// point at another file.
+func strictText(v string, limit int) string {
 	v = strings.TrimSpace(v)
 	if len(v) > limit || !utf8.ValidString(v) {
 		return ""

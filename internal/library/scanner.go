@@ -569,8 +569,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	window := 2 * slots.size()
 	var pending []*bookRead
 	// The books read and waiting to be written: a few share a transaction
-	// (writeBatch), written once there are writeBatch of them, they have waited
-	// writeBatchAge, the writer would wait on a read, or the scan ends or stops.
+	// (catalog.UpsertBooks, which bounds it), written once there are
+	// catalog.UpsertBatch of them, they have waited writeBatchAge, the writer
+	// would wait on a read, or the scan ends or stops.
 	var batch []*bookRead
 	var batchSince time.Time
 	// The folders of books split across disc folders whose discs this scan has
@@ -629,7 +630,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		for i, r := range batch {
 			books[i] = r.book
 		}
-		for i, err := range s.cat.UpsertBooks(context.WithoutCancel(ctx), books, writeBatchAge) {
+		for i, err := range s.cat.UpsertBooks(context.WithoutCancel(ctx), books) {
 			recordWrite(batch[i], err)
 		}
 		clear(batch)
@@ -660,7 +661,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		if s.batched != nil {
 			s.batched(len(batch))
 		}
-		if len(batch) >= writeBatch {
+		if len(batch) >= catalog.UpsertBatch {
 			flush()
 		}
 		return nil
@@ -982,20 +983,13 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	return res, nil
 }
 
-// writeBatch is how many books a scan writes in one transaction at most, and
-// writeBatchAge how long a book read waits to be written, and so how long one
-// of those transactions holds the writer, at most (catalog.UpsertBooks'
-// budget). A transaction's begin and commit cost a scan about as much as a
-// book's own writes (0.6 of 1.5 ms a book on a synthetic library, 1.3 of 3.9
-// ms on a real one: SCAN-SPIKE.md); shared by 64 books they cost a few percent
-// of that, and more books a transaction gain little while holding back every
-// other write (a listener's progress) for longer. A scan whose reads are slower than its
-// writes (ffprobe on every file) writes each book as its read is done, as
-// before: the writer never waits on a read holding books.
-const (
-	writeBatch    = 64
-	writeBatchAge = 250 * time.Millisecond
-)
+// writeBatchAge is how long a book read waits to be written: the batch it
+// waits in is written once it is that old, so a scan whose reads are slower
+// than its writes (ffprobe on every file) writes each book soon after its
+// read, as before; the writer never waits on a read holding books. How many
+// books a transaction takes, and how long it may hold the writer, are
+// catalog.UpsertBooks' bounds.
+const writeBatchAge = 250 * time.Millisecond
 
 // stopGrace is how long a stopped scan waits for its reads under way to end
 // before it leaves them (stopped).

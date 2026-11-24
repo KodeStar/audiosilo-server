@@ -165,7 +165,7 @@ func ParseReadalongHead(data []byte) (*ReadalongHead, error) {
 	}
 	h := &ReadalongHead{
 		Format:      ReadalongFormat,
-		Ebook:       ReadalongEbook{File: cleanText(j.Ebook.File, maxReadalongPath), SHA256: strings.ToLower(j.Ebook.SHA256)},
+		Ebook:       ReadalongEbook{File: strictText(j.Ebook.File, maxReadalongPath), SHA256: strings.ToLower(j.Ebook.SHA256)},
 		Audio:       ReadalongAudio{Duration: max(j.Audio.Duration, 0), Files: make([]ReadalongFile, 0, len(j.Audio.Files))},
 		GeneratedAt: cleanTime(j.GeneratedAt),
 		Coverage:    ReadalongCoverage{Text: *j.Coverage.Text, Audio: *j.Coverage.Audio},

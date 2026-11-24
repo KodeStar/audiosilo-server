@@ -176,7 +176,9 @@ func TestEnvSettingsLockedAndNotSaved(t *testing.T) {
 	}
 	text := string(raw)
 	if !strings.Contains(text, "name: Hearthside") || !strings.Contains(text, "public_url: https://file.example.com") ||
-		strings.Contains(text, "env.example.com") || !strings.Contains(text, "mode: selfsigned") {
+		strings.Contains(text, "env.example.com") || strings.Contains(text, "mode:") {
+		// tls.mode: the file never set it, so neither the env's off nor the
+		// default is written.
 		t.Fatalf("config.yaml must keep its own values for env-set keys:\n%s", text)
 	}
 	if next.PublicURL != "https://env.example.com" {

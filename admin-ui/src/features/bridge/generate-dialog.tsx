@@ -73,12 +73,7 @@ export function GenerateDialog({
         tone="community"
       >
         {open ? (
-          <GenerateForm
-            book={book}
-            regenerate={regenerate}
-            offline={offline}
-            onDone={() => onOpenChange(false)}
-          />
+          <GenerateForm book={book} offline={offline} onDone={() => onOpenChange(false)} />
         ) : null}
       </DialogContent>
     </Dialog>
@@ -87,12 +82,10 @@ export function GenerateDialog({
 
 function GenerateForm({
   book,
-  regenerate,
   offline,
   onDone,
 }: {
   book: { library_id: number; path: string; title: string };
-  regenerate: boolean;
   offline: boolean;
   onDone: () => void;
 }) {
@@ -164,7 +157,6 @@ function GenerateForm({
         ) : (
           <EstimateBody
             estimate={e}
-            regenerate={regenerate}
             offline={offline}
             canContribute={canContribute}
             contribute={contributeAs}
@@ -194,7 +186,6 @@ function GenerateForm({
 /** The estimate's facts, the choices, and what warns or stops. */
 function EstimateBody({
   estimate,
-  regenerate,
   offline,
   canContribute,
   contribute,
@@ -203,7 +194,6 @@ function EstimateBody({
   onIncludeEarlier,
 }: {
   estimate: BridgeEstimate;
-  regenerate: boolean;
   offline: boolean;
   canContribute: boolean;
   contribute: Contribute;
@@ -215,6 +205,9 @@ function EstimateBody({
   const lang = i18n.resolvedLanguage ?? 'en';
   const id = useId();
   const v = estimateView(estimate);
+  // A generate job rewrites both files, one the community masks included (whose
+  // book offers Generate, not Regenerate: server#218), so say so whenever it has either.
+  const replaces = estimate.has.local.characters || estimate.has.local.recaps;
   const earlier = estimate.earlier;
   // The figures quote every run the button queues: this book and the earlier
   // ones it takes first, naming how many runs that is.
@@ -284,7 +277,7 @@ function EstimateBody({
           {t('bridge.generate.subscriptionNote')}
         </p>
       ) : null}
-      {regenerate ? (
+      {replaces ? (
         <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.replaces')}</p>
       ) : null}
       {canContribute ? <ContributeSwitch value={contribute} onChange={onContribute} /> : null}

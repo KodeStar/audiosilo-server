@@ -55,8 +55,18 @@ type bridgeEstimate struct {
 
 // estimateHas is what a book already has: community content (its community
 // work, meta.Service.Coverages: characters, recaps, a community description)
-// and generated content (its indexed .audiosilo/ attachments). CommunityUnknown: the community couldn't be asked right now, so
-// community is no answer (never read it as "none").
+// and generated content (its indexed .audiosilo/ attachments, every file the
+// book has, one the community's part masks on /meta included; recaps only with
+// a recap list, catalog.BookAttachmentParts). CommunityUnknown: the community
+// couldn't be asked right now, so community is no answer (never read it as
+// "none").
+//
+// Characters or recaps are generated here AND shown (the console's
+// Regenerate, the player's from /meta's work.generated: one rule,
+// CONVENTIONS.md Bridge attachments) when local has them and community
+// doesn't: for those two, community is what /meta's fill rule leaves unfilled
+// (meta.Coverage), so /meta lays in exactly those parts. Not the description:
+// community counts a core description too, which /meta's fill doesn't.
 type estimateHas struct {
 	Community        hasContent `json:"community"`
 	Local            hasContent `json:"local"`
@@ -227,7 +237,7 @@ func (a *API) coverageBooks(ctx context.Context, books []*catalog.Book) ([]meta.
 
 // localContent is what the book's generated attachments carry (a stored file is
 // never empty: metadata.ParseCharacters, ParseRecaps and ParseDescription drop
-// one), read without decoding them.
+// one; recaps only with a recap list), read without decoding them.
 func (a *API) localContent(ctx context.Context, book *catalog.Book) (hasContent, error) {
 	p, err := a.cat.BookAttachmentParts(ctx, book.ID)
 	return hasContent{Characters: p.Characters, Recaps: p.Recaps, Description: p.Description}, err
