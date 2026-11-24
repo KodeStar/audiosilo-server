@@ -741,9 +741,9 @@ func TestBlockFileKeepsTheLastLargeRead(t *testing.T) {
 	}
 	r := &countingReader{r: bytes.NewReader(data)}
 	b := newBlockFile(r, int64(len(data)))
-	pic := make([]byte, 1<<20) // the picture, inside the tag
+	pic := make([]byte, 1<<20) // the picture, inside the tag, read by dhowden
 	const picAt = 100 << 10
-	if n, err := b.ReadAt(pic, picAt); n != len(pic) || err != nil {
+	if n, err := (&blockReader{b: b, pos: picAt}).Read(pic); n != len(pic) || err != nil {
 		t.Fatalf("picture read %d, %v", n, err)
 	}
 	before := r.n.Load()
@@ -756,6 +756,15 @@ func TestBlockFileKeepsTheLastLargeRead(t *testing.T) {
 	}
 	if read := r.n.Load() - before; read >= int64(len(pic)) || read < int64(len(tag)-len(pic)) {
 		t.Fatalf("the tag read %d bytes from the file, want its %d outside the picture (to a block)", read, len(tag)-len(pic))
+	}
+
+	// Used once, the picture is let go; and a large read of the probe's own is
+	// never kept (nothing reads it again).
+	if b.big != nil {
+		t.Fatalf("the picture is still kept (%d bytes) after the tag read used it", len(b.big))
+	}
+	if n, err := b.ReadAt(make([]byte, 1<<20), 2<<20); n != 1<<20 || err != nil || b.big != nil {
+		t.Fatalf("the probe's own large read = %d, %v, kept %d bytes; want it read and not kept", n, err, len(b.big))
 	}
 
 	// One past the file's end is short, as before.

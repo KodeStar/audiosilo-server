@@ -323,9 +323,11 @@ type blockFile struct {
 	err    error
 	ff     ffRules // the rules the probe reads it by
 
-	// big is the last read of more than four blocks, a copy, from bigOff: an
-	// ID3v2 tag's picture is read whole by dhowden, then again inside the whole
-	// tag the probe reads, and a cover of MiBs is not read from the file twice.
+	// big is dhowden's last read of more than four blocks (blockReader), a
+	// copy, from bigOff: an ID3v2 tag's picture is read whole by dhowden, then
+	// again inside the whole tag the probe reads, and a cover of MiBs is not
+	// read from the file twice. The probe's own large reads are not kept
+	// (nothing reads them again), and big is let go once a read has used it.
 	big    []byte
 	bigOff int64
 
@@ -502,8 +504,12 @@ func (b *blockFile) block(i int64) []byte {
 }
 
 // ReadAt reads through the block cache; a large read (a picture) goes straight
-// to the file, but for what it shares with the last one (big).
-func (b *blockFile) ReadAt(p []byte, off int64) (int, error) {
+// to the file, but for what it shares with dhowden's last one (big).
+func (b *blockFile) ReadAt(p []byte, off int64) (int, error) { return b.readAt(p, off, false) }
+
+// readAt is ReadAt; keep makes a large read the one kept (big): dhowden's,
+// through blockReader.
+func (b *blockFile) readAt(p []byte, off int64, keep bool) (int, error) {
 	b.tick()
 	if off < 0 {
 		return 0, errors.New("negative offset")
@@ -518,7 +524,7 @@ func (b *blockFile) ReadAt(p []byte, off int64) (int, error) {
 		n, err := b.raw(p, off)
 		if n == len(p) {
 			err = nil
-			if len(p) <= maxBig {
+			if keep && len(p) <= maxBig {
 				b.big, b.bigOff = bytes.Clone(p), off
 			}
 		}
@@ -541,9 +547,11 @@ func (b *blockFile) ReadAt(p []byte, off int64) (int, error) {
 }
 
 // aroundBig is ReadAt of p at off whose bytes lo to hi are big's: those are
-// copied from it, and only the rest is read (through the blocks, or the file).
+// copied from it, and big let go, and only the rest is read (through the
+// blocks, or the file).
 func (b *blockFile) aroundBig(p []byte, off, lo, hi int64) (int, error) {
 	copy(p[lo-off:hi-off], b.big[lo-b.bigOff:hi-b.bigOff])
+	b.big = nil
 	if head := p[:lo-off]; len(head) > 0 {
 		if n, err := b.ReadAt(head, off); n < len(head) {
 			return n, err
@@ -585,7 +593,7 @@ func (r *blockReader) Read(p []byte) (int, error) {
 	if r.pos >= r.b.size {
 		return 0, io.EOF
 	}
-	n, err := r.b.ReadAt(p, r.pos)
+	n, err := r.b.readAt(p, r.pos, true)
 	r.pos += int64(n)
 	if n > 0 && errors.Is(err, io.EOF) {
 		err = nil
