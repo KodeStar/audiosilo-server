@@ -3,6 +3,8 @@ package meta
 import (
 	"strings"
 
+	"github.com/kodestar/audiosilo-meta/pkg/model"
+
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -56,7 +58,7 @@ func SearchPrefill(title, author, series, relPath string, isFolder bool) string 
 	if pathTitle != "" && (swapped || junkTitle(title) || leafTitle(title, relPath, isFolder)) {
 		title = pathTitle
 	}
-	if p.Author != "" && (swapped || junkAuthor(author)) {
+	if p.Author != "" && (swapped || model.IsGenericCredit(author)) {
 		author = p.Author
 	}
 	return strings.TrimSpace(title + " " + author)
@@ -80,13 +82,4 @@ func leafTitle(title, relPath string, isFolder bool) bool {
 		return false
 	}
 	return match.Fold(title) == match.Fold(leaf)
-}
-
-// junkAuthor reports whether an author tag names nobody.
-func junkAuthor(a string) bool {
-	switch strings.ToLower(a) {
-	case "", "unknown", "unknown artist", "unknown author", "various", "various artists", "va":
-		return true
-	}
-	return false
 }

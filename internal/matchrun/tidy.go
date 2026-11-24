@@ -1,6 +1,7 @@
 package matchrun
 
 import (
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,22 +16,31 @@ import (
 // what the files add is only clutter. Fill otherwise fills blanks only, so without
 // it such a book kept its file title for good.
 
-// clutterWords are the words a file title adds to a book's title that say
-// nothing of which book it is: numbering, edition and format notes, genre
-// labels a store puts in the title, and the joining words between them ("Book
-// One of the Stormlight Archive"). A word naming another edition ("abridged",
-// "dramatized", "adaptation") or a split of the book ("part") is NOT clutter:
-// that title stays, as it does for a number no position of the book states
-// (statedNumbers).
-var clutterWords = map[string]bool{
+// File ordering is separate from series numbering. Require the spaced dash
+// in "20 - Hilldiggers" so a number in a title or a range keeps its meaning.
+var fileOrder = regexp.MustCompile(`^\s*[0-9]{1,3}\s+[-–]\s+`)
+
+var numberLabels = map[string]bool{
 	"book": true, "books": true, "bk": true, "vol": true, "vols": true, "volume": true, "volumes": true,
 	"no": true, "nr": true, "number": true, "episode": true,
-	"unabridged": true, "novel": true, "novella": true, "edition": true,
-	"series": true, "audiobook": true, "audio": true,
-	"litrpg": true, "gamelit": true, "progression": true, "cultivation": true, "epic": true,
-	"fantasy": true, "adventure": true,
-	"of": true, "the": true, "a": true, "an": true,
 }
+
+var clutterWords = map[string]bool{
+	"unabridged": true, "edition": true, "series": true, "audiobook": true, "audio": true,
+}
+
+// Genre words can describe the title itself. Only a separate subtitle made
+// entirely of these words, joining words and format labels is disposable.
+var genreFluff = map[string]bool{
+	"litrpg": true, "gamelit": true, "progression": true, "cultivation": true, "epic": true,
+	"fantasy": true, "adventure": true, "novel": true, "novella": true,
+}
+
+// noteJoiners are the joining words a genre note holds ("A Novel of the Expanse").
+var noteJoiners = map[string]bool{"a": true, "an": true, "the": true, "of": true}
+
+// A delimiter after the work title introduces a subtitle or a catalogue note.
+var titleBreak = regexp.MustCompile(`[:,(\[]|\s+[-–]\s+`)
 
 // tidyTitle is the community title (theirs) to write over the book's title in
 // state st under fill, "" for none: the book has a title that is no admin
@@ -47,12 +57,28 @@ func tidyTitle(st *catalog.MatchState, p catalog.MatchProposal) string {
 	if mine.Source == catalog.SourceEdited || catalog.CleanOverride(catalog.FieldTitle, mine.Value) == theirs {
 		return ""
 	}
-	left, ok := cut(titleWords(mine.Value), titleWords(theirs))
-	if !ok {
-		return "" // the community title isn't in it at all
-	}
-	if len(left) == 0 && strings.ToLower(mine.Value) != mine.Value && strings.ToUpper(mine.Value) != mine.Value {
+	target := titleWords(theirs)
+	file := titleWords(mine.Value)
+	if slices.Equal(file, target) && strings.ToLower(mine.Value) != mine.Value && strings.ToUpper(mine.Value) != mine.Value {
 		return ""
+	}
+	raw := mine.Value
+	if order := fileOrder.FindString(raw); order != "" && len(target) > 0 && file[0] != target[0] {
+		raw = raw[len(order):]
+		file = file[1:]
+	}
+	at := phraseAt(file, target)
+	if at < 0 {
+		return ""
+	}
+	end := at + len(target)
+	note := genreNoteStart(raw, file, end)
+	clear(file[at:end])
+	// A repeated part is disposable only beside the community title ending in that part.
+	if n := len(target); n >= 2 && target[n-2] == "part" && end+2 <= len(file) && slices.Equal(file[end:end+2], target[n-2:]) {
+		if _, ok := numberOf(target[n-1]); ok {
+			clear(file[end : end+2])
+		}
 	}
 	extras := []string{p.Values[catalog.FieldSubtitle], p.Values[catalog.FieldSeries],
 		st.Fields[catalog.FieldSeries].Value, st.Fields[catalog.FieldSeries].Scanned}
@@ -72,20 +98,45 @@ func tidyTitle(st *catalog.MatchState, p catalog.MatchProposal) string {
 	// named twice ("X: Y (X Book 1)").
 	slices.SortStableFunc(forms, func(a, b []string) int { return len(b) - len(a) })
 	for _, form := range forms {
-		for found := true; found; {
-			left, found = cut(left, form)
+		for at := phraseAt(file, form); at >= 0; at = phraseAt(file, form) {
+			clear(file[at : at+len(form)])
 		}
 	}
 	stated := statedNumbers(st, p)
-	for _, w := range left {
-		if clutterWords[w] {
-			continue
-		}
-		if n, ok := numberOf(w); !ok || !stated[n] {
-			return ""
+	for i, w := range file {
+		switch {
+		case w == "", clutterWords[w]:
+		case numberLabels[w]:
+			if i+1 >= len(file) || file[i+1] == "" {
+				return ""
+			}
+			if n, ok := numberOf(file[i+1]); !ok || !stated[n] {
+				return ""
+			}
+		case i >= note && (genreFluff[w] || noteJoiners[w]):
+		default:
+			if n, ok := numberOf(w); !ok || !stated[n] {
+				return ""
+			}
 		}
 	}
 	return theirs
+}
+
+// genreNoteStart is the first word of a decoration after the matched title.
+// Some stores append "A Progression Fantasy Adventure" without a delimiter.
+func genreNoteStart(raw string, words []string, titleEnd int) int {
+	if titleEnd+1 < len(words) && (words[titleEnd] == "a" || words[titleEnd] == "an") && genreFluff[words[titleEnd+1]] {
+		return titleEnd
+	}
+	count := 0
+	for _, segment := range titleBreak.Split(raw, -1) {
+		count += len(titleWords(segment))
+		if count >= titleEnd {
+			return count
+		}
+	}
+	return len(words)
 }
 
 // statedNumbers is the numbers a book's file title may carry as clutter: its
@@ -125,18 +176,16 @@ func titleWords(s string) []string {
 
 var apostrophes = strings.NewReplacer("'", "", "’", "")
 
-// cut takes the first run of ws that equals sub out of ws (ok false when there
-// is none, or sub is empty).
-func cut(ws, sub []string) ([]string, bool) {
-	if len(sub) == 0 {
-		return ws, false
-	}
-	for i := 0; i+len(sub) <= len(ws); i++ {
-		if slices.Equal(ws[i:i+len(sub)], sub) {
-			return slices.Concat(ws[:i], ws[i+len(sub):]), true
+// phraseAt locates a whole run of title words, or -1 for an absent or empty phrase.
+func phraseAt(words, phrase []string) int {
+	if len(phrase) > 0 {
+		for i := 0; i+len(phrase) <= len(words); i++ {
+			if slices.Equal(words[i:i+len(phrase)], phrase) {
+				return i
+			}
 		}
 	}
-	return ws, false
+	return -1
 }
 
 // numberWords are the numbers a title spells out.

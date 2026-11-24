@@ -378,6 +378,13 @@ func TestBestNarratorGate(t *testing.T) {
 
 func TestCleanTitle(t *testing.T) {
 	cases := []struct{ title, series, want string }{
+		{"The Orchard Cycle: Books 1-3", "Orchard Cycle", "Books 1-3"},
+		{"Before the Orchard Cycle: After", "Orchard Cycle", "Before After"},
+		{"TreeThe Tree: Harvest", "Tree", "TreeThe Harvest"},
+		{"ÎleThe Île: Harvest", "Île", "ÎleThe Harvest"},
+		{"Breathe Orchard Cycle - Again", "Orchard Cycle", "Breathe Again"},
+		{"An Île Saga – Épilogue", "île saga", "Épilogue"},
+		{"The Orchard Cycles: Harvest", "Orchard Cycle", "The Orchard Cycles: Harvest"},
 		{"Diary of a Wimpy Kid: The Ugly Truth (Book 5)", "Diary of a Wimpy Kid", "The Ugly Truth"},
 		{"Silverspear: Rise to Omniscience, Book 6", "Rise to Omniscience", "Silverspear"},
 		{"The Deep End - Diary of a Wimpy Kid Series, Book 15", "Diary of a Wimpy Kid", "The Deep End"},
@@ -572,5 +579,28 @@ func TestTitlesShareWord(t *testing.T) {
 		if got := TitlesShareWord(c.a, c.b); got != c.want {
 			t.Errorf("TitlesShareWord(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+// TestResidualGenreTailNamingSeries: a genre tail that names the book's series
+// ("A Discworld Novel") is dropped once the series is out, as a plain one is.
+func TestResidualGenreTailNamingSeries(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ title, series, want string }{
+		{"Mort: A Discworld Novel", "Discworld", "Mort"},
+		{"Mort - A Discworld Novel", "Discworld", "Mort"},
+		{"Thrawn: A Star Wars Novel", "Star Wars", "Thrawn"},
+		{"Dungeon Crawler Carl: A LitRPG Adventure", "Dungeon Crawler Carl", ""},
+		{"Emergence: A Tale of Knights", "Dragon Heart", "Emergence: A Tale of Knights"},
+	} {
+		for _, o := range []Options{{}, ImportOptions()} {
+			if got := residualTitle(tc.title, tc.series, o); got != tc.want {
+				t.Errorf("residualTitle(%q, %q, %+v) = %q, want %q", tc.title, tc.series, o, got, tc.want)
+			}
+		}
+	}
+	books := []Book{{Author: "Terry Pratchett", Title: "Mort: A Discworld Novel", Series: "Discworld"}}
+	if _, score, ok := BestWith(books, Query{Author: "Terry Pratchett", Title: "Mort", Series: "Discworld"}, Options{}); !ok || score < 2.5 {
+		t.Errorf("Mort against its Discworld-novel title: score %v ok %v, want the full-title bonus", score, ok)
 	}
 }

@@ -16,6 +16,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/kodestar/audiosilo-meta/pkg/model"
+
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -64,8 +66,10 @@ type MatchQuery struct {
 	IsFolder       bool
 	BookASIN       string
 	BookISBN       string
-	Region         string
-	Limit          int
+	// BookIdentifierHint marks BookASIN/BookISBN as suggestions from tags or an import.
+	BookIdentifierHint bool
+	Region             string
+	Limit              int
 	// NoSeries says the caller reads no candidate's series (a repick), so the
 	// series records the series rules read aren't fetched for it.
 	NoSeries bool
@@ -363,19 +367,19 @@ var dramaGenreRE = regexp.MustCompile(`(?i)\b(?:radio|audio)[\s-]?(?:drama|play)
 // lengthSays reports whether a dramatization's runtime is close enough to a plain
 // book's of seconds for its length alone to say the book is that production, when the
 // work holds nothing else (DefaultRecording): within 1% of the book's length, or two
-// minutes on a short one (the dramatization slack). A store rounds a runtime to the
+// minutes on a short one, capped at 15% so a clip cannot name a longer production. A store rounds a runtime to the
 // minute and a rip trims a second or two, so a copy of the production lands inside
 // it; another production of the text hardly ever does (the BBC's 1984 collection, 1.9%
 // off the work's dramatization, is one of its own).
 func lengthSays(r *MatchRecording, seconds float64) bool {
 	off, known := RuntimeOff(r.RuntimeMin, seconds)
-	return known && off <= max(0.01, 120/seconds)
+	return known && off <= min(0.15, max(0.01, 120/seconds))
 }
 
 // DefaultRecording is the recording of c a book most likely is, as the match
 // dialog picks it (admin-ui match-model.ts defaultRecording): the one an
 // identifier lookup resolved to, else, among the recordings one of the book's
-// narrators narrated that may be its edition by length (PlausibleRuntimeOff,
+// named narrators narrated that may be its edition by length (NarratedRuntimeOff,
 // or a length unknown; all of them when there is none such, or the book names
 // no narrator), the one whose runtime is closest to the book's (seconds), a
 // recording selling in the preferred region winning a tie; recordings without
@@ -404,9 +408,9 @@ func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrato
 // it, further off the length holds the book for review. It stays even when that
 // narrator reads another recording of c that fits (server#325: swapping to it gained
 // no book on the LibraForge benchmark, and swapping within NarratedRuntimeOff too lost
-// one whose hint was right). A match run calls it, where an identifier is always a
-// hint (an Audiobookshelf import's or a tag's); never on the book's own identifier (a refresh, a repick), which names
-// the recording the book is. rec nil (the work holds only a dramatization the book
+// one whose hint was right). ProposedRecording calls it for an identifier hint only:
+// the book's own identifier (a refresh, a repick, an unknown_asin run) names the
+// recording the book is. rec nil (the work holds only a dramatization the book
 // isn't) stays nil. The identifier vouched for rec alone, so a plain book
 // (MatchCandidate.PlainBook) gives way to a dramatization only as when nothing named
 // one (DefaultRecording's rule).
@@ -443,7 +447,7 @@ func chooseRecording(c *MatchCandidate, seconds float64, region string, narrator
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
 		off, known := RuntimeOff(r.RuntimeMin, seconds)
-		theirs := (!known || off <= PlausibleRuntimeOff) && ReadBy(r, narrators)
+		theirs := (!known || off <= NarratedRuntimeOff) && ReadBy(r, narrators)
 		drama := guarded && r.isDramatization(c)
 		if !keep(r) || (drama && !theirs && !lengthNames(r)) {
 			continue
@@ -460,14 +464,17 @@ func chooseRecording(c *MatchCandidate, seconds float64, region string, narrator
 	return best
 }
 
-// ReadBy reports whether one of the book's narrators narrated r: a name that
+// ReadBy reports whether the book and r credit the same named reader or ensemble: a name that
 // folds like one of r's narrators, or a multi-word one whose every word the
 // other holds, either way round: a credit and the community's list spell a
 // middle initial as they please ("George Wilson", "George K. Wilson").
 func ReadBy(r *MatchRecording, narrators []string) bool {
 	for _, n := range narrators {
+		if !PersonNarrator(n) {
+			continue
+		}
 		for _, rn := range r.Narrators {
-			if authorSimilarity(n, rn.Name) == 1 || authorSimilarity(rn.Name, n) == 1 {
+			if (authorSimilarity(n, rn.Name) == 1 || authorSimilarity(rn.Name, n) == 1) && PersonNarrator(rn.Name) {
 				return true
 			}
 		}
@@ -486,23 +493,13 @@ func DramatizesPlainBook(c *MatchCandidate, r *MatchRecording, narrators []strin
 	return c.PlainBook && !slices.ContainsFunc(narrators, dramatizationTextRE.MatchString) && r.isDramatization(c)
 }
 
-// PersonNarrator reports whether a narrator credit names a reader: not a cast or a
-// production ("Full Cast", "Full Cast Recording", "GraphicAudio [Dramatized
-// Adaptation]": dramatizationTextRE) and not a stand-in for nobody in particular
-// ("Various", "Multiple Narrators", "Unknown", "Anonymous", a bare "cast" a
-// co-credit splits off). Such a credit agrees with every recording that carries it,
-// so it says nothing about which edition a book is.
+// PersonNarrator reports whether a credit can identify a particular reader or
+// ensemble: not a cast or a production (any credit dramatizationTextRE reads, "BBC
+// Full-Cast Dramatisation", "GraphicAudio [Dramatized Adaptation]") and not a
+// placeholder (model.IsGenericCredit: "Various", "Unknown"). Such a credit can occur
+// on unrelated recordings, so it says nothing about which edition a book is.
 func PersonNarrator(name string) bool {
-	if dramatizationTextRE.MatchString(name) {
-		return false
-	}
-	switch match.Fold(name) {
-	case "", "various", "variousnarrators", "variousreaders", "variousartists", "variousvoices",
-		"multiplenarrators", "multiplereaders", "multiplevoices", "unknown", "unknownnarrator",
-		"anonymous", "anon", "uncredited", "cast", "narrator", "narrators", "none", "na", "va":
-		return false
-	}
-	return true
+	return !dramatizationTextRE.MatchString(name) && !model.IsGenericCredit(name)
 }
 
 // NormalizeLanguage reads a language tag as works/match takes it: the first of
@@ -611,6 +608,8 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	identifierOnly := text == "" && (asin != "" || isbn != "")
 	if text == "" && asin == "" && isbn == "" {
 		asin, isbn = match.NormalizeASIN(q.BookASIN), match.NormalizeISBN(q.BookISBN)
+	} else {
+		q.BookIdentifierHint = false // the admin supplied this search
 	}
 
 	var (
@@ -764,10 +763,21 @@ func (s *Service) hitCandidate(q MatchQuery, h matchHit, detail *upstreamWorkDet
 	return c
 }
 
-// setDefaultRecording sets c's DefaultRecording for q (by length, marketplace and
-// narrators), or marks it DramatizationOnly when it has recordings but none fits.
+// ProposedRecording is the recording of c the match dialog defaults to and a match
+// run proposes for q: DefaultRecording's, or FitRecording's when an identifier hint
+// found c. The book's own identifier keeps its recording.
+func ProposedRecording(c *MatchCandidate, q MatchQuery) *MatchRecording {
+	rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators)
+	if q.BookIdentifierHint && c.IdentifierHit() {
+		rec = FitRecording(c, rec, q.Duration, q.Region, q.Narrators)
+	}
+	return rec
+}
+
+// setDefaultRecording sets c's DefaultRecording for q (ProposedRecording), or marks
+// it DramatizationOnly when it has recordings but none fits.
 func setDefaultRecording(c *MatchCandidate, q MatchQuery) {
-	if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
+	if rec := ProposedRecording(c, q); rec != nil {
 		c.DefaultRecordingID = rec.ID
 	} else {
 		c.DramatizationOnly = len(c.Recordings) > 0

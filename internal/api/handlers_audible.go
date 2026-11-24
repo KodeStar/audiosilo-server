@@ -372,11 +372,11 @@ func (a *API) handleBridgeEnrichment(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusNotFound, "book_not_found", "no such book")
 		return
 	}
-	path := r.URL.Query().Get("path")
-	if pathTooLong(w, path) {
+	relPath := r.URL.Query().Get("path")
+	if pathTooLong(w, relPath) {
 		return
 	}
-	if path == "" {
+	if relPath == "" {
 		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "a book path is required")
 		return
 	}
@@ -387,7 +387,7 @@ func (a *API) handleBridgeEnrichment(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "an ASIN is required")
 		return
 	}
-	switch err := a.cat.BackfillASIN(r.Context(), id, path, req.ASIN); {
+	switch err := a.cat.BackfillASIN(r.Context(), id, relPath, req.ASIN); {
 	case errors.Is(err, catalog.ErrNotFound):
 		writeErrorCode(w, http.StatusNotFound, "book_not_found", "no such book")
 	case err != nil:

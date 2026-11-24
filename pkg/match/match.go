@@ -130,6 +130,9 @@ type prepBook struct {
 	seriesTrim string // strings.TrimSpace(b.Series)
 	normSeries string // NormalizeSeries(b.Series)
 
+	residualDone bool
+	residual     string // residualTitle(b.Title, b.Series, opts), shared by toks and own
+
 	toksDone bool
 	toks     []string // titleTokens(b.Title, b.Series, opts)
 
@@ -188,10 +191,19 @@ func (x *Index) series(i int) *prepBook {
 func (x *Index) toks(i int) []string {
 	p := &x.prep[i]
 	if !p.toksDone {
-		p.toks = titleTokens(x.books[i].Title, x.books[i].Series, x.opts)
+		p.toks = tokenize(fallbackTitle(x.residual(i), x.books[i].Title, x.opts))
 		p.toksDone = true
 	}
 	return p.toks
+}
+
+func (x *Index) residual(i int) string {
+	p := &x.prep[i]
+	if !p.residualDone {
+		p.residual = residualTitle(x.books[i].Title, x.books[i].Series, x.opts)
+		p.residualDone = true
+	}
+	return p.residual
 }
 
 func (x *Index) seqRef(i int) (float64, bool) {
@@ -207,7 +219,7 @@ func (x *Index) own(i int) *prepBook {
 	p := &x.prep[i]
 	if !p.ownDone {
 		b := &x.books[i]
-		p.bare = bareTitle(b.Title, b.Series, x.opts)
+		p.bare = len(tokenize(x.residual(i))) == 0
 		if p.bare {
 			p.veto, p.vetoOK = bareSeq(b.Title, b.Series)
 		}
@@ -468,8 +480,9 @@ func (x *Index) BestScore(q Query) (int, float64, bool) {
 				score = scoreBareVol1
 			}
 		default:
-			if o.WordlessFallback && qHasSeq && x.seriesOnly(i) {
-				// The fallback gave this series-named candidate its title's words
+			bToks := x.toks(i)
+			if x.seriesOnly(i) {
+				// CleanTitle can give a series-named candidate its title's words
 				// back, so token overlap is the series matching itself: like a bare
 				// pair, only its number (1 when it states none) may agree, or one
 				// numberless volume would absorb every later one.
@@ -477,11 +490,29 @@ func (x *Index) BestScore(q Query) (int, float64, bool) {
 				if !ok {
 					bSeq = 1
 				}
-				if !seqEqual(bSeq, qSeq) {
+				vSeq, vOK := qSeq, qHasSeq
+				if !o.WordlessFallback && !q.HasSequence {
+					// Under the default options a number the query's title states
+					// vetoes only outside its brackets: "Dune (2021 Edition)" is no
+					// volume 2021, "The Mayor of Noobtown 2" is volume 2.
+					vSeq, vOK = SeqFromTitle(stripParenGroups(q.Title), q.Series)
+				}
+				if vOK && !seqEqual(bSeq, vSeq) {
+					continue
+				}
+				// A span of numbers in the query's title ("The Expanse 1-3", "(Books
+				// 1-3)") is a pack of volumes, never the candidate alone: its first
+				// number agreeing is no evidence either.
+				if !o.WordlessFallback && !q.HasSequence && titleSpan.MatchString(stripSeries(q.Title, q.Series)) {
+					continue
+				}
+				// A query naming more than the series ("The Expanse Box Set", "...:
+				// Books 1-3") is another book of it: as a wordy side of a bare pair,
+				// only its stated sequence agreeing may still claim the candidate.
+				if !o.WordlessFallback && intersect(qToks, bToks) < len(qToks) && !(q.HasSequence && seqEqual(bSeq, q.Sequence)) {
 					continue
 				}
 			}
-			bToks := x.toks(i)
 			score = tokenScore(qToks, bToks)
 			if sameSeries {
 				score += scoreSeriesAgree
@@ -544,11 +575,15 @@ var fluffWords = regexp.MustCompile(`(?i)\b(?:series|unabridged|abridged|audiobo
 func CleanTitle(title, series string) string { return cleanTitle(title, series, Options{}) }
 
 // cleanTitle is CleanTitle under o. With Options.WordlessFallback a residual
-// with no word tokens and no digit ("The" of "The Mayor of Noobtown" in series
+// with no word tokens and no digit ("The" of "Mayor of Noobtown, The" in series
 // "Mayor of Noobtown") falls back like an empty one; a residual holding a number
 // is a volume's own, so it stays.
 func cleanTitle(title, series string, o Options) string {
-	t := residualTitle(title, series, o)
+	return fallbackTitle(residualTitle(title, series, o), title, o)
+}
+
+// fallbackTitle is cleanTitle's answer from title's residual t.
+func fallbackTitle(t, title string, o Options) string {
 	if o.WordlessFallback && !strings.ContainsAny(t, "0123456789") && len(tokenize(t)) == 0 {
 		t = ""
 	}
@@ -565,14 +600,16 @@ func cleanTitle(title, series string, o Options) string {
 // removed and NO fallback - empty when the title carries nothing of its own
 // ("Unintended Cultivator: Volume 9" with that series is pure series + number).
 func residualTitle(title, series string, o Options) string {
-	t := stripSeries(title, series)
-	if o.DropUnabridged && strings.ContainsAny(t, "([") {
-		// "(Unabridged)" is not genre fluff, so it kept a genre tail before it
-		// ("The Primal Hunter 15: A LitRPG Adventure (Unabridged)"). The
-		// regexp runs only on a title holding an opening bracket.
-		t = unabridgedGroup.ReplaceAllString(t, " ")
+	t := title
+	if o.DropUnabridged {
+		// All bracketed groups are discarded by this matcher. Remove them before
+		// judging the genre tail so an edition note cannot hide it.
+		t = stripParenGroups(t)
 	}
-	t = dropGenreSubtitle(t)
+	// The genre tail is judged before the series comes out (stripSeries takes the
+	// separator after it: "Dungeon Crawler Carl: A LitRPG Adventure") and again
+	// after, for a tail that names the series ("Mort: A Discworld Novel").
+	t = dropGenreSubtitle(stripSeries(dropGenreSubtitle(t), series))
 	t = stripMatchNoise(t)
 	t = replaceFluff(t)
 	return tidyTitle(t)
@@ -768,6 +805,10 @@ func stripSeries(title, series string) string {
 	return t
 }
 
+// titleSpan is two numbers joined by a hyphen or an en dash in a title, a span
+// of volumes ("1-3", "1 – 3"); a digit run never starts or ends inside a word.
+var titleSpan = regexp.MustCompile(`(?:^|[^\p{L}\p{N}])\d{1,3}\s*[-–]\s*\d{1,3}(?:[^\p{L}\p{N}]|$)`)
+
 // SeqFromTitle extracts a series sequence from a title by stripping the series name
 // and taking the first remaining number - the sequence in titles like "… 3",
 // "(Book 5)", "5: A …". Reports false when there is none.
@@ -874,7 +915,11 @@ func removeFoldRunes(s, sub string, bounded bool) string {
 			b.WriteString(s[:end])
 			prev, _ = utf8.DecodeLastRuneInString(s[:end])
 		} else {
-			b.WriteString(s[:start])
+			prefix := s[:start]
+			if bounded {
+				prefix, end = seriesEdges(prefix, s, end, isAlnumRune(prev))
+			}
+			b.WriteString(prefix)
 			b.WriteByte(' ')
 			prev = ' '
 		}
@@ -911,7 +956,11 @@ func removeFoldASCII(s, sub string, bounded bool) string {
 			b.WriteString(s[pos:end])
 			prevRemoved = false
 		} else {
-			b.WriteString(s[pos:i])
+			prefix := s[pos:i]
+			if bounded {
+				prefix, end = seriesEdges(prefix, s, end, pos > 0 && !prevRemoved && isAlnumByte(ls[pos-1]))
+			}
+			b.WriteString(prefix)
 			b.WriteByte(' ')
 			prevRemoved = true
 		}
@@ -920,6 +969,26 @@ func removeFoldASCII(s, sub string, bounded bool) string {
 	}
 	b.WriteString(s[pos:])
 	return b.String()
+}
+
+// seriesEdges extends a removed series name over an article immediately before it
+// and a title separator immediately after it ("The Orchard Cycle: Books 1-3").
+func seriesEdges(prefix, title string, end int, startsMidWord bool) (string, int) {
+	words := strings.TrimRightFunc(prefix, unicode.IsSpace)
+	if len(words) < len(prefix) {
+		for _, article := range []string{"the", "an", "a"} {
+			start := len(words) - len(article)
+			if start >= 0 && (start != 0 || !startsMidWord) && strings.EqualFold(words[start:], article) && boundedAt(words, start, len(words)) {
+				prefix = words[:start]
+				break
+			}
+		}
+	}
+	rest := strings.TrimLeftFunc(title[end:], unicode.IsSpace)
+	if r, size := utf8.DecodeRuneInString(rest); strings.ContainsRune(":,;|-–—", r) {
+		end = len(title) - len(rest) + size
+	}
+	return prefix, end
 }
 
 // genreFluff marks a trailing ": …"/" - …" subtitle made up entirely of these words

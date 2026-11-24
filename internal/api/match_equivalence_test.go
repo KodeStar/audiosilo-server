@@ -26,6 +26,10 @@ func seriesMetaserve(t *testing.T) string {
 			_, _ = w.Write([]byte(`{"results":[]}`))
 			return
 		}
+		if r.URL.Query().Get("asin") == "B0SHORT001" {
+			_, _ = w.Write([]byte(`{"results":[{"kind":"work","id":"the-martian","recording_id":"abridged","score":100,"reasons":{"title":1,"identifier":"asin"}}]}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"results":[{"kind":"work","id":"the-martian","score":96,"reasons":{"title":1}}]}`))
 	})
 	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, _ *http.Request) {
@@ -33,7 +37,8 @@ func seriesMetaserve(t *testing.T) string {
 			"description":"Stranded.","first_published":"2011",
 			"series":[{"id":"discworld","name":"Discworld","position":"8"},{"id":"city-watch","name":"City Watch","position":"1"}],
 			"recordings":[{"id":"bray","narrators":[{"id":"rcb","name":"R. C. Bray"}],"publisher":"Podium",
-			"runtime_min":634,"asin":[{"region":"uk","asin":"B0UK000001"}],"isbn":[]}]}`))
+			"runtime_min":634,"asin":[{"region":"uk","asin":"B0UK000001"}],"isbn":[]},
+			{"id":"abridged","abridged":true,"runtime_min":335,"asin":[{"region":"uk","asin":"B0SHORT001"}]}]}`))
 	})
 	mux.HandleFunc("GET /api/v1/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
 	srv := httptest.NewServer(mux)
@@ -66,7 +71,7 @@ func TestMatchDialogAcceptEqualsRunApply(t *testing.T) {
 			t.Fatal(err)
 		}
 		b := catalog.Book{LibraryID: lib.ID, RelPath: path, Title: "The Martian", IsFolder: true, Author: "Andy Weir",
-			Series: "City Watch", SeriesIndex: 4, Narrator: "Someone", Duration: 634 * 60, AddedAt: "2020-01-01"}
+			Series: "City Watch", SeriesIndex: 4, Narrator: "Someone", Duration: 634 * 60, TagASIN: "B0SHORT001", AddedAt: "2020-01-01"}
 		if _, err := e.cat.UpsertBook(ctx, &b); err != nil {
 			t.Fatal(err)
 		}
@@ -94,7 +99,7 @@ func TestMatchDialogAcceptEqualsRunApply(t *testing.T) {
 			} `json:"proposal"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal([]byte(body), &page); err != nil || len(page.Items) != 1 || page.Items[0].Proposal.RecordingID == "" {
+	if err := json.Unmarshal([]byte(body), &page); err != nil || len(page.Items) != 1 || page.Items[0].Proposal.RecordingID != "bray" {
 		t.Fatalf("items = %s", body)
 	}
 	recording := page.Items[0].Proposal.RecordingID
@@ -105,6 +110,25 @@ func TestMatchDialogAcceptEqualsRunApply(t *testing.T) {
 
 	// The same book in the dialog: its proposal for the run's candidate, accepted as planned.
 	dialog, admin, lib := setup(t)
+	matchURL := "/api/v1/admin/libraries/" + strconv.FormatInt(lib, 10) + "/book/match?path=" + url.QueryEscape(path)
+	for _, tc := range []struct{ query, want string }{
+		{"", recording}, {"&q=Martian&asin=B0SHORT001", "abridged"},
+	} {
+		resp, out := dialog.do(t, "GET", matchURL+tc.query, admin, "")
+		var result struct {
+			Candidates []struct {
+				Default string `json:"default_recording_id"`
+				Hit     string `json:"recording_id"`
+			} `json:"candidates"`
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("match dialog %q: %d %s", tc.query, resp.StatusCode, out)
+		}
+		decodeInto(t, out, &result)
+		if len(result.Candidates) != 1 || result.Candidates[0].Default != tc.want || result.Candidates[0].Hit != "abridged" {
+			t.Fatalf("match dialog %q = %s, want default %q for abridged hit", tc.query, out, tc.want)
+		}
+	}
 	_, body = dialog.do(t, "GET", "/api/v1/admin/books/match-proposal?library_id="+strconv.FormatInt(lib, 10)+
 		"&path="+url.QueryEscape(path)+"&work_id=the-martian&recording_id="+recording, admin, "")
 	var p matchrun.BookProposal

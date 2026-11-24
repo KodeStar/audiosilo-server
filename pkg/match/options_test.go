@@ -127,19 +127,58 @@ func TestOptionsWordlessFallback(t *testing.T) {
 		0: {Author: "Ryan Rimmel", Series: "Mayor of Noobtown", Title: "The Mayor of Noobtown"},
 	}
 	runOptCases(t, books, []optCase{
-		{"stopword residual", aud("The Mayor of Noobtown", "Ryan Rimmel", "Noobtown", 1), -1, 0},
+		{"series and its article leave no residual", aud("The Mayor of Noobtown", "Ryan Rimmel", "Noobtown", 1), 0, 0},
 		// The fallback's words are the series': a later volume must not take the
 		// numberless first one on token overlap.
 		{"later volume", aud("The Mayor of Noobtown 2", "Ryan Rimmel", "Noobtown", 2), -1, -1},
 	})
+	// Under the default options a number read from the title alone (here a year)
+	// is no veto on the series-named book.
+	dune := []Book{{Author: "Frank Herbert", Title: "Dune", Series: "Dune"}}
+	if i, _, ok := BestWith(dune, Query{Author: "Frank Herbert", Title: "Dune (2021 Edition)", Series: "Dune Chronicles"}, Options{}); !ok || i != 0 {
+		t.Errorf("year in the title: got %d %v, want the series-named book", i, ok)
+	}
+	if _, _, ok := BestWith(dune, Query{Author: "Frank Herbert", Title: "Dune (2021 Edition)", Series: "Dune Chronicles", Sequence: 2, HasSequence: true}, Options{}); ok {
+		t.Error("stated sequence 2: matched the numberless series-named book")
+	}
+	// Under the default options too, the series' words are no title evidence: a
+	// later volume's number in the title, or a box set's words, keep a query off
+	// the series-named first volume. A stated sequence agreeing still claims it.
+	expanse := []Book{{Author: "James S. A. Corey", Title: "The Expanse", Series: "Expanse", SeriesIndex: 1}}
+	for _, q := range []Query{
+		{Author: "James S. A. Corey", Title: "The Expanse 2", Series: "Expanse Saga"},
+		{Author: "James S. A. Corey", Title: "The Expanse Box Set", Series: "Expanse Collection"},
+		{Author: "James S. A. Corey", Title: "The Expanse: Books 1-3", Series: "Expanse Collection"},
+		{Author: "James S. A. Corey", Title: "The Expanse 1-3", Series: "Expanse Collection"},
+		{Author: "James S. A. Corey", Title: "The Expanse (1–3)", Series: "Expanse Collection"},
+	} {
+		if i, _, ok := BestWith(expanse, q, Options{}); ok {
+			t.Errorf("%q: matched book %d, want none", q.Title, i)
+		}
+	}
+	if _, _, ok := BestWith(expanse, Query{Author: "James S. A. Corey", Title: "The Expanse: Deluxe Edition", Series: "Expanse Saga", Sequence: 1, HasSequence: true}, Options{}); !ok {
+		t.Error("a stated sequence agreeing: no match")
+	}
+	for _, title := range []string{"The Expanse", "The Expanse (Unabridged)", "The Expanse (2021 Edition)"} {
+		if _, _, ok := BestWith(expanse, Query{Author: "James S. A. Corey", Title: title, Series: "Expanse Saga"}, Options{}); !ok {
+			t.Errorf("%q: no match, want the series-named book", title)
+		}
+	}
 	o := Options{WordlessFallback: true}
+	const articleLast = "Mayor of Noobtown, The"
+	if got := CleanTitle(articleLast, "Mayor of Noobtown"); got != "The" {
+		t.Errorf("default cleaned trailing article to %q", got)
+	}
+	if got := cleanTitle(articleLast, "Mayor of Noobtown", o); got != articleLast {
+		t.Errorf("trailing article fallback = %q, want %q", got, articleLast)
+	}
 	if got := cleanTitle("The Mayor of Noobtown", "Mayor of Noobtown", o); got != "The Mayor of Noobtown" {
 		t.Errorf("stopword residual cleaned to %q", got)
 	}
 	if got := cleanTitle("Primal Hunter 3", "Primal Hunter", o); got != "3" {
 		t.Errorf("numbered residual cleaned to %q, want the number kept", got)
 	}
-	if got := CleanTitle("The Mayor of Noobtown", "Mayor of Noobtown"); got != "The" {
+	if got := CleanTitle("The Mayor of Noobtown", "Mayor of Noobtown"); got != "The Mayor of Noobtown" {
 		t.Errorf("default CleanTitle changed: %q", got)
 	}
 }
@@ -155,8 +194,16 @@ func TestOptionsDropUnabridged(t *testing.T) {
 		{"bare number against a genre tail", aud("The Primal Hunter 15", "Zogarth", "The Primal Hunter", 15), -1, 1},
 		{"its sibling", aud("The Primal Hunter 14", "Zogarth", "The Primal Hunter", 14), -1, 0},
 	})
-	if got := residualTitle("The Primal Hunter 15: A LitRPG Adventure (Unabridged)", "Primal Hunter", Options{DropUnabridged: true}); got != "The 15" {
+	if got := residualTitle("The Primal Hunter 15: A LitRPG Adventure (Unabridged)", "Primal Hunter", Options{DropUnabridged: true}); got != "15" {
 		t.Errorf("residual = %q", got)
+	}
+	for title, want := range map[string]string{
+		"Primal Hunter 15: A LitRPG Adventure [Retail (UK)]": "15",
+		"Primal Hunter 15: A Real Subtitle [Retail (UK)]":    "15: A Real Subtitle",
+	} {
+		if got := residualTitle(title, "Primal Hunter", ImportOptions()); got != want {
+			t.Errorf("residualTitle(%q) = %q, want %q", title, got, want)
+		}
 	}
 }
 

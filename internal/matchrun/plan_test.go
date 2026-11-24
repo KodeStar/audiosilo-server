@@ -652,6 +652,18 @@ func TestTidyTitle(t *testing.T) {
 		p    catalog.MatchProposal
 		want string
 	}{
+		{"Book of the Dead", prop("Dead", "", "", ""), ""},
+		{"The Epic Fantasy", prop("Fantasy", "", "", ""), ""},
+		{"Forge Master: A LitRPG Adventure (The Tower Series, Book 1) (Unabridged)", prop("Forge Master", "", "The Tower", "1"), "Forge Master"},
+		{"Dead of the Book", prop("Dead", "", "", ""), ""},
+		{"Book of the Dead: An Epic Fantasy", prop("Dead", "", "", ""), ""},
+		{"Dune: An Epic Fantasy", prop("Dune", "", "", ""), "Dune"},
+		{"20 - Hilldiggers", prop("Hilldiggers", "", "Polity", "2"), "Hilldiggers"},
+		{"20 Hilldiggers", prop("Hilldiggers", "", "Polity", "2"), ""},
+		{"20 - Hilldiggers Part Two", prop("Hilldiggers", "", "Polity", "2"), ""},
+		{"The Verity: Part One: Part One", prop("The Verity: Part One", "", "The Verity", "1"), "The Verity: Part One"},
+		{"The Verity: Part One: Part Two", prop("The Verity: Part One", "", "The Verity", "2"), ""},
+		{"The Verity: Part One: Part One", prop("The Verity", "", "The Verity", "1"), ""},
 		{"Mystic Knight: Emergence: (The Mystic Knight Book 1)", prop("Emergence", "", "The Mystic Knight", "1"), "Emergence"},
 		{"Primal Hunter 3: Book III: LitRPG/Epic Progression (Unabridged)", prop("Primal Hunter 3", "", "The Primal Hunter", "3"), "Primal Hunter 3"},
 		{"The Way of Kings: Book One of the Stormlight Archive", prop("The Way of Kings", "", "The Stormlight Archive", "1"), "The Way of Kings"},
@@ -860,6 +872,11 @@ func TestQueryForTagHints(t *testing.T) {
 			"B0OWN00001", ""},
 	} {
 		q := QueryFor(&tc.book, "", "")
+		// Only a tag's or an import's identifier is a hint, never the book's own.
+		wantHint := tc.name == "hints alone" || strings.HasPrefix(tc.name, "an ABS") || tc.name == "both ABS identifiers"
+		if q.BookIdentifierHint != wantHint {
+			t.Errorf("%s: BookIdentifierHint = %v, want %v", tc.name, q.BookIdentifierHint, wantHint)
+		}
 		if q.BookASIN != tc.wantASIN || q.BookISBN != tc.wantISBN {
 			t.Errorf("%s: BookASIN %q BookISBN %q, want %q %q", tc.name, q.BookASIN, q.BookISBN, tc.wantASIN, tc.wantISBN)
 		}
@@ -1000,5 +1017,33 @@ func TestPreviewRecordsOffered(t *testing.T) {
 	st.Anchor.OfferedASIN = "B0OUTDATED"
 	if !Preview(st, &martian, &onlyASIN).RecordsOffered {
 		t.Fatal("a changed ASIN must be available to accept even without an ISBN")
+	}
+}
+
+// TestJudgeRecordingFollowsHint: a run proposes the dialog's default recording. An
+// identifier hint naming an off-length recording gives way to the one that fits; the
+// book's own identifier (an unknown_asin run's) keeps the recording it names.
+func TestJudgeRecordingFollowsHint(t *testing.T) {
+	t.Parallel()
+	c := martian
+	c.RecordingID = "abridged"
+	c.Reasons = &meta.MatchReasons{Identifier: "asin"}
+	c.Recordings = []meta.MatchRecording{{ID: "abridged", RuntimeMin: 300}, {ID: "unabridged", RuntimeMin: 634}}
+	seconds := 634.0 * 60
+	for _, tc := range []struct {
+		book catalog.Book
+		want string
+	}{
+		{catalog.Book{TagASIN: "B0TAG00001", Duration: seconds}, "unabridged"},
+		{catalog.Book{ASIN: "B0OWN00001", Duration: seconds}, "abridged"},
+	} {
+		q := QueryFor(&tc.book, "us", "")
+		cands := []meta.MatchCandidate{c}
+		if got := judge(cands, q, seconds, "us").proposal.RecordingID; got != tc.want {
+			t.Errorf("hint %v: proposed %q, want %q", q.BookIdentifierHint, got, tc.want)
+		}
+		if got := meta.ProposedRecording(&cands[0], QueryFor(&tc.book, "us", "")); got == nil || got.ID != tc.want {
+			t.Errorf("hint %v: dialog default %v, want %q", q.BookIdentifierHint, got, tc.want)
+		}
 	}
 }

@@ -2693,16 +2693,29 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   them by region, so without it `au` beat `uk`; the ASIN an identifier hit was found by leads its
   marketplace's, `toCandidate`, so a book the store lists under two keeps its tags' when that store
   is the preferred one), `asin_region` names the first's;
-  `meta.DefaultRecording` (never a dramatization for a book that doesn't state it is one (its text, folders, author or narrator credit, or a genre such as "Radio Drama" or "Hörspiel": `statesDramatization`), unless an identifier or a narrator names it, or the work holds only dramatizations and one is within max(1%, 2 min) of the book's length (`lengthSays`): `isDramatization`, `MatchCandidate.PlainBook`, a run's `dramatization_only`; identifier's, else among the recordings one of the book's narrators
-  reads, `ReadBy`: a name folding alike or every word of one in the other, either way round, that
-  fit its length (`PlausibleRuntimeOff`; all when none does) the closest runtime, the
-  preferred marketplace breaking a tie) sets each candidate's `default_recording_id`, which
-  the dialog starts from (the console has no copy of the rule). A match run then takes
-  `meta.FitRecording`: a recording more than 10% off the length that none of the book's
-  narrators reads (a tag hint's, metaserve's guess) gives way to one of the work's that fits
-  (one a narrator of the book reads stays, even beside that narrator's recording that fits: server#325),
-  a plain book's never a dramatization DefaultRecording's rule refuses (the hint named only its
-  own recording); never in a refresh or a repick, whose identifier is the book's own. **Bulk matching**
+  `meta.ProposedRecording` sets the dialog's `default_recording_id` and is what a match run
+  proposes: `meta.DefaultRecording`, then `meta.FitRecording` for an identifier hint. An identifier names
+  its recording. Otherwise, recordings credited to a named reader or ensemble the book
+  also credits (`ReadBy`) take precedence within 20% of the book's runtime, or when a
+  length is unknown. The closest length wins within that group, with the preferred
+  marketplace breaking a tie. With no qualifying narrator, all eligible recordings compete.
+  A book can state it is a dramatization through its text, folders, credits or genres
+  such as "Radio Drama" and "Hörspiel" (`statesDramatization`). A plain book can take a
+  dramatization by identifier or narrator. If the work only has dramatizations, length
+  alone can identify one within the greater of 1% and two minutes, capped at 15% of the
+  book's runtime (`lengthSays`). With no eligible recording the dialog offers the work
+  alone and a run can report `dramatization_only`.
+  A search by tag or import hint, in the dialog or a match run, applies `meta.FitRecording`
+  to the recording that hint found. A
+  recording more than 10% off gives way to one within 10% when the book's named
+  narrator does not read the first recording. The original recording stays eligible
+  when its narrator agrees, even if that narrator reads two editions (server#325).
+  Generic credits such as "Various" and production credits such as "Full Cast" or
+  "the Full Cast Family" (`dramatizationTextRE`) cannot vouch for an edition. A named
+  ensemble such as "The Hollywood Theater of the Ear" can. The hint vouches for its own
+  recording only. The plain-book dramatization rule applies to any replacement.
+  A typed identifier, a refresh, a repick and an `unknown_asin` run's own ASIN keep the
+  recording their identifier names. **Bulk matching**
   (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
   `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
   `POST /admin/match-runs/{id}/apply|cancel`. Mode `unknown_asin` (server#392, Health's unknown-ASIN card,
@@ -2927,8 +2940,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   default apply) also tidies a
   title that is not an admin edit (`matchrun.tidyTitle`): when the file title, less the community
   title, its subtitle, the series names (community's and the book's, as `match.SeriesForms` spells
-  them), clutter (book/vol, unabridged, litrpg, ...) and the numbers the book's positions or the
-  community title state (`statedNumbers`: digits, ordinals, words, roman numerals), leaves nothing,
+  them), a genre-only subtitle, an explicit file-order prefix ("20 - Hilldiggers"), a repeated
+  numbered part already in the community title ("The Verity: Part One: Part One"), format labels
+  and the numbers the book's positions or the community title state (`statedNumbers`: digits, ordinals, words, roman numerals), leaves nothing,
   the community title is written; any other word or number keeps the file's ("part" names a split
   of the book, "abridged" another edition, "Book 2" of a work at position 1 another volume), and a
   title of the community's words and nothing more only when it is in one case. The review lists it
@@ -4559,9 +4573,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`{books:[{path, title, authors, narrators, series, asin, isbn, duration}], next}`, path cursor, up to
   500; a main series with no position takes the one the code leading the book's folder name gives,
   `metadata.FolderCodePosition`: "DH06 - ..." is Dragon Heart 6, "LAM05-06" the range "5-6" (an omnibus
-  never reads as its first volume), only when the code's letters are the series' initials (all or some,
-  in order; "HALO 07" in "Halo" gives none), in this listing only, never the scan's position; the Bridge
-  matches under `match.ImportOptions`, see `pkg/match` `Options`);
+  never reads as its first volume; the code written twice, "DH01-DH03", gives none, and so does a single
+  code on a name with a pack word, "LAM05-06a - Omnibus", "DH01 - Books 1-3"). A year or a number with a letter ("DH06-2019", "DH06-07x")
+  leaves position 6. The explicit C volume marker applies in any series. Other codes must match
+  the series' initials in order ("HALO 07" in "Halo" gives none). This fallback applies to the listing.
+  The Bridge matches under `match.ImportOptions`, see `pkg/match` `Options`);
   `PUT /bridge/libraries/{id}/enrichment?path=` (body `{"asin"}`: `catalog.BackfillASIN`, 204; the
   same ASIN again a no-op; 404 `book_not_found` for no book of a books library there; 409 `asin_set` for
   another ASIN, an admin's ASIN override, a cleared one too, or a title of that ASIN marked "Not this book" on the

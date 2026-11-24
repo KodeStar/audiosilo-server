@@ -11,6 +11,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -315,7 +316,7 @@ func TestLibraForge(t *testing.T) {
 	results := make([]lfResult, len(books))
 	diagOn := os.Getenv("LF_DIAG") == "1"
 	each(8, len(books), func(i int) {
-		results[i] = judge(local, &books[i], &matched[i], region, language)
+		results[i] = judgeLFBook(local, &books[i], &matched[i], region, language)
 		if diagOn {
 			results[i].Diag = diagOf(local, &books[i], &matched[i], &results[i], region, language)
 		}
@@ -375,8 +376,8 @@ func matchOne(ctx context.Context, t *testing.T, svc *meta.Service, book *catalo
 	return lfMatched{book: book, item: item, cands: c.cands, err: err}
 }
 
-// judge scores a book's match against its right answer, from the local copy.
-func judge(local *meta.Service, b *lfBook, m *lfMatched, region, language string) lfResult {
+// judgeLFBook scores a book's match against its right answer, from the local copy.
+func judgeLFBook(local *meta.Service, b *lfBook, m *lfMatched, region, language string) lfResult {
 	ctx := context.Background()
 	book, item := m.book, m.item
 	res := lfResult{Path: book.RelPath, Title: book.Title, RefTitle: b.Ref.Title}
@@ -662,9 +663,9 @@ type diag struct {
 	// RightRank is the right work's 1-based rank in cands (0 = absent or no
 	// right work known: the reference ASIN's, else, for a reference without
 	// one, LibraForge's pick's, else v2.5.1's pick when the audit found it
-	// right), RightScore its score.
-	RightRank  int `json:"right_rank"`
-	RightScore int `json:"right_score"`
+	// right), RightScore its score. A failed match or diagnostic query has no rank.
+	RightRank  *int `json:"right_rank,omitempty"`
+	RightScore int  `json:"right_score"`
 	// Err is why cands could not be asked of the local copy ("" when they were).
 	Err string `json:"err,omitempty"`
 }
@@ -711,13 +712,19 @@ func diagOf(local *meta.Service, b *lfBook, m *lfMatched, res *lfResult, region,
 		QLang: q.Language, QASIN: q.BookASIN, QISBN: q.BookISBN, QNarr: q.Narrators,
 		Cands: []diagCand{}, RunCands: []diagCand{},
 	}
-	if m.item != nil {
-		p := m.item.Proposal
-		d.PropASIN, d.PropISBN, d.PropMin = p.Values[catalog.FieldASIN], p.Values[catalog.FieldISBN], p.RuntimeMin
-		d.Identified = d.PropASIN != "" || d.PropISBN != ""
-		narrated := len(m.cands) > 0 && narratorReads(&m.cands[0], p, q.Narrators)
-		d.LengthFits = lengthFits(p, m.book.Duration, narrated)
+	if m.err != nil {
+		d.Err = m.err.Error()
+		return d
 	}
+	if m.item == nil {
+		d.Err = "match returned no item"
+		return d
+	}
+	p := m.item.Proposal
+	d.PropASIN, d.PropISBN, d.PropMin = p.Values[catalog.FieldASIN], p.Values[catalog.FieldISBN], p.RuntimeMin
+	d.Identified = d.PropASIN != "" || d.PropISBN != ""
+	narrated := len(m.cands) > 0 && narratorReads(&m.cands[0], p, q.Narrators)
+	d.LengthFits = lengthFits(p, m.book.Duration, narrated)
 	for i := range m.cands {
 		d.RunCands = append(d.RunCands, diagCandOf(&m.cands[i]))
 	}
@@ -742,11 +749,23 @@ func diagOf(local *meta.Service, b *lfBook, m *lfMatched, res *lfResult, region,
 			right = res.HandWork
 		}
 	}
+	rank := 0
 	for i := range full {
 		d.Cands = append(d.Cands, diagCandOf(&full[i]))
-		if right != "" && full[i].WorkID == right && d.RightRank == 0 {
-			d.RightRank, d.RightScore = i+1, full[i].Score
+		if right != "" && full[i].WorkID == right && rank == 0 {
+			rank, d.RightScore = i+1, full[i].Score
 		}
 	}
+	d.RightRank = &rank
 	return d
+}
+
+func TestErroredMatchHasNoRank(t *testing.T) {
+	t.Parallel()
+	m := lfMatched{book: &catalog.Book{}, err: errors.New("match failed")}
+	d := diagOf(nil, &lfBook{}, &m, &lfResult{}, "", "")
+	out, err := json.Marshal(d)
+	if err != nil || strings.Contains(string(out), `"right_rank"`) || d.Err != m.err.Error() {
+		t.Fatalf("diagnostics = %s, err %v", out, err)
+	}
 }
