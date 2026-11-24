@@ -13,9 +13,11 @@ import (
 // "DF15.5 Brief Cases", "HALO 07 - Evolutions"), or a range of them, the two
 // numbers joined by a hyphen or an en dash with no spaces ("LAM05-06", an
 // omnibus). The code must end where a word does ("PH15x" is none), and a
-// third number joined on ("LAM05-06-07") makes it none, not a shorter range.
+// third number joined on ("LAM05-06-07") makes it none, not a shorter range,
+// as does the code written again on the range's end ("DH01-DH03": repeatsCode).
 // A year or a number with a letter labels a single position. Check these
 // suffixes before the range end, so "DH06-2019" cannot become a range to 201.
+// A name with a pack word in it (packWord) reads no single position.
 var folderCode = regexp.MustCompile(`^([A-Za-z]{1,5}) ?(\d{1,3}(?:\.\d+)?)(?:[-–](?:(?:19|20)\d{2}|\d{1,3}[A-Za-z]|(\d{1,3}(?:\.\d+)?)))?`)
 
 // FolderCodePosition reads a book's position in series from the code that
@@ -26,7 +28,9 @@ var folderCode = regexp.MustCompile(`^([A-Za-z]{1,5}) ?(\d{1,3}(?:\.\d+)?)(?:[-�
 // a franchise's own numbering) gives none, as does a number of 0. The number
 // reads as ParseSeriesPosition reads one: end is 0 for a single position and a
 // range's end for a range ("LAM05-06" is 5 to 6), and a range that isn't one
-// ("LAM06-05") gives none. ok is false when there is no such code.
+// ("LAM06-05") gives none. ok is false when there is no such code. A single
+// position on a name with a pack word ("LAM05-06a - Omnibus", "DH01 - Books
+// 1-3") is none: the folder holds several volumes, never its first one alone.
 func FolderCodePosition(name, series string) (start, end float64, ok bool) {
 	name = strings.TrimSpace(name)
 	m := folderCode.FindStringSubmatch(name)
@@ -39,7 +43,7 @@ func FolderCodePosition(name, series string) (start, end float64, ok bool) {
 		return 0, 0, false
 	}
 	rest := name[len(m[0]):]
-	if !wordEndsAt(rest) || joinsNumber(rest) {
+	if !wordEndsAt(rest) || joinsNumber(rest) || repeatsCode(rest, m[1]) {
 		return 0, 0, false
 	}
 	position := m[2]
@@ -47,11 +51,16 @@ func FolderCodePosition(name, series string) (start, end float64, ok bool) {
 		position += "-" + m[3]
 	}
 	start, end, ok = ParseSeriesPosition(position)
-	if !ok || start == 0 {
+	if !ok || start == 0 || (end == 0 && packWord.MatchString(rest)) {
 		return 0, 0, false
 	}
 	return start, end, true
 }
+
+// packWord finds a word naming several volumes in one: an omnibus, a box set
+// ("box set", "boxset", "boxed set"), a collection, or a span of books ("Books
+// 1-3", "Books 1–3").
+var packWord = regexp.MustCompile(`(?i)\b(?:omnibus|box(?:ed)? ?set|collection|books \d+ ?[-–] ?\d+)\b`)
 
 // apostrophes are dropped before a series is split into words, so one joins
 // a word ("Emperor's Edge" is two words).
@@ -90,5 +99,23 @@ func joinsNumber(s string) bool {
 		return false
 	}
 	d, _ := utf8.DecodeRuneInString(s[n:])
+	return unicode.IsDigit(d)
+}
+
+// repeatsCode reports whether s, what follows a code's number, joins the same
+// code and another number on with a hyphen or an en dash, spaced or not
+// ("DH01-DH03", "DH01 - DH03 Omnibus"): a range written with the code twice is
+// an omnibus, never its first volume.
+func repeatsCode(s, code string) bool {
+	s = strings.TrimLeft(s, " ")
+	r, n := utf8.DecodeRuneInString(s)
+	if r != '-' && r != '–' {
+		return false
+	}
+	s = strings.TrimLeft(s[n:], " ")
+	if len(s) < len(code) || !strings.EqualFold(s[:len(code)], code) {
+		return false
+	}
+	d, _ := utf8.DecodeRuneInString(strings.TrimPrefix(s[len(code):], " "))
 	return unicode.IsDigit(d)
 }

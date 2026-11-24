@@ -4552,7 +4552,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`{books:[{path, title, authors, narrators, series, asin, isbn, duration}], next}`, path cursor, up to
   500; a main series with no position takes the one the code leading the book's folder name gives,
   `metadata.FolderCodePosition`: "DH06 - ..." is Dragon Heart 6, "LAM05-06" the range "5-6" (an omnibus
-  never reads as its first volume). A year or a number with a letter ("DH06-2019", "DH06-07x")
+  never reads as its first volume; the code written twice, "DH01-DH03", gives none, and so does a single
+  code on a name with a pack word, "LAM05-06a - Omnibus", "DH01 - Books 1-3"). A year or a number with a letter ("DH06-2019", "DH06-07x")
   leaves position 6. The explicit C volume marker applies in any series. Other codes must match
   the series' initials in order ("HALO 07" in "Halo" gives none). This fallback applies to the listing.
   The Bridge matches under `match.ImportOptions`, see `pkg/match` `Options`);
