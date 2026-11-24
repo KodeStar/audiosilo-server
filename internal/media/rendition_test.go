@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -243,6 +244,51 @@ func srcFile(t *testing.T, name string) string {
 	return p
 }
 
+// statOf is a test's look at p, as a caller hands Queue and StatusOf theirs.
+func statOf(t *testing.T, p string) os.FileInfo {
+	t.Helper()
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
+}
+
+// TestQueueAndStatusOfTakeTheLook (server#359): a renditions list looks at
+// each file once and hands that look on, so Queue and StatusOf never stat the
+// source again. Not parallel: it swaps statBelow.
+func TestQueueAndStatusOfTakeTheLook(t *testing.T) {
+	gate := make(chan struct{})
+	m, runs := fakeRenditions(t, gate, func(out string) error { return os.WriteFile(out, []byte("m4a copy"), 0o600) })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	src := srcFile(t, "a.mp3")
+	info := statOf(t, src)
+
+	var looks atomic.Int32
+	was := statBelow
+	t.Cleanup(func() { statBelow = was })
+	statBelow = func(context.Context, string, string, time.Duration) (fs.FileInfo, error) {
+		looks.Add(1)
+		return nil, os.ErrNotExist
+	}
+	if st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src, info); st != CachePending {
+		t.Fatalf("queue = %s, want pending from the caller's look", st)
+	}
+	if st, _, _ := m.StatusOf(src, info); st != CachePending {
+		t.Fatalf("status = %s, want pending from the caller's look", st)
+	}
+	if n := looks.Load(); n != 0 {
+		t.Fatalf("the source was stat'ed %d times, want none", n)
+	}
+	statBelow = was
+	close(gate)
+	m.Wait()
+	if st, n, _ := m.StatusOf(src, info); st != CacheReady || n != int64(len("m4a copy")) || runs.Load() != 1 {
+		t.Fatalf("status after = %s %d after %d runs, want ready with its size", st, n, runs.Load())
+	}
+}
+
 // TestRenditionQueueAndStatus: Status starts nothing; Queue starts a missing
 // file's encode and answers pending, then ready with its size; a refused file
 // is failed, remembered, and not queued again; a run that failed for another
@@ -257,13 +303,13 @@ func TestRenditionQueueAndStatus(t *testing.T) {
 	if st, _, _ := m.Status(filepath.Dir(src), src); st != CacheMissing || runs.Load() != 0 {
 		t.Fatalf("status = %s after %d runs, want missing and none", st, runs.Load())
 	}
-	if st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src); st != CachePending {
+	if st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src, statOf(t, src)); st != CachePending {
 		t.Fatalf("queue = %s, want pending", st)
 	}
 	if st, _, _ := m.Status(filepath.Dir(src), src); st != CachePending {
 		t.Fatalf("status while encoding = %s, want pending", st)
 	}
-	if st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src); st != CachePending {
+	if st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src, statOf(t, src)); st != CachePending {
 		t.Fatalf("queue again = %s, want pending (one flight)", st)
 	}
 	close(gate)
@@ -271,7 +317,7 @@ func TestRenditionQueueAndStatus(t *testing.T) {
 	if st, n, _ := m.Status(filepath.Dir(src), src); st != CacheReady || n != int64(len("m4a copy")) {
 		t.Fatalf("status after = %s %d, want ready with its size", st, n)
 	}
-	if st, n, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src); st != CacheReady || n != int64(len("m4a copy")) || runs.Load() != 1 {
+	if st, n, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src, statOf(t, src)); st != CacheReady || n != int64(len("m4a copy")) || runs.Load() != 1 {
 		t.Fatalf("queue of a ready file = %s %d after %d runs, want ready and one run", st, n, runs.Load())
 	}
 	if st, _, _ := m.Status(filepath.Dir(src), filepath.Join(filepath.Dir(src), "gone.mp3")); st != CacheFailed {
@@ -282,7 +328,7 @@ func TestRenditionQueueAndStatus(t *testing.T) {
 	status := exitStatus(t)
 	refusing, refusedRuns := fakeRenditions(t, nil, func(string) error { return status })
 	bad := srcFile(t, "bad.mp3")
-	refusing.Queue(ctx, "ffmpeg", filepath.Dir(bad), bad)
+	refusing.Queue(ctx, "ffmpeg", filepath.Dir(bad), bad, statOf(t, bad))
 	refusing.Wait()
 	if st, _, _ := refusing.Status(filepath.Dir(bad), bad); st != CacheFailed {
 		t.Fatalf("status of a refused file = %s, want failed", st)
@@ -290,7 +336,7 @@ func TestRenditionQueueAndStatus(t *testing.T) {
 	if _, _, err := refusing.Open(ctx, ctx, "ffmpeg", filepath.Dir(bad), bad); !errors.Is(err, ErrRefused) {
 		t.Fatalf("open of a refused file = %v, want ErrRefused", err)
 	}
-	if st, _, _ := refusing.Queue(ctx, "ffmpeg", filepath.Dir(bad), bad); st != CacheFailed || refusedRuns.Load() != 1 {
+	if st, _, _ := refusing.Queue(ctx, "ffmpeg", filepath.Dir(bad), bad, statOf(t, bad)); st != CacheFailed || refusedRuns.Load() != 1 {
 		t.Fatalf("queue of a refused file = %s after %d runs, want failed and no new run", st, refusedRuns.Load())
 	}
 
@@ -300,12 +346,12 @@ func TestRenditionQueueAndStatus(t *testing.T) {
 		return status
 	})
 	flaky := srcFile(t, "flaky.mp3")
-	partway.Queue(ctx, "ffmpeg", filepath.Dir(flaky), flaky)
+	partway.Queue(ctx, "ffmpeg", filepath.Dir(flaky), flaky, statOf(t, flaky))
 	partway.Wait()
 	if st, _, _ := partway.Status(filepath.Dir(flaky), flaky); st != CacheMissing {
 		t.Fatalf("status after a failure partway = %s, want missing", st)
 	}
-	partway.Queue(ctx, "ffmpeg", filepath.Dir(flaky), flaky)
+	partway.Queue(ctx, "ffmpeg", filepath.Dir(flaky), flaky, statOf(t, flaky))
 	partway.Wait()
 	if n := partRuns.Load(); n != 2 {
 		t.Fatalf("%d runs, want the failure tried again", n)
@@ -325,7 +371,7 @@ func TestRenditionQueueBounded(t *testing.T) {
 	var states []CacheState
 	for _, name := range []string{"1.mp3", "2.mp3", "3.mp3"} {
 		p := srcFile(t, name)
-		st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(p), p)
+		st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(p), p, statOf(t, p))
 		states = append(states, st)
 	}
 	if want := []CacheState{CachePending, CachePending, CacheMissing}; !slices.Equal(states, want) {
@@ -349,7 +395,7 @@ func TestRenditionNoAudioRefused(t *testing.T) {
 	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) || !errors.Is(err, errNoAudio) || errors.Is(err, ErrNoSource) {
 		t.Fatalf("open = %v, want the copy refused for no audio", err)
 	}
-	if st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src); st != CacheFailed || runs.Load() != 1 {
+	if st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src, statOf(t, src)); st != CacheFailed || runs.Load() != 1 {
 		t.Fatalf("queue = %s after %d runs, want failed (remembered) and no new run", st, runs.Load())
 	}
 	if entries, _ := os.ReadDir(m.dir); len(entries) != 0 {
@@ -613,7 +659,7 @@ func TestRenditionShortRemembered(t *testing.T) {
 	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) || runs.Load() != 1 {
 		t.Fatalf("open again = %v after %d runs, want the remembered refusal and no new encode", err, runs.Load())
 	}
-	if st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src); st != CacheFailed || runs.Load() != 1 {
+	if st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src, statOf(t, src)); st != CacheFailed || runs.Load() != 1 {
 		t.Fatalf("queue = %s after %d runs, want failed and no new encode", st, runs.Load())
 	}
 	clock = clock.Add(cacheRefusalTTL)
@@ -676,7 +722,7 @@ func TestRefusalExpires(t *testing.T) {
 			t.Fatalf("%s: status before the TTL = %s, %v left, want failed for a second more", name, st, left)
 		}
 		// Queue answers the refusal with its hint, read with the state (server#359).
-		if st, _, left := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src); st != CacheFailed || left != time.Second || runs.Load() != 1 {
+		if st, _, left := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src, statOf(t, src)); st != CacheFailed || left != time.Second || runs.Load() != 1 {
 			t.Fatalf("%s: queue before the TTL = %s, %v left after %d runs, want failed for a second more",
 				name, st, left, runs.Load())
 		}

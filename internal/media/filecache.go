@@ -436,6 +436,12 @@ func (m *FileCache) Status(root, abs string) (state CacheState, size int64, refu
 	if err != nil {
 		return CacheFailed, 0, 0
 	}
+	return m.StatusOf(abs, info)
+}
+
+// StatusOf is Status for a caller that has looked at abs itself (Source):
+// info is that look's, so the source isn't stat'ed again.
+func (m *FileCache) StatusOf(abs string, info os.FileInfo) (state CacheState, size int64, refusedFor time.Duration) {
 	key := m.key(abs, info)
 	// A key in flight or refused has no copy (a run renames its copy into
 	// place before it leaves inflight), so the cache file is stat'ed once,
@@ -457,14 +463,12 @@ func (m *FileCache) Status(root, abs string) (state CacheState, size int64, refu
 }
 
 // Queue starts making abs's copy under runCtx unless it is cached, refused or
-// under way, and returns where it stands then (as Status). It never waits for
-// the run. A cache with no queueMax, or as many runs in flight, starts nothing:
-// the file stays missing for the caller to ask again.
-func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, root, abs string) (state CacheState, size int64, refusedFor time.Duration) {
-	info, err := Source(runCtx, root, abs, sourceWait)
-	if err != nil {
-		return CacheFailed, 0, 0
-	}
+// under way, and returns where it stands then (as Status). info is the
+// caller's look at abs (Source), so the source isn't stat'ed again; the run
+// opens it under root. It never waits for the run. A cache with no queueMax,
+// or as many runs in flight, starts nothing: the file stays missing for the
+// caller to ask again.
+func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, root, abs string, info os.FileInfo) (state CacheState, size int64, refusedFor time.Duration) {
 	key := m.key(abs, info)
 	f, fl, err := m.begin(runCtx, ffmpegPath, key, root, abs, info, m.spec.queueMax > 0)
 	switch {
