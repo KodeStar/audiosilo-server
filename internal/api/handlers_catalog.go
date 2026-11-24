@@ -155,10 +155,17 @@ func (a *API) detectRows(ctx context.Context, page *catalog.AdminPage) (detectPa
 }
 
 // handleAdminBookFacets serves GET /admin/books/facets: the facet counts for the
-// same filter parameters as the list.
+// same filter parameters as the list. ?only=total answers {"total": n} alone,
+// counted without the facets (a number shown on its own, server#225).
 func (a *API) handleAdminBookFacets(w http.ResponseWriter, r *http.Request) {
 	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
-	f, msg := bookFilterFromQuery(r.URL.Query())
+	q := r.URL.Query()
+	only := q.Get("only")
+	if only != "" && only != "total" {
+		writeError(w, http.StatusBadRequest, "only must be total")
+		return
+	}
+	f, msg := bookFilterFromQuery(q)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -168,6 +175,15 @@ func (a *API) handleAdminBookFacets(w http.ResponseWriter, r *http.Request) {
 	// the database's answer to the query string alone: kept until the next content write.
 	write := a.cachedList(w, r, gen, cacheable, nil, f.IssueOff)
 	if write == nil {
+		return
+	}
+	if only == "total" {
+		n, err := a.cat.CountBooks(r.Context(), f)
+		if err != nil {
+			a.writeCatalogError(w, err, "admin book count failed", "could not count books")
+			return
+		}
+		write(map[string]int{"total": n})
 		return
 	}
 	facets, err := a.cat.BookFacets(r.Context(), f)

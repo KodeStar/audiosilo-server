@@ -34,6 +34,7 @@ import type {
   AuthorsResponse,
   BookEditRequest,
   BookFacets,
+  ListeningActivity,
   BookMeta,
   BookRef,
   BookWorks,
@@ -402,6 +403,14 @@ export function bookQuery(params: object): string {
   }
   const s = q.toString();
   return s ? `?${s}` : '';
+}
+
+/** GET /admin/stats?range= (handleActivityStats): the period's `activity` from its envelope. */
+async function activityStats<T>(query: { range: string; parts?: 'listening' }): Promise<T> {
+  const r = await request<{ activity?: T }>('GET', `/admin/stats${bookQuery(query)}`);
+  // A server from before the Activity page ignores ?range=: say so, don't draw an empty page.
+  if (!r?.activity) throw new ApiError(500, 'the server sent no activity');
+  return r.activity;
 }
 
 /** GET /admin/logs filters (handlers_system.go handleLogs). */
@@ -843,6 +852,12 @@ export const api = {
     request<AdminBookPage>('GET', `/admin/books${bookQuery(params)}`),
   bookFacets: (filter: BookFilter) =>
     request<BookFacets>('GET', `/admin/books/facets${bookQuery(filter)}`),
+  /** How many books match the filter, with none of the facets counted (`only=total`). */
+  bookCount: (filter: BookFilter) =>
+    request<{ total: number }>(
+      'GET',
+      `/admin/books/facets${bookQuery({ ...filter, only: 'total' })}`,
+    ).then((r) => r.total),
   /** One field edit over many books, all or nothing (at most BULK_LIMIT). */
   bulkEdit: (books: BookRef[], edit: Omit<BookEditRequest, 'chapters' | 'match'>) =>
     request<{ updated: number }>('POST', '/admin/books/bulk', { books, ...edit }),
@@ -980,8 +995,17 @@ export const api = {
   deleteCover: (libraryId: number, path: string) =>
     request<void>('DELETE', `/admin/libraries/${libraryId}/cover${pathQuery(path)}`),
   /** Reads one book's files again now; answers with its page (404 not_indexable if it's gone). */
-  rescanBook: (libraryId: number, path: string) =>
-    request<AdminBookDetail>('POST', `/admin/libraries/${libraryId}/book/rescan${pathQuery(path)}`),
+  /**
+   * Reads a book's files again now: its fresh page, or null when the read was still
+   * going at the server's answer (202 still_reading: it goes on and is saved).
+   */
+  rescanBook: async (libraryId: number, path: string): Promise<AdminBookDetail | null> => {
+    const r = await request<AdminBookDetail | { still_reading?: boolean }>(
+      'POST',
+      `/admin/libraries/${libraryId}/book/rescan${pathQuery(path)}`,
+    );
+    return r && 'still_reading' in r && r.still_reading ? null : (r as AdminBookDetail);
+  },
 
   // Health and Jobs.
   issues: () => request<IssuesSummary>('GET', '/admin/issues'),
@@ -1022,12 +1046,10 @@ export const api = {
 
   // Activity: sessions, devices, progress edits and listening stats.
   /** The Activity page for a period ("7d", "30d", "90d", "1y" or a year), in server time. */
-  activity: async (range: string): Promise<Activity> => {
-    const r = await request<{ activity?: Activity }>('GET', `/admin/stats${bookQuery({ range })}`);
-    // A server from before the Activity page ignores ?range=: say so, don't draw an empty page.
-    if (!r?.activity) throw new ApiError(500, 'the server sent no activity');
-    return r.activity;
-  },
+  activity: (range: string): Promise<Activity> => activityStats<Activity>({ range }),
+  /** A period's listening alone (Year in listening): none of the library and progress steps. */
+  listeningActivity: (range: string): Promise<ListeningActivity> =>
+    activityStats<ListeningActivity>({ range, parts: 'listening' }),
   /** Listening per day over a period, of everyone or one person (no other stats). */
   listeningDays: (range: string, userId?: number) =>
     request<ListeningDays>('GET', `/admin/listening${bookQuery({ range, user_id: userId })}`),

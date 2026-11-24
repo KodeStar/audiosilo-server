@@ -185,6 +185,7 @@ export function SessionTable({
                       path={s.path}
                       title={title}
                       size={160}
+                      version={s.cover_version}
                       className="w-[30px] shrink-0 rounded-[3px]"
                     />
                     <span className="flex min-w-0 flex-col">
@@ -231,7 +232,7 @@ export function SessionTable({
                         ? t('sessions.imported', { app: s.client?.app })
                         : s.backfilled
                           ? t('sessions.historyBody')
-                          : clientName(s.client)}
+                          : clientName(s.client, s.api_key)}
                     </span>
                   </span>
                 </td>

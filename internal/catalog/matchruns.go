@@ -628,6 +628,8 @@ type MatchState struct {
 	Duration     float64
 	Fields       map[string]FieldValue
 	CoverMissing bool
+	// CoverVersion is the book's Book.CoverVersion (the cover's cache buster).
+	CoverVersion string
 	// Anchor is the book's recorded community match (book_matches), zero when
 	// it has none. How is MatchHowAuto or MatchHowAccepted; the offered
 	// identifiers are those it offered when recorded (0070).
@@ -642,16 +644,17 @@ type MatchState struct {
 // the path).
 func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath string) (*MatchState, error) {
 	var (
-		id int64
-		st MatchState
+		id       int64
+		st       MatchState
+		coverArt string
 	)
 	err := c.db.QueryRowContext(ctx,
-		`SELECT b.id, b.title, b.author, b.duration, `+issuePredicates[IssueNoCover]+`,
+		`SELECT b.id, b.title, b.author, b.duration, `+issuePredicates[IssueNoCover]+`, b.cover_art,
 		        COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), COALESCE(bm.how, ''),
 		        COALESCE(bm.offered_asin, ''), COALESCE(bm.offered_isbn, ''), `+asinHeldUnknownExpr+`
 		   FROM books b`+bookMatchJoin+`
 		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, CleanRelPath(relPath)).
-		Scan(&id, &st.Title, &st.Author, &st.Duration, &st.CoverMissing,
+		Scan(&id, &st.Title, &st.Author, &st.Duration, &st.CoverMissing, &coverArt,
 			&st.Anchor.WorkID, &st.Anchor.RecordingID, &st.Anchor.How,
 			&st.Anchor.OfferedASIN, &st.Anchor.OfferedISBN, &st.ASINUnknown)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -660,6 +663,7 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 	if err != nil {
 		return nil, err
 	}
+	st.CoverVersion = CoverVersion(coverArt)
 	l, err := loadLayers(ctx, c.db, id)
 	if err != nil {
 		return nil, err

@@ -246,7 +246,13 @@ function CategoryCard({
               className="w-[30px]"
               style={{ marginLeft: i ? -12 : 0, transform: `rotate(${(i - 1) * 6}deg)` }}
             >
-              <BookCover libraryId={s.library_id} path={s.path} title={s.title} size={160} />
+              <BookCover
+                libraryId={s.library_id}
+                path={s.path}
+                title={s.title}
+                size={160}
+                version={s.cover_version}
+              />
             </span>
           ))}
         </span>

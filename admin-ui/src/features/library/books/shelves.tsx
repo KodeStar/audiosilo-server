@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useAdminBookPage, useBookFacets } from '@/api/hooks';
+import { useAdminBookPage, useBookCount } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { refKey } from '@/lib/book-route';
 import { counted } from '@/lib/format';
@@ -27,7 +27,7 @@ export function Shelves({
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const recent = useAdminBookPage({ sort: 'added', order: 'desc', limit: SHELF_SIZE });
-  const week = useBookFacets({ added_after: daysAgo(7, now) });
+  const week = useBookCount({ added_after: daysAgo(7, now) });
   const noCover = useAdminBookPage({
     has_cover: false,
     sort: 'added',
@@ -42,7 +42,7 @@ export function Shelves({
     noCover.data?.books ?? [],
     metadataOn ? (unmatched.data?.books ?? []) : [],
   );
-  const thisWeek = week.data?.total ?? 0;
+  const thisWeek = week.data ?? 0;
   // One book per click: a Shift-click range runs over the full list below,
   // whose order isn't a shelf's, so a shelf's pick doesn't move where it starts.
   const { toggle } = selection;

@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { QueryClient } from '@tanstack/react-query';
 import { setToken } from '@/api/token';
 import type { Activity } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
@@ -132,6 +133,71 @@ describe('activity overview', () => {
     renderApp('/activity');
     expect(await screen.findByText("Activity couldn't load")).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+});
+
+/** Each cover asked for, as `path@version` (the thumbnail query's key). */
+function coverVersions(qc: QueryClient): string[] {
+  return qc
+    .getQueryCache()
+    .findAll({ queryKey: ['thumb'] })
+    .map((q) => `${String(q.queryKey[2])}@${String(q.queryKey[4])}`);
+}
+
+describe('covers and API keys (server#224, server#270)', () => {
+  it('keys the overview covers by their cover_version and names an API key', async () => {
+    const base = activity({ range: '30d' });
+    mockFetch(
+      routes({
+        'GET /admin/stats': statsRoute((range) =>
+          activity({
+            range,
+            top_books: [{ ...base.top_books[0], cover_version: 'v-top' }],
+            drop_offs: [{ ...base.drop_offs[0], cover_version: 'v-drop' }],
+            clients: [
+              ...base.clients,
+              { app: '', version: '', platform: '', api_key: true, devices: 1 },
+            ],
+          }),
+        ),
+      }),
+    );
+    const { queryClient } = renderApp('/activity');
+    expect(await screen.findByText('Personal API key')).toBeInTheDocument();
+    // Named, so not counted with the apps that never said what they are.
+    expect(screen.queryByText(/unknown app/i)).toBeNull();
+    await waitFor(() =>
+      expect(coverVersions(queryClient)).toEqual(
+        expect.arrayContaining([
+          'Andy Weir/Project Hail Mary@v-top',
+          'Terry Pratchett/Guards! Guards!@v-drop',
+        ]),
+      ),
+    );
+  });
+
+  it('names a live API key by its label and keys its cover by its cover_version', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/sessions/live': {
+          body: {
+            sessions: [
+              liveSession({
+                device_name: 'backup script',
+                client: null,
+                api_key: true,
+                cover_version: 'v-live',
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    const { queryClient } = renderApp('/activity/live');
+    const item = await screen.findByRole('article');
+    expect(within(item).getByText('backup script')).toBeInTheDocument();
+    expect(within(item).getByText('Personal API key')).toBeInTheDocument();
+    expect(coverVersions(queryClient)).toContain('Andy Weir/Project Hail Mary@v-live');
   });
 });
 
@@ -295,6 +361,10 @@ describe('year in listening', () => {
     expect(screen.getByText(/The most heard voice: Ray Porter/)).toBeInTheDocument();
     // No year picked: the server's current year, which it names.
     expect(calls.some((c) => c.query.get('range') === 'year')).toBe(true);
+    // The listening alone, never the whole Activity page (server#225).
+    const yearCalls = calls.filter((c) => c.path === '/admin/stats');
+    expect(yearCalls.length).toBeGreaterThan(0);
+    expect(yearCalls.every((c) => c.query.get('parts') === 'listening')).toBe(true);
     const user = userEvent.setup();
     await user.selectOptions(screen.getByRole('combobox', { name: 'Year' }), String(year - 1));
     await waitFor(() => expect(router.state.location.search).toEqual({ year: year - 1 }));

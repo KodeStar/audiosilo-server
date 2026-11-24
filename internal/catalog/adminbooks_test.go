@@ -482,6 +482,26 @@ func TestBookFacets(t *testing.T) {
 	}
 }
 
+// CountBooks is BookFacets' total for the same filter, every filter applied.
+func TestCountBooks(t *testing.T) {
+	t.Parallel()
+	c, ctx, libA, _ := seedAdminLibrary(t)
+	no := false
+	for _, f := range []BookFilter{{}, {LibraryID: libA, Formats: []string{"m4b"}}, {Edited: &no}, {LibraryID: libA, Edited: &no}} {
+		facets, err := c.BookFacets(ctx, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := c.CountBooks(ctx, f)
+		if err != nil || n != facets.Total {
+			t.Errorf("CountBooks(%+v) = %d, %v; want the facets' total %d", f, n, err, facets.Total)
+		}
+	}
+	if n, _ := c.CountBooks(ctx, BookFilter{LibraryID: libA, Formats: []string{"m4b"}}); n != 3 {
+		t.Errorf("m4b in Fiction = %d, want 3", n)
+	}
+}
+
 func TestPeopleAggregate(t *testing.T) {
 	t.Parallel()
 	c, ctx, libA, _ := seedAdminLibrary(t)

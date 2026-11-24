@@ -229,59 +229,94 @@ func (a *API) applyIgnore(w http.ResponseWriter, r *http.Request, action string,
 // handleRescanBook serves POST /admin/libraries/{id}/book/rescan?path=: read one
 // book's files again now (tags, ffprobe, cover, read problems), outside the job
 // queue (it's one book), and return its page. A path the library no longer has a
-// book at (gone, or ignored) is a 404 with code not_indexable.
+// book at (gone, or ignored) is a 404 with code not_indexable. A read still
+// going at stillReadingAt is answered 202 {"still_reading": true}: it goes on
+// and is saved (the book's next look shows it), so the console says so rather
+// than meeting the request timeout's bare 503 (server#224).
 func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 	lib, p, status, msg := a.authorizedPath(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
-	// The re-read probes every part, which on a slow share can outlast the request
-	// timeout; it still finishes and is saved then (the book's next look shows it),
-	// rather than being thrown away at its last write.
-	if _, ok := a.rescanPath(w, lib, p); !ok {
-		return
-	}
-	a.writeBookDetail(w, r, lib, p)
-}
-
-// rescanPath indexes what is at p now (ReindexPath: a read of its own, never
-// one a scan or another request made earlier), on a context detached from the
-// request timeout so a slow re-read is still saved, and returns the book. A path
-// with no book (gone, or ignored) is a 404 with code not_indexable; it answers
-// the error itself and reports whether there was none.
-func (a *API) rescanPath(w http.ResponseWriter, lib *catalog.Library, p string) (*catalog.Book, bool) {
-	return rescanAt(a, w, lib, p, func(ctx context.Context) (*catalog.Book, error) {
-		return a.scanner.ReindexPath(ctx, *lib, p)
-	})
-}
-
-// rescanAt runs read, a re-read of what is at p in lib, as rescanPath does: on a
-// context detached from the request timeout, each look at a library file given
-// fileWait and the waits on another read of the book ending flightWaitMargin
-// ahead of the request timeout (a.lookCtx, so a share that stopped
-// answering is a 503 share_not_answering with Retry-After, not the
-// timeout's), a path with no book a 404 with code not_indexable, a read the
-// server's stop ended a 503 stopping, anything else the catalog error's answer.
-// It answers the error itself and reports whether there was none.
-func rescanAt[T any](a *API, w http.ResponseWriter, lib *catalog.Library, p string, read func(context.Context) (T, error)) (T, bool) {
-	ctx, cancel := context.WithTimeout(a.lookCtx(a.baseCtx), rescanBookTimeout)
-	defer cancel()
-	out, err := read(ctx)
-	if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, library.ErrOutsideRoot) {
-		writeErrorCode(w, http.StatusNotFound, codeNotIndexable, "there is no book at that path any more")
-		return out, false
-	}
-	if err != nil {
-		if a.baseCtx.Err() != nil {
-			// The server's stop ended the read (its context is the server's):
-			// a 503 to try again, as a waiting /item's, not a failure.
-			err = errors.Join(library.ErrStopping, err)
+	done := make(chan error, 1)
+	go func() {
+		// No wait cap (lookCtx's): the read is not given up on at the request's
+		// time, the answer is (stillReadingAt). A look that gets no answer in
+		// fileWait still ends it, as a 503 share_not_answering when in time.
+		_, err := readAt(a, library.WithLookTimeout(a.baseCtx, a.fileWait), func(ctx context.Context) (*catalog.Book, error) {
+			return a.scanner.ReindexPath(ctx, *lib, p)
+		})
+		done <- err
+	}()
+	wait := time.NewTimer(time.Until(a.stillReadingAt(r.Context())))
+	defer wait.Stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			a.writeRescanError(w, lib, p, err)
+			return
 		}
-		a.writeCatalogError(w, err, "rescan failed", "could not rescan the book", "library", lib.ID, "path", p)
+		a.writeBookDetail(w, r, lib, p)
+	case <-wait.C:
+		writeJSON(w, http.StatusAccepted, map[string]bool{"still_reading": true})
+		go func() {
+			// Answered already: a failure now is only logged (Health lists a
+			// read problem it records).
+			if err := <-done; err != nil && !errors.Is(err, library.ErrNotIndexable) {
+				a.log.Info("re-read finished after its answer with an error", "library", lib.ID, "path", p, "err", err)
+			}
+		}()
+	}
+}
+
+// stillReadingAt is when a Re-read still going is answered 202: where a
+// request's waits on another read of its book end (flightWaitEnd), ahead of the
+// request timeout.
+func (a *API) stillReadingAt(ctx context.Context) time.Time {
+	return a.flightWaitEnd(ctx)
+}
+
+// rescanAt runs read, a re-read of what is at p in lib, as readAt does under
+// a.lookCtx (each look given fileWait, the waits on another read of the book
+// ending flightWaitMargin ahead of the request timeout, so a share that
+// stopped answering is a 503 share_not_answering with Retry-After, not the
+// timeout's), and answers its error itself (writeRescanError), reporting
+// whether there was none.
+func rescanAt[T any](a *API, w http.ResponseWriter, lib *catalog.Library, p string, read func(context.Context) (T, error)) (T, bool) {
+	out, err := readAt(a, a.lookCtx(a.baseCtx), read)
+	if err != nil {
+		a.writeRescanError(w, lib, p, err)
 		return out, false
 	}
 	return out, true
+}
+
+// readAt runs read, a re-read of what is at a path, on look (a.baseCtx with
+// the request's look bounds): detached from the request timeout, so a slow
+// re-read is still saved, and bounded by rescanBookTimeout. A read the
+// server's stop ended is library.ErrStopping.
+func readAt[T any](a *API, look context.Context, read func(context.Context) (T, error)) (T, error) {
+	ctx, cancel := context.WithTimeout(look, rescanBookTimeout)
+	defer cancel()
+	out, err := read(ctx)
+	if err != nil && a.baseCtx.Err() != nil {
+		// The server's stop ended the read (its context is the server's): a
+		// 503 to try again, as a waiting /item's, not a failure.
+		err = errors.Join(library.ErrStopping, err)
+	}
+	return out, err
+}
+
+// writeRescanError answers a re-read's error: a path with no book (gone, or
+// ignored) a 404 with code not_indexable, anything else the catalog error's
+// answer.
+func (a *API) writeRescanError(w http.ResponseWriter, lib *catalog.Library, p string, err error) {
+	if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, library.ErrOutsideRoot) {
+		writeErrorCode(w, http.StatusNotFound, codeNotIndexable, "there is no book at that path any more")
+		return
+	}
+	a.writeCatalogError(w, err, "rescan failed", "could not rescan the book", "library", lib.ID, "path", p)
 }
 
 // scheduledScan is one library's next scheduled scan.

@@ -108,6 +108,10 @@ export function useIssueActions(
     const title = b.title || b.path;
     try {
       const fresh = await rescanBook(qc, b, refreshIssues);
+      if (!fresh) {
+        toast.add({ title: t('common.stillReading', { title }), type: 'info' });
+        return;
+      }
       toast.add(
         fresh.book.scan_error
           ? {

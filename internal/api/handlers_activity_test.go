@@ -300,6 +300,37 @@ func TestAdminStatsRange(t *testing.T) {
 	if resp, _ := e.do(t, "GET", "/api/v1/admin/stats?range=7d", e.memberTok, ""); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("member stats = %d, want 403", resp.StatusCode)
 	}
+
+	// &parts=listening (Year in listening, server#225): the same listening, and
+	// none of the steps over the library and progress, left out of the answer.
+	resp, slim := e.do(t, "GET", "/api/v1/admin/stats?range=7d&parts=listening", e.console, "")
+	var listening struct {
+		Activity map[string]json.RawMessage `json:"activity"`
+	}
+	if err := json.Unmarshal([]byte(slim), &listening); resp.StatusCode != http.StatusOK || err != nil {
+		t.Fatalf("parts=listening = %d %s (%v)", resp.StatusCode, slim, err)
+	}
+	_, fullBody := e.do(t, "GET", "/api/v1/admin/stats?range=7d", e.console, "")
+	full := map[string]json.RawMessage{}
+	_ = json.Unmarshal([]byte(fullBody), &struct {
+		Activity *map[string]json.RawMessage `json:"activity"`
+	}{&full})
+	for _, k := range []string{"funnel", "drop_offs", "growth", "storage", "coverage", "inactive_users"} {
+		if _, ok := listening.Activity[k]; ok {
+			t.Errorf("parts=listening carries %s: %s", k, slim)
+		}
+	}
+	for _, k := range []string{"range", "totals", "days", "hour_weekday", "top_books", "top_narrators", "top_users"} {
+		if got, ok := listening.Activity[k]; !ok || string(got) != string(full[k]) {
+			t.Errorf("parts=listening %s = %s, want the full answer's", k, got)
+		}
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/admin/stats?range=7d&parts=funnel", e.console, ""); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("parts=funnel = %d, want 400", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/admin/stats?range=7d&parts=listening", e.memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("member parts=listening = %d, want 403", resp.StatusCode)
+	}
 }
 
 func TestCORSAllowsClientHeader(t *testing.T) {

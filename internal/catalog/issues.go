@@ -147,6 +147,8 @@ type IssueSample struct {
 	LibraryID int64  `json:"library_id"`
 	Path      string `json:"path"`
 	Title     string `json:"title"`
+	// CoverVersion is the book's Book.CoverVersion (the cover's cache buster).
+	CoverVersion string `json:"cover_version,omitempty"`
 }
 
 // IssueCount is one category's numbers: how many need attention (for duplicates,
@@ -216,8 +218,11 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 			}
 			ignored, args := bookIgnoredExpr(k)
 			samples, err := queryRows(ctx, c.db, func(rows *sql.Rows, s *IssueSample) error {
-				return rows.Scan(&s.LibraryID, &s.Path, &s.Title)
-			}, `SELECT b.library_id, b.rel_path, b.title FROM books b
+				var coverArt string
+				err := rows.Scan(&s.LibraryID, &s.Path, &s.Title, &coverArt)
+				s.CoverVersion = CoverVersion(coverArt)
+				return err
+			}, `SELECT b.library_id, b.rel_path, b.title, b.cover_art FROM books b
 			     WHERE `+inBookLibrary+` AND `+issuePredicates[k]+` AND NOT `+ignored+`
 			     ORDER BY b.added_at DESC, b.id DESC LIMIT ?`, append(args, maxIssueSamples)...)
 			if err != nil {
@@ -237,6 +242,7 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 		if err != nil {
 			return nil, err
 		}
+		var ids []any
 		for _, set := range sets {
 			if set.ignored {
 				ic.Ignored++
@@ -246,7 +252,13 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 			if len(ic.Samples) < maxIssueSamples {
 				r := rows[set.members[0]]
 				ic.Samples = append(ic.Samples, IssueSample{LibraryID: r.libraryID, Path: r.path, Title: r.title})
+				ids = append(ids, r.id)
 			}
+		}
+		// The grouping keeps no cover art (it reads every book): the few
+		// samples' are read by id.
+		if err := c.sampleCoverVersions(ctx, ic.Samples, ids); err != nil {
+			return nil, err
 		}
 		out = append(out, ic)
 	}
@@ -302,6 +314,31 @@ type DuplicatePage struct {
 	Groups     []DuplicateGroup `json:"groups"`
 	Total      int              `json:"total"`
 	NextCursor string           `json:"next_cursor,omitempty"`
+}
+
+// sampleCoverVersions sets each sample's CoverVersion from the book with the
+// id at the same index of ids.
+func (c *Catalog) sampleCoverVersions(ctx context.Context, samples []IssueSample, ids []any) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	type idArt struct {
+		id  int64
+		art string
+	}
+	found, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *idArt) error { return rows.Scan(&r.id, &r.art) },
+		`SELECT id, cover_art FROM books WHERE id IN (`+placeholders(len(ids))+`)`, ids...)
+	if err != nil {
+		return err
+	}
+	for i := range samples {
+		for _, r := range found {
+			if r.id == ids[i] {
+				samples[i].CoverVersion = CoverVersion(r.art)
+			}
+		}
+	}
+	return nil
 }
 
 // dupRow is what duplicate detection reads per book. Only the fields the grouping

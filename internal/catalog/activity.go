@@ -101,6 +101,9 @@ type TopBook struct {
 	Author    string  `json:"author"`
 	Listened  float64 `json:"listened"`
 	Listeners int     `json:"listeners"`
+	// CoverVersion is the book's Book.CoverVersion (the cover's cache buster);
+	// omitted when the path is no indexed book (any more).
+	CoverVersion string `json:"cover_version,omitempty"`
 }
 
 // TopPerson is an author or narrator (the whole field value, as the Library
@@ -143,6 +146,8 @@ type DropOff struct {
 	Chapter      string `json:"chapter"`
 	Listeners    int    `json:"listeners"`
 	ScanError    bool   `json:"scan_error"`
+	// CoverVersion is the book's Book.CoverVersion (the cover's cache buster).
+	CoverVersion string `json:"cover_version,omitempty"`
 }
 
 // PlaybackShare is listening by how it played: direct or through the transcoder,
@@ -162,12 +167,20 @@ type Peak struct {
 
 // ClientCount is how many devices listened in the period with one app build (as
 // each session recorded it, so a later upgrade doesn't rewrite the past). App ""
-// is a client that never named itself (released before the header).
+// is a client that never named itself (released before the header); APIKey
+// sets apart the personal API keys among those (server#224), counted as one row.
 type ClientCount struct {
 	App      string `json:"app"`
 	Version  string `json:"version"`
 	Platform string `json:"platform"`
+	APIKey   bool   `json:"api_key,omitempty"`
 	Devices  int    `json:"devices"`
+}
+
+// clientKey is a ClientCount's row: an app build, or an API key that named none.
+type clientKey struct {
+	Client
+	apiKey bool
 }
 
 // GrowthPoint is the number of books indexed now that had appeared on disk by
@@ -318,6 +331,18 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 	return out, nil
 }
 
+// ListeningActivityFor is ActivityFor without its steps over the library and
+// progress (funnel, drop-offs, growth, storage, coverage and inactive users,
+// left at their zero values): the period's listening alone, what Year in
+// listening shows (server#225).
+func (c *Catalog) ListeningActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*Activity, error) {
+	out := &Activity{Period: periodOf(label, from, to, loc)}
+	if err := c.activityListening(ctx, out, from, to, loc); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // activityListening is ActivityFor's listening: the period's, the totals of the
 // one before it, and the books finished in each.
 func (c *Catalog) activityListening(ctx context.Context, out *Activity, from, to time.Time, loc *time.Location) error {
@@ -385,7 +410,7 @@ type listenAcc struct {
 	users     map[int64]*userAcc
 	playback  map[playKey]*PlaybackShare
 	intervals [][2]time.Time
-	clients   map[Client]map[int64]bool // app build -> the devices (tokens) that listened with it
+	clients   map[clientKey]map[int64]bool // app build -> the devices (tokens) that listened with it
 	firstHour time.Time
 	endHour   time.Time // an hour starting at or after this is outside the period
 	firstDay  string
@@ -394,6 +419,7 @@ type listenAcc struct {
 
 type bookAcc struct {
 	title, author, narrator, series string
+	coverArt                        string // books.cover_art, for TopBook.CoverVersion
 	listened                        float64
 	listeners                       map[int64]bool
 }
@@ -416,7 +442,7 @@ func newListenAcc(from, to time.Time, loc *time.Location, level listenLevel) *li
 		from: from, to: to, loc: loc, level: level,
 		listeners: map[int64]bool{}, books: map[Ref]*bookAcc{}, days: map[string]map[int64]float64{},
 		users:    map[int64]*userAcc{},
-		playback: map[playKey]*PlaybackShare{}, clients: map[Client]map[int64]bool{},
+		playback: map[playKey]*PlaybackShare{}, clients: map[clientKey]map[int64]bool{},
 		firstHour: hourOf(f),
 		endHour:   to,
 		firstDay:  f.Format(time.DateOnly),
@@ -443,6 +469,7 @@ type listenRow struct {
 	ref                Ref
 	title, author, nar string
 	series             string
+	coverArt           string
 }
 
 // add credits secs of listening to a row on a local day (and, for a raw session,
@@ -452,7 +479,8 @@ func (a *listenAcc) add(r listenRow, day string, hour *time.Time, secs float64) 
 	a.listeners[r.user] = true
 	b := a.books[r.ref]
 	if b == nil {
-		b = &bookAcc{title: r.title, author: r.author, narrator: r.nar, series: r.series, listeners: map[int64]bool{}}
+		b = &bookAcc{title: r.title, author: r.author, narrator: r.nar, series: r.series, coverArt: r.coverArt,
+			listeners: map[int64]bool{}}
 		a.books[r.ref] = b
 	}
 	b.listened += secs
@@ -499,8 +527,9 @@ func (a *listenAcc) countSession(r listenRow, n int) {
 // listenRowColumns are the names a listening row shows (listenRowJoins supplies
 // them); listenRowBlanks stand in when only totals are wanted.
 const (
-	listenRowColumns = `u.username, COALESCE(b.title, ''), COALESCE(b.author, ''), COALESCE(b.narrator, ''), COALESCE(b.series, '')`
-	listenRowBlanks  = `'', '', '', '', ''`
+	listenRowColumns = `u.username, COALESCE(b.title, ''), COALESCE(b.author, ''), COALESCE(b.narrator, ''), COALESCE(b.series, ''),
+		COALESCE(b.cover_art, '')`
+	listenRowBlanks = `'', '', '', '', '', ''`
 )
 
 // listenRowJoins joins the user and the book of a listening table aliased t.
@@ -531,8 +560,11 @@ const (
 
 func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 	cols, joins := listenRowColumns, listenRowJoins("s")
+	// Whether the session's device is an API key (while its token is kept),
+	// for the clients breakdown.
+	apiKey := `COALESCE((SELECT t.kind FROM tokens t WHERE t.id = s.token_id), '') = '` + tokenKindAPI + `'`
 	if a.level < listenAll { // totals or days only: no names needed
-		cols, joins = listenRowBlanks, ""
+		cols, joins, apiKey = listenRowBlanks, "", "0"
 	}
 	where, args := sessionsOfEveryone, []any{formatSessionTime(a.to), formatSessionTime(a.from)}
 	if a.onlyUser != 0 {
@@ -541,7 +573,7 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT s.user_id, s.library_id, s.rel_path, `+cols+`,
 		        s.started_at, s.last_at, s.listened, s.codec, s.transcoded,
-		        s.token_id, s.client_app, s.client_version, s.client_platform, s.backfilled
+		        s.token_id, s.client_app, s.client_version, s.client_platform, s.backfilled, `+apiKey+`
 		   FROM listening_sessions s `+joins+where, args...)
 	if err != nil {
 		return err
@@ -555,11 +587,11 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 			transcoded           bool
 			token                int64
 			client               Client
-			backfilled           bool
+			backfilled, apiKey   bool
 		)
-		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar, &r.series,
+		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar, &r.series, &r.coverArt,
 			&startS, &lastS, &listened, &codec, &transcoded, &token, &client.App, &client.Version,
-			&client.Platform, &backfilled); err != nil {
+			&client.Platform, &backfilled, &apiKey); err != nil {
 			return err
 		}
 		// A session backfilled from the players' spans never recorded its device,
@@ -570,10 +602,12 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 		}
 		a.addSession(r, parseSessionTime(startS), parseSessionTime(lastS), listened, mode)
 		if a.level == listenAll && !backfilled {
-			if a.clients[client] == nil {
-				a.clients[client] = map[int64]bool{}
+			// A key whose script names its app is counted by that name.
+			key := clientKey{Client: client, apiKey: apiKey && client.App == ""}
+			if a.clients[key] == nil {
+				a.clients[key] = map[int64]bool{}
 			}
-			a.clients[client][token] = true
+			a.clients[key][token] = true
 		}
 	}
 	return rows.Err()
@@ -640,7 +674,7 @@ func (c *Catalog) collectDays(ctx context.Context, a *listenAcc) error {
 			sessions  int
 			estimated bool
 		)
-		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar, &r.series,
+		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar, &r.series, &r.coverArt,
 			&day, &listened, &sessions, &estimated); err != nil {
 			return err
 		}
@@ -705,7 +739,7 @@ func (a *listenAcc) topBooks(keep func(Ref) bool) []TopBook {
 			continue
 		}
 		out = append(out, TopBook{LibraryID: ref.LibraryID, Path: ref.Path, Title: b.title,
-			Author: b.author, Listened: b.listened, Listeners: len(b.listeners)})
+			Author: b.author, Listened: b.listened, Listeners: len(b.listeners), CoverVersion: CoverVersion(b.coverArt)})
 	}
 	return topN(out, func(x, y TopBook) int {
 		return cmp.Or(cmp.Compare(y.Listened, x.Listened), cmp.Compare(x.Title, y.Title), cmp.Compare(x.Path, y.Path))
@@ -760,11 +794,12 @@ func (a *listenAcc) playbackList() []PlaybackShare {
 func (a *listenAcc) clientList() []ClientCount {
 	out := []ClientCount{}
 	for cl, devices := range a.clients {
-		out = append(out, ClientCount{App: cl.App, Version: cl.Version, Platform: cl.Platform, Devices: len(devices)})
+		out = append(out, ClientCount{App: cl.App, Version: cl.Version, Platform: cl.Platform, APIKey: cl.apiKey,
+			Devices: len(devices)})
 	}
 	slices.SortFunc(out, func(x, y ClientCount) int {
 		return cmp.Or(cmp.Compare(y.Devices, x.Devices), cmp.Compare(x.App, y.App),
-			cmp.Compare(x.Version, y.Version), cmp.Compare(x.Platform, y.Platform))
+			cmp.Compare(x.Version, y.Version), cmp.Compare(x.Platform, y.Platform), cmp.Compare(sqlBool(x.APIKey), sqlBool(y.APIKey)))
 	})
 	return out
 }
@@ -969,7 +1004,7 @@ type stalledBook struct {
 // unfinished, one entry per book.
 func (c *Catalog) stalledBooks(ctx context.Context, idle string) ([]*stalledBook, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT b.id, b.library_id, b.rel_path, b.title, b.scan_error <> '', p.position`+stalledWhere+`
+		`SELECT b.id, b.library_id, b.rel_path, b.title, b.scan_error <> '', b.cover_art, p.position`+stalledWhere+`
 		    AND b.id IN (`+stalledBookIDs+`) ORDER BY b.id`, idle)
 	if err != nil {
 		return nil, err
@@ -978,13 +1013,15 @@ func (c *Catalog) stalledBooks(ctx context.Context, idle string) ([]*stalledBook
 	var out []*stalledBook
 	for rows.Next() {
 		var (
-			id  int64
-			d   DropOff
-			pos float64
+			id       int64
+			d        DropOff
+			coverArt string
+			pos      float64
 		)
-		if err := rows.Scan(&id, &d.LibraryID, &d.Path, &d.Title, &d.ScanError, &pos); err != nil {
+		if err := rows.Scan(&id, &d.LibraryID, &d.Path, &d.Title, &d.ScanError, &coverArt, &pos); err != nil {
 			return nil, err
 		}
+		d.CoverVersion = CoverVersion(coverArt)
 		if len(out) == 0 || out[len(out)-1].bookID != id {
 			out = append(out, &stalledBook{bookID: id, drop: d})
 		}
