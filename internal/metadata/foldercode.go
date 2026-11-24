@@ -14,11 +14,13 @@ import (
 // numbers joined by a hyphen or an en dash with no spaces ("LAM05-06", an
 // omnibus). The code must end where a word does ("PH15x" is none), and a
 // third number joined on ("LAM05-06-07") makes it none, not a shorter range.
-var folderCode = regexp.MustCompile(`^([A-Za-z]{1,5}) ?(\d{1,3}(?:\.\d+)?(?:[-–]\d{1,3}(?:\.\d+)?)?)`)
+// A year or a number with a letter labels a single position. Check these
+// suffixes before the range end, so "DH06-2019" cannot become a range to 201.
+var folderCode = regexp.MustCompile(`^([A-Za-z]{1,5}) ?(\d{1,3}(?:\.\d+)?)(?:[-–](?:(?:19|20)\d{2}|\d{1,3}[A-Za-z]|(\d{1,3}(?:\.\d+)?)))?`)
 
 // FolderCodePosition reads a book's position in series from the code that
 // leads its folder (or file) name, name being that last path segment. The code's
-// letters must be the series' initials, every word's or some of them in order
+// letters (apart from the explicit volume marker C) must be the series' initials, every word's or some of them in order
 // ("DH" for "Dragon Heart", "BDM" for "Beneath the Dragoneye Moons", "FWM" for
 // "He Who Fights with Monsters"): a code that isn't ("HALO 07" in series "Halo",
 // a franchise's own numbering) gives none, as does a number of 0. The number
@@ -28,13 +30,23 @@ var folderCode = regexp.MustCompile(`^([A-Za-z]{1,5}) ?(\d{1,3}(?:\.\d+)?(?:[-�
 func FolderCodePosition(name, series string) (start, end float64, ok bool) {
 	name = strings.TrimSpace(name)
 	m := folderCode.FindStringSubmatch(name)
-	if m == nil {
+	if m == nil || strings.TrimSpace(series) == "" {
 		return 0, 0, false
 	}
-	if rest := name[len(m[0]):]; !wordEndsAt(rest) || joinsNumber(rest) || !initialsOf(m[1], series) {
+	// The scanner reads C02 as an explicit volume marker in any series
+	// (splitSeriesIndex). Every other code must spell the series' initials.
+	if !strings.EqualFold(m[1], "c") && !initialsOf(m[1], series) {
 		return 0, 0, false
 	}
-	start, end, ok = ParseSeriesPosition(m[2]) // the pattern caps each number at three digits
+	rest := name[len(m[0]):]
+	if !wordEndsAt(rest) || joinsNumber(rest) {
+		return 0, 0, false
+	}
+	position := m[2]
+	if m[3] != "" {
+		position += "-" + m[3]
+	}
+	start, end, ok = ParseSeriesPosition(position)
 	if !ok || start == 0 {
 		return 0, 0, false
 	}

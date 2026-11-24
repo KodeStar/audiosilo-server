@@ -378,6 +378,13 @@ func TestBestNarratorGate(t *testing.T) {
 
 func TestCleanTitle(t *testing.T) {
 	cases := []struct{ title, series, want string }{
+		{"The Orchard Cycle: Books 1-3", "Orchard Cycle", "Books 1-3"},
+		{"Before the Orchard Cycle: After", "Orchard Cycle", "Before After"},
+		{"TreeThe Tree: Harvest", "Tree", "TreeThe Harvest"},
+		{"ÎleThe Île: Harvest", "Île", "ÎleThe Harvest"},
+		{"Breathe Orchard Cycle - Again", "Orchard Cycle", "Breathe Again"},
+		{"An Île Saga – Épilogue", "île saga", "Épilogue"},
+		{"The Orchard Cycles: Harvest", "Orchard Cycle", "The Orchard Cycles: Harvest"},
 		{"Diary of a Wimpy Kid: The Ugly Truth (Book 5)", "Diary of a Wimpy Kid", "The Ugly Truth"},
 		{"Silverspear: Rise to Omniscience, Book 6", "Rise to Omniscience", "Silverspear"},
 		{"The Deep End - Diary of a Wimpy Kid Series, Book 15", "Diary of a Wimpy Kid", "The Deep End"},

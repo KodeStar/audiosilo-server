@@ -46,7 +46,7 @@ func sameTitle(c *meta.MatchCandidate, title string) bool {
 }
 
 // sameNumbered: the reference title, its bracketed notes dropped, states a
-// number (its last) that is the work's position in one of its series, and the
+// number (its last) that is the work's position in the series it names, and the
 // two titles agree once that number is taken out, with a "Book" or "Vol."
 // before it, singular and plural alike; either title may stop at its colon,
 // as in sameTitle. So "Rise, My Minions 6! (Rise, My Minions!)" is
@@ -58,11 +58,11 @@ func sameNumbered(c *meta.MatchCandidate, title string) bool {
 	for _, r := range []string{plain, beforeColon(plain)} {
 		ref := titleWords(withAnd(r))
 		n, ok := lastNumber(ref)
-		if !ok || !atPosition(c, n) {
+		if !ok {
 			continue
 		}
 		stem := numberStem(ref, n)
-		if stem == "" {
+		if stem == "" || !atPosition(c, n, stem) {
 			continue
 		}
 		for _, w := range []string{c.Title, beforeColon(c.Title)} {
@@ -102,11 +102,21 @@ func lastNumber(ws []string) (int, bool) {
 	return 0, false
 }
 
-// atPosition reports whether n is c's position in one of its series.
-func atPosition(c *meta.MatchCandidate, n int) bool {
+// atPosition pairs the position with the series named by the numbered title.
+// An edition label after a colon can qualify that series ("Backyard Dungeon: UK Edition").
+func atPosition(c *meta.MatchCandidate, n int, stem string) bool {
 	return slices.ContainsFunc(c.Series, func(s meta.MatchSeries) bool {
 		v, err := strconv.ParseFloat(strings.TrimSpace(s.Position), 64)
-		return err == nil && v == float64(n)
+		if err != nil || v != float64(n) {
+			return false
+		}
+		for _, form := range match.SeriesForms(s.Name) {
+			// No number is removed from the actual series name.
+			if wordStem(titleWords(withAnd(form))) == stem || wordStem(titleWords(withAnd(beforeColon(form)))) == stem {
+				return true
+			}
+		}
+		return false
 	})
 }
 
@@ -129,6 +139,11 @@ func numberStem(ws []string, n int) string {
 		}
 		out = slices.Delete(out, from, at+1)
 	}
+	return wordStem(out)
+}
+
+// wordStem compares the words of a title and its series, ignoring the article and plurals.
+func wordStem(out []string) string {
 	out = dropArticle(out)
 	for i, w := range out {
 		if len(w) > 3 {
@@ -165,6 +180,8 @@ func candidateOf(title, author, series, position string) *meta.MatchCandidate {
 
 func TestSameBook(t *testing.T) {
 	const lj, ev = "Logan Jacobs", "Eric Vall"
+	universe := candidateOf("Werepanther: Paranormal Hunter 3", lj, "Werepanther", "3")
+	universe.Series = append(universe.Series, meta.MatchSeries{Name: "Shared Universe", Position: "2"})
 	for _, tc := range []struct {
 		ref, author string
 		c           *meta.MatchCandidate
@@ -202,6 +219,7 @@ func TestSameBook(t *testing.T) {
 		{"Arena 7", lj, candidateOf("Arena Vol. 07", lj, "Arena", "7"), true},
 
 		// A sibling at another position stays wrong, however alike the title.
+		{"Werepanther 2", lj, universe, false},
 		{"Werepanther 2", lj, candidateOf("Werepanther: Paranormal Hunter 3", lj, "Werepanther", "3"), false},
 		{"Rise, My Minions! 3", lj, candidateOf("Rise, My Minions! Book 2", lj, "Rise, My Minions!", "2"), false},
 		// The position alone, or the stem alone, is not enough.

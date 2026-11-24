@@ -468,8 +468,8 @@ func (x *Index) BestScore(q Query) (int, float64, bool) {
 				score = scoreBareVol1
 			}
 		default:
-			if o.WordlessFallback && qHasSeq && x.seriesOnly(i) {
-				// The fallback gave this series-named candidate its title's words
+			if qHasSeq && x.seriesOnly(i) {
+				// CleanTitle can give a series-named candidate its title's words
 				// back, so token overlap is the series matching itself: like a bare
 				// pair, only its number (1 when it states none) may agree, or one
 				// numberless volume would absorb every later one.
@@ -544,7 +544,7 @@ var fluffWords = regexp.MustCompile(`(?i)\b(?:series|unabridged|abridged|audiobo
 func CleanTitle(title, series string) string { return cleanTitle(title, series, Options{}) }
 
 // cleanTitle is CleanTitle under o. With Options.WordlessFallback a residual
-// with no word tokens and no digit ("The" of "The Mayor of Noobtown" in series
+// with no word tokens and no digit ("The" of "Mayor of Noobtown, The" in series
 // "Mayor of Noobtown") falls back like an empty one; a residual holding a number
 // is a volume's own, so it stays.
 func cleanTitle(title, series string, o Options) string {
@@ -565,14 +565,13 @@ func cleanTitle(title, series string, o Options) string {
 // removed and NO fallback - empty when the title carries nothing of its own
 // ("Unintended Cultivator: Volume 9" with that series is pure series + number).
 func residualTitle(title, series string, o Options) string {
-	t := stripSeries(title, series)
-	if o.DropUnabridged && strings.ContainsAny(t, "([") {
-		// "(Unabridged)" is not genre fluff, so it kept a genre tail before it
-		// ("The Primal Hunter 15: A LitRPG Adventure (Unabridged)"). The
-		// regexp runs only on a title holding an opening bracket.
-		t = unabridgedGroup.ReplaceAllString(t, " ")
+	t := title
+	if o.DropUnabridged {
+		// All bracketed groups are discarded by this matcher. Remove them before
+		// judging the genre tail so an edition note cannot hide it.
+		t = stripParenGroups(t)
 	}
-	t = dropGenreSubtitle(t)
+	t = stripSeries(dropGenreSubtitle(t), series)
 	t = stripMatchNoise(t)
 	t = replaceFluff(t)
 	return tidyTitle(t)
@@ -874,7 +873,11 @@ func removeFoldRunes(s, sub string, bounded bool) string {
 			b.WriteString(s[:end])
 			prev, _ = utf8.DecodeLastRuneInString(s[:end])
 		} else {
-			b.WriteString(s[:start])
+			prefix := s[:start]
+			if bounded {
+				prefix, end = seriesEdges(prefix, s, end, isAlnumRune(prev))
+			}
+			b.WriteString(prefix)
 			b.WriteByte(' ')
 			prev = ' '
 		}
@@ -911,7 +914,11 @@ func removeFoldASCII(s, sub string, bounded bool) string {
 			b.WriteString(s[pos:end])
 			prevRemoved = false
 		} else {
-			b.WriteString(s[pos:i])
+			prefix := s[pos:i]
+			if bounded {
+				prefix, end = seriesEdges(prefix, s, end, pos > 0 && !prevRemoved && isAlnumByte(ls[pos-1]))
+			}
+			b.WriteString(prefix)
 			b.WriteByte(' ')
 			prevRemoved = true
 		}
@@ -920,6 +927,26 @@ func removeFoldASCII(s, sub string, bounded bool) string {
 	}
 	b.WriteString(s[pos:])
 	return b.String()
+}
+
+// seriesEdges extends a removed series name over an article immediately before it
+// and a title separator immediately after it ("The Orchard Cycle: Books 1-3").
+func seriesEdges(prefix, title string, end int, startsMidWord bool) (string, int) {
+	words := strings.TrimRightFunc(prefix, unicode.IsSpace)
+	if len(words) < len(prefix) {
+		for _, article := range []string{"the", "an", "a"} {
+			start := len(words) - len(article)
+			if start >= 0 && (start != 0 || !startsMidWord) && strings.EqualFold(words[start:], article) && boundedAt(words, start, len(words)) {
+				prefix = words[:start]
+				break
+			}
+		}
+	}
+	rest := strings.TrimLeftFunc(title[end:], unicode.IsSpace)
+	if r, size := utf8.DecodeRuneInString(rest); strings.ContainsRune(":,;|-–—", r) {
+		end = len(title) - len(rest) + size
+	}
+	return prefix, end
 }
 
 // genreFluff marks a trailing ": …"/" - …" subtitle made up entirely of these words

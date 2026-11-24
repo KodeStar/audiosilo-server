@@ -1047,6 +1047,9 @@ func TestBridgeEnrichment(t *testing.T) {
 		resp, out := b.do(t, "PUT", fmt.Sprintf("/api/v1/bridge/libraries/%d/enrichment?path=%s", b.lib.ID, url.QueryEscape(path)), b.bridgeTok, body)
 		return resp.StatusCode, out
 	}
+	if code, out := put("", `{"asin":"B0TESTASIN"}`); code != http.StatusBadRequest || codeOf(out) != "invalid_request" {
+		t.Fatalf("empty path: %d %s", code, out)
+	}
 	if code, out := put(mistbornBook, `{"asin":"B0TESTASIN"}`); code != http.StatusNoContent {
 		t.Fatalf("backfill: %d %s", code, out)
 	}

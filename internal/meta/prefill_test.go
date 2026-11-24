@@ -22,6 +22,8 @@ func TestSearchPrefill(t *testing.T) {
 		{"junk title: a track number", "Track 01", "Bernard Cornwell", "", sharpe, true, leaf},
 		{"junk title: unknown", "Unknown", "Bernard Cornwell", "", sharpe, true, leaf},
 		{"no title tag", "", "Bernard Cornwell", "", sharpe, true, leaf},
+		{"generic collective author", "Sharpe's Eagle", "Autori vari", "", sharpe, true, "Sharpe's Eagle Bernard Cornwell"},
+		{"named ensemble author", "Sharpe's Eagle", "the Full Cast Family", "", sharpe, true, "Sharpe's Eagle the Full Cast Family"},
 		{"junk author alone", "Sharpe's Eagle", "Unknown Artist", "", sharpe, true,
 			"Sharpe's Eagle Bernard Cornwell"},
 		{"a single file in an author folder", "03", "Agatha Christie", "",

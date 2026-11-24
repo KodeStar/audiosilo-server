@@ -271,6 +271,7 @@ func TestDefaultRecordingKeepsAPlainBookOffADramatization(t *testing.T) {
 		want      string
 		minutes   float64 // the book's length; 0 = unknown
 	}{
+		{"denied: a minute-long clip", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{{ID: "short", RuntimeMin: 3, Publisher: "GraphicAudio"}}}, nil, "", 1},
 		{"denied: nearer by length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, nil, "plain", 400},
 		{"denied: a full-cast credit", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, cast}}, nil, "plain", 400},
 		{"denied: only the dramatization, of another length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{ga}}, nil, "", 410},
@@ -468,16 +469,43 @@ func TestTitleSpeaksFor(t *testing.T) {
 // stand-in for nobody in particular does not.
 func TestPersonNarrator(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"Wil Wheaton", "R. C. Bray", "Ray Porter", "Castle Freeman", "Pam Castille", "Variously Jones"} {
+	for _, name := range []string{"Wil Wheaton", "R. C. Bray", "Ray Porter", "Castle Freeman", "Pam Castille", "Variously Jones", "the Full Cast Family"} {
 		if !PersonNarrator(name) {
 			t.Errorf("%q: not a reader, want one", name)
 		}
 	}
-	for _, name := range []string{"Full Cast", "full cast", "Full-Cast", "FullCast", "Full Cast Recording", "the Full Cast Family",
+	for _, name := range []string{"Full Cast", "full cast", "Full-Cast", "FullCast", "Full Cast Recording", "Divers Auteurs",
 		"GraphicAudio", "GraphicAudio [Dramatized Adaptation]", "Various", "Various Narrators", "various artists",
 		"Multiple Narrators", "Multiple Readers", "Unknown", "Anonymous", "cast", "Narrator", "N/A", "", "  "} {
 		if PersonNarrator(name) {
 			t.Errorf("%q: a reader, want none", name)
+		}
+	}
+}
+
+func TestRecordingCreditAndLength(t *testing.T) {
+	for _, tc := range []struct {
+		book, credit string
+		minutes      int
+		want         string
+	}{
+		{"Ann Reader", "Ann Reader", 115, "credited"},
+		{"Ann Reader", "Ann Reader", 120, "credited"},
+		{"Ann Reader", "Ann Reader", 121, "closer"},
+		{"Various", "Various", 109, "closer"},
+		{"Full Cast", "Full Cast", 109, "closer"},
+		{"the Full Cast Family", "the Full Cast Family", 115, "credited"},
+		{"the Full Cast Family", "Full Cast", 109, "closer"},
+	} {
+		c := MatchCandidate{Recordings: []MatchRecording{{ID: "closer", RuntimeMin: 105}, {ID: "credited", RuntimeMin: tc.minutes, Narrators: []MetaPersonRef{{Name: tc.credit}}}}}
+		if got := DefaultRecording(&c, 6000, "", []string{tc.book}); got == nil || got.ID != tc.want {
+			t.Errorf("book %q, credit %q at %d min: got %v, want %s", tc.book, tc.credit, tc.minutes, got, tc.want)
+		}
+	}
+	for _, name := range []string{"Various", "Full Cast", "Unknown Artist"} {
+		c := MatchCandidate{RecordingID: "hint", Recordings: []MatchRecording{{ID: "hint", RuntimeMin: 130, Narrators: []MetaPersonRef{{Name: name}}}, {ID: "fits", RuntimeMin: 100}}}
+		if got := FitRecording(&c, &c.Recordings[0], 6000, "", []string{name}); got.ID != "fits" {
+			t.Errorf("off-length %q hint: got %s", name, got.ID)
 		}
 	}
 }

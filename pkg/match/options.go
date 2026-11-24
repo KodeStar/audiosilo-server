@@ -28,10 +28,10 @@ type Options struct {
 	// same-titled candidates.
 	ExactTitle bool
 	// WordlessFallback falls back to the uncleaned title when the cleaned one has
-	// no word left and no number ("The Mayor of Noobtown" in series "Mayor of
+	// no word left and no number ("Mayor of Noobtown, The" in series "Mayor of
 	// Noobtown" leaves "The").
 	WordlessFallback bool
-	// DropUnabridged removes "(Unabridged)" before a genre tail is judged, so
+	// DropUnabridged drops bracketed groups before judging a genre tail, so
 	// "The Primal Hunter 15: A LitRPG Adventure (Unabridged)" is volume 15.
 	DropUnabridged bool
 }
@@ -49,9 +49,6 @@ const ScoreASIN = 10.0
 // enough on its own to clear the threshold, so the identical title wins over a
 // near one, while the series and number still rank two same-titled candidates.
 const scoreExactTitle = 3.0
-
-// unabridgedGroup is a bracketed "(Unabridged)" (Options.DropUnabridged).
-var unabridgedGroup = regexp.MustCompile(`(?i)[\(\[]\s*unabridged\s*[\)\]]`)
 
 // exactTitleKey is a title as Options.ExactTitle compares it: bracketed groups
 // and the edition words (fluffWords, through replaceFluff) dropped, then Fold,

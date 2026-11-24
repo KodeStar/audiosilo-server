@@ -152,8 +152,9 @@ func QueryFor(b *catalog.Book, region, libraryLanguage string) meta.MatchQuery {
 		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, SeriesIndexEnd: b.SeriesIndexEnd,
 		Author: b.Author, Duration: b.Duration,
 		Path: b.RelPath, IsFolder: b.IsFolder, BookASIN: asin, BookISBN: isbn, Region: region,
-		Language:  cmp.Or(bookLanguage(b.Language, b.TagLanguage), libraryLanguage),
-		Narrators: names.Split(b.Narrator), Genres: b.Genres,
+		BookIdentifierHint: b.ASIN == "" && b.ISBN == "" && (asin != "" || isbn != ""),
+		Language:           cmp.Or(bookLanguage(b.Language, b.TagLanguage), libraryLanguage),
+		Narrators:          names.Split(b.Narrator), Genres: b.Genres,
 	}
 }
 
@@ -758,12 +759,7 @@ func readsRecording(c *meta.MatchCandidate, p catalog.MatchProposal, narrators [
 	if i < 0 || meta.DramatizesPlainBook(c, &c.Recordings[i], narrators) {
 		return false
 	}
-	for _, n := range narrators {
-		if meta.PersonNarrator(n) && meta.ReadBy(&c.Recordings[i], []string{n}) {
-			return true
-		}
-	}
-	return false
+	return meta.ReadBy(&c.Recordings[i], narrators)
 }
 
 // anchorFits reports whether an identifier-less proposal p of candidate c is firm

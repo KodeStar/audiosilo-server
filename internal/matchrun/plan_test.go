@@ -652,6 +652,18 @@ func TestTidyTitle(t *testing.T) {
 		p    catalog.MatchProposal
 		want string
 	}{
+		{"Book of the Dead", prop("Dead", "", "", ""), ""},
+		{"The Epic Fantasy", prop("Fantasy", "", "", ""), ""},
+		{"Forge Master: A LitRPG Adventure (The Tower Series, Book 1) (Unabridged)", prop("Forge Master", "", "The Tower", "1"), "Forge Master"},
+		{"Dead of the Book", prop("Dead", "", "", ""), ""},
+		{"Book of the Dead: An Epic Fantasy", prop("Dead", "", "", ""), ""},
+		{"Dune: An Epic Fantasy", prop("Dune", "", "", ""), "Dune"},
+		{"20 - Hilldiggers", prop("Hilldiggers", "", "Polity", "2"), "Hilldiggers"},
+		{"20 Hilldiggers", prop("Hilldiggers", "", "Polity", "2"), ""},
+		{"20 - Hilldiggers Part Two", prop("Hilldiggers", "", "Polity", "2"), ""},
+		{"The Verity: Part One: Part One", prop("The Verity: Part One", "", "The Verity", "1"), "The Verity: Part One"},
+		{"The Verity: Part One: Part Two", prop("The Verity: Part One", "", "The Verity", "2"), ""},
+		{"The Verity: Part One: Part One", prop("The Verity", "", "The Verity", "1"), ""},
 		{"Mystic Knight: Emergence: (The Mystic Knight Book 1)", prop("Emergence", "", "The Mystic Knight", "1"), "Emergence"},
 		{"Primal Hunter 3: Book III: LitRPG/Epic Progression (Unabridged)", prop("Primal Hunter 3", "", "The Primal Hunter", "3"), "Primal Hunter 3"},
 		{"The Way of Kings: Book One of the Stormlight Archive", prop("The Way of Kings", "", "The Stormlight Archive", "1"), "The Way of Kings"},
@@ -860,6 +872,10 @@ func TestQueryForTagHints(t *testing.T) {
 			"B0OWN00001", ""},
 	} {
 		q := QueryFor(&tc.book, "", "")
+		wantHint := tc.book.ASIN == "" && tc.book.ISBN == "" && (tc.wantASIN != "" || tc.wantISBN != "")
+		if q.BookIdentifierHint != wantHint {
+			t.Errorf("%s: BookIdentifierHint = %v, want %v", tc.name, q.BookIdentifierHint, wantHint)
+		}
 		if q.BookASIN != tc.wantASIN || q.BookISBN != tc.wantISBN {
 			t.Errorf("%s: BookASIN %q BookISBN %q, want %q %q", tc.name, q.BookASIN, q.BookISBN, tc.wantASIN, tc.wantISBN)
 		}
