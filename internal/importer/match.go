@@ -4,6 +4,7 @@ import (
 	"math"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
@@ -345,16 +346,16 @@ func (m *matcher) matchTitle(it Item) (idx int, denied bool) {
 }
 
 // sequenceNumber reads an item's series sequence as the number a match compares:
-// a plain decimal ("2", "2.5"), as ABS writes one, finite and a position a book
-// may hold (metadata.ParseSeriesPosition, ValidSeriesPosition). ParseFloat's
+// a plain decimal ("2", "2.5"), as ABS writes one, and a position a book may
+// hold (metadata.ValidSeriesPosition). Digits and dots only, so ParseFloat's
 // other readings ("NaN", "Inf", "1e3", "0x1p3") are no position, and a range or
 // a lettered sequence ("1-3", "2b") gives none.
 func sequenceNumber(s string) (float64, bool) {
-	if s == "" || strings.Trim(s, "0123456789.") != "" || strings.Count(s, ".") > 1 {
+	if strings.Trim(s, "0123456789.") != "" {
 		return 0, false
 	}
-	v, end, ok := metadata.ParseSeriesPosition(s)
-	if !ok || end != 0 || !metadata.ValidSeriesPosition(v) {
+	v, err := strconv.ParseFloat(s, 64) // "", "." and "1.2.3" fail
+	if err != nil || !metadata.ValidSeriesPosition(v) {
 		return 0, false
 	}
 	return v, true
