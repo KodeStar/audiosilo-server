@@ -406,9 +406,8 @@ type listenAcc struct {
 	// onlyUser keeps only this user's listening (0 = everyone's; a person's own
 	// stats build theirs with newUserListenAcc).
 	onlyUser int64
-	// splitKeys counts the personal API keys that name no app as their own
-	// clients row (ClientCount.APIKey, server#224): the console's Activity only.
-	// A person's own stats (GET /me/stats, the player's) keep clients unsplit.
+	// splitKeys gives the API keys that name no app their own clients row
+	// (ClientCount.APIKey): set by the console's Activity only.
 	splitKeys bool
 
 	listened  float64

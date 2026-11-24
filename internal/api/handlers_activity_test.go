@@ -298,9 +298,7 @@ func TestStatsClientsSplitAPIKeysForAdminOnly(t *testing.T) {
 	var admin struct {
 		Activity catalog.Activity `json:"activity"`
 	}
-	if err := json.Unmarshal([]byte(body), &admin); err != nil {
-		t.Fatal(err)
-	}
+	decodeInto(t, body, &admin)
 	if want := []catalog.ClientCount{{Devices: 1}, {APIKey: true, Devices: 1}}; !reflect.DeepEqual(admin.Activity.Clients, want) {
 		t.Fatalf("admin clients = %+v, want %+v", admin.Activity.Clients, want)
 	}
@@ -315,9 +313,7 @@ func TestStatsClientsSplitAPIKeysForAdminOnly(t *testing.T) {
 	var mine struct {
 		Stats catalog.UserStats `json:"stats"`
 	}
-	if err := json.Unmarshal([]byte(body), &mine); err != nil {
-		t.Fatal(err)
-	}
+	decodeInto(t, body, &mine)
 	if want := []catalog.ClientCount{{Devices: 2}}; !reflect.DeepEqual(mine.Stats.Clients, want) {
 		t.Fatalf("my clients = %+v, want %+v", mine.Stats.Clients, want)
 	}
