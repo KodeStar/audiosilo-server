@@ -131,10 +131,12 @@ export function useIssueActions(
   };
 
   /**
-   * Reads several books again, RESCAN_CONCURRENCY at a time: each is a synchronous
-   * re-read on the server (outside its scan queue) that reads the book's files
-   * from disk, so firing them all at once would load the server and its disk
-   * with many reads at the same time. The issues refresh once, at the end.
+   * Reads several books again, RESCAN_CONCURRENCY at a time: each is a re-read on
+   * the server (outside its scan queue) that reads the book's files from disk, so
+   * firing them all at once would load the server and its disk with many reads at
+   * the same time. A read answered still_reading goes on there while the next
+   * starts, so on a slow share more than RESCAN_CONCURRENCY can run. The issues
+   * refresh once, at the end.
    */
   const rescanMany = async (books: AdminBook[]) => {
     let next = 0;
