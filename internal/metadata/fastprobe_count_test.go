@@ -729,3 +729,38 @@ func TestTagsAloneCountWhenAnUnknownFFprobeFails(t *testing.T) {
 		t.Errorf("header-less VBR, ffprobe answering: %v duration %v, want ffprobe's, uncounted", md.ProbeErr, md.Duration)
 	}
 }
+
+// A picture read whole (dhowden's APIC frame) is not read from the file again
+// when the probe reads the whole tag around it: only the tag's other bytes are,
+// and the tag comes back as it is on disk (server#269).
+func TestBlockFileKeepsTheLastLargeRead(t *testing.T) {
+	t.Parallel()
+	data := make([]byte, 4<<20)
+	for i := range data {
+		data[i] = byte(i * 7)
+	}
+	r := &countingReader{r: bytes.NewReader(data)}
+	b := newBlockFile(r, int64(len(data)))
+	pic := make([]byte, 1<<20) // the picture, inside the tag
+	const picAt = 100 << 10
+	if n, err := b.ReadAt(pic, picAt); n != len(pic) || err != nil {
+		t.Fatalf("picture read %d, %v", n, err)
+	}
+	before := r.n.Load()
+	tag := make([]byte, picAt+len(pic)+300<<10) // the whole tag: before, the picture, after
+	if n, err := b.ReadAt(tag, 0); n != len(tag) || err != nil {
+		t.Fatalf("tag read %d, %v", n, err)
+	}
+	if !bytes.Equal(tag, data[:len(tag)]) {
+		t.Fatal("the tag read back is not the file's bytes")
+	}
+	if read := r.n.Load() - before; read >= int64(len(pic)) || read < int64(len(tag)-len(pic)) {
+		t.Fatalf("the tag read %d bytes from the file, want its %d outside the picture (to a block)", read, len(tag)-len(pic))
+	}
+
+	// One past the file's end is short, as before.
+	end := make([]byte, 400<<10)
+	if n, err := b.ReadAt(end, int64(len(data))-200<<10); n != 200<<10 || err == nil {
+		t.Fatalf("a read past the end = %d, %v; want what is there and an error", n, err)
+	}
+}

@@ -17,6 +17,7 @@ package metadata
 // estimate (SRV-16, server#452).
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -305,6 +306,9 @@ func ExactDuration(ctx context.Context, r io.ReaderAt, size int64, format string
 const (
 	bfBlock   = 64 << 10
 	maxBlocks = 64
+	// maxBig bounds the large read a blockFile keeps (big): dhowden reads a
+	// picture of up to 10 MiB whole, a larger one through the blocks.
+	maxBig = 16 << 20
 )
 
 // blockFile reads the file in 64 KiB blocks it keeps, so dhowden, the narrator
@@ -318,6 +322,12 @@ type blockFile struct {
 	blocks map[int64][]byte
 	err    error
 	ff     ffRules // the rules the probe reads it by
+
+	// big is the last read of more than four blocks, a copy, from bigOff: an
+	// ID3v2 tag's picture is read whole by dhowden, then again inside the whole
+	// tag the probe reads, and a cover of MiBs is not read from the file twice.
+	big    []byte
+	bigOff int64
 
 	stuck  *stuckReads     // the file's mount's reads given up on (waitRead)
 	ctx    context.Context // the probe's, its deadline included; nil when not armed
@@ -492,7 +502,7 @@ func (b *blockFile) block(i int64) []byte {
 }
 
 // ReadAt reads through the block cache; a large read (a picture) goes straight
-// to the file.
+// to the file, but for what it shares with the last one (big).
 func (b *blockFile) ReadAt(p []byte, off int64) (int, error) {
 	b.tick()
 	if off < 0 {
@@ -502,9 +512,15 @@ func (b *blockFile) ReadAt(p []byte, off int64) (int, error) {
 		return 0, io.EOF
 	}
 	if len(p) > 4*bfBlock {
+		if lo, hi := max(off, b.bigOff), min(off+int64(len(p)), b.bigOff+int64(len(b.big))); lo < hi {
+			return b.aroundBig(p, off, lo, hi)
+		}
 		n, err := b.raw(p, off)
 		if n == len(p) {
 			err = nil
+			if len(p) <= maxBig {
+				b.big, b.bigOff = bytes.Clone(p), off
+			}
 		}
 		return n, err
 	}
@@ -520,6 +536,25 @@ func (b *blockFile) ReadAt(p []byte, off int64) (int, error) {
 	}
 	if n < len(p) {
 		return n, io.EOF
+	}
+	return n, nil
+}
+
+// aroundBig is ReadAt of p at off whose bytes lo to hi are big's: those are
+// copied from it, and only the rest is read (through the blocks, or the file).
+func (b *blockFile) aroundBig(p []byte, off, lo, hi int64) (int, error) {
+	copy(p[lo-off:hi-off], b.big[lo-b.bigOff:hi-b.bigOff])
+	if head := p[:lo-off]; len(head) > 0 {
+		if n, err := b.ReadAt(head, off); n < len(head) {
+			return n, err
+		}
+	}
+	n := int(hi - off)
+	if tail := p[hi-off:]; len(tail) > 0 {
+		m, err := b.ReadAt(tail, hi)
+		if n += m; m < len(tail) {
+			return n, err
+		}
 	}
 	return n, nil
 }
