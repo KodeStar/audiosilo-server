@@ -19,6 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/kodestar/audiosilo-server/internal/diskspace"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/ttlset"
@@ -86,6 +89,8 @@ type cacheSpec struct {
 	queueMax int
 	// args is the ffmpeg command line reading in and writing out.
 	args func(in inputSpec, out string) []string
+	// checkSource can refuse incompatible audio before reserving cache space.
+	checkSource func(context.Context, *os.File, int64) error
 	// check, when set, looks at a copy ffmpeg wrote and exited 0 on (out, the
 	// .part) beside its source (src, size bytes, unchanged since the key was
 	// made): an error matching errCopyRefused (no audio, a short copy) is a
@@ -225,10 +230,16 @@ func (m *FileCache) ShareDiskGuard(other *FileCache) { other.reserved = m.reserv
 // data folder goes).
 func (m *FileCache) Wait() { m.running.Wait() }
 
-// key names abs's cached copy: its path, size and mtime (and the spec's tag),
-// hashed.
+// key hashes the source's path, identity, size and mtime with the encode tag.
+// Without a filesystem ID the exact path keeps distinct files separate.
 func (m *FileCache) key(abs string, info os.FileInfo) string {
-	s := abs + "\x00" + strconv.FormatInt(info.Size(), 10) + "\x00" + strconv.FormatInt(info.ModTime().UnixNano(), 10)
+	id := abs
+	if fileID := cacheIdentity(info); fileID != "" {
+		// Scope reusable inode numbers to the spelling of this path. Distinct
+		// files on a case-sensitive disk still have distinct IDs.
+		id = norm.NFC.String(cases.Fold().String(abs)) + "\x00" + fileID
+	}
+	s := id + "\x00" + strconv.FormatInt(info.Size(), 10) + "\x00" + strconv.FormatInt(info.ModTime().UnixNano(), 10)
 	if m.spec.tag != "" {
 		s += "\x00" + m.spec.tag
 	}
@@ -270,7 +281,7 @@ func Source(ctx context.Context, root, abs string, wait time.Duration) (os.FileI
 // Bounded look, a test's to inject a share's errors.
 var statBelow = func(ctx context.Context, root, abs string, wait time.Duration) (fs.FileInfo, error) {
 	return metadata.LookBounded(ctx, abs, wait, func() (fs.FileInfo, error) {
-		return metadata.Below(root, abs, func(r *os.Root, rel string) (fs.FileInfo, error) { return r.Stat(rel) })
+		return statCacheSource(root, abs)
 	})
 }
 
@@ -343,6 +354,13 @@ func (m *FileCache) Cached(ctx context.Context, root, abs string) (*os.File, str
 	key := m.key(abs, info)
 	f, _, err := m.begin(ctx, "", key, root, abs, info, false)
 	if f == nil && err == nil {
+		if m.spec.checkSource != nil {
+			src, err := m.openSourceForCopy(ctx, root, abs, info)
+			if err != nil {
+				return nil, "", err
+			}
+			src.Close()
+		}
 		return nil, "", ErrUnavailable
 	}
 	return m.opened(key, f, err)
@@ -612,21 +630,6 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, root, abs stri
 	if err := os.MkdirAll(m.dir, 0o700); err != nil {
 		return err
 	}
-	// The guard counts the other runs still writing as taken (all of them, the
-	// sharing caches' too: the part written already is counted twice, on the
-	// safe side), so two at once can't each pass on the same free space. The
-	// source's size stands for the copy's: a remux's is about it, a rendition's
-	// smaller.
-	size := info.Size()
-	need := uint64(m.reserved.Add(size))
-	defer m.reserved.Add(-size)
-	if free, ok := m.freeSpace(m.dir); ok && (free < need || free-need < cacheMinFree) {
-		if !m.lowDisk.Swap(true) {
-			m.log.Warn(m.spec.lowDisk, "dir", m.dir, "free_bytes", free, "needed_bytes", need+cacheMinFree)
-		}
-		return ErrUnavailable
-	}
-	m.lowDisk.Store(false)
 
 	// Opened only once a slot is free, so queued runs hold no descriptor; a
 	// source that changed since the key was made, or while ffmpeg read it, is
@@ -643,14 +646,27 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, root, abs stri
 	// (fileInput: metadata.ToolInput's /dev/fd/3 link, read seekably, so an
 	// MP4 whose index sits at its end demuxes on an ffmpeg older than 6.1,
 	// where pipe:0 read none of its audio).
-	src, _, err := openBelow(runCtx, root, abs, m.openWait)
+	src, err := m.openSourceForCopy(runCtx, root, abs, info)
 	if err != nil {
-		return openFault(err)
+		return err
 	}
 	defer src.Close()
-	if !unchanged(src, info) {
+	// The guard counts the other runs still writing as taken (all of them, the
+	// sharing caches' too: the part written already is counted twice, on the
+	// safe side), so two at once can't each pass on the same free space. The
+	// source's size stands for the copy's: a remux's is about it, a rendition's
+	// smaller.
+	size := info.Size()
+	need := uint64(m.reserved.Add(size))
+	defer m.reserved.Add(-size)
+	if free, ok := m.freeSpace(m.dir); ok && (free < need || free-need < cacheMinFree) {
+		if !m.lowDisk.Swap(true) {
+			m.log.Warn(m.spec.lowDisk, "dir", m.dir, "free_bytes", free, "needed_bytes", need+cacheMinFree)
+		}
 		return ErrUnavailable
 	}
+	m.lowDisk.Store(false)
+
 	in, release, err := fileInput(runCtx, ffmpegPath, src, root, abs, m.openWait)
 	if err != nil {
 		// Windows' look at the path again: a share that stopped answering
@@ -700,6 +716,27 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, root, abs stri
 	return nil
 }
 
+// openSourceForCopy binds the cache key and codec check to the opened file.
+func (m *FileCache) openSourceForCopy(ctx context.Context, root, abs string, info os.FileInfo) (*os.File, error) {
+	f, now, err := openBelow(ctx, root, abs, m.openWait)
+	if err != nil {
+		return nil, openFault(err)
+	}
+	if !sameSnapshot(f, info, now) {
+		f.Close()
+		return nil, ErrUnavailable
+	}
+	if m.spec.checkSource != nil {
+		readCtx, cancel := context.WithTimeoutCause(ctx, m.openWait, metadata.ErrNotAnswered)
+		defer cancel()
+		if err := m.spec.checkSource(readCtx, f, info.Size()); err != nil {
+			f.Close()
+			return nil, err
+		}
+	}
+	return f, nil
+}
+
 // openFault is a run's failed open of its source (err) as its callers read
 // it: no source (ErrRefused joined with ErrNoSource, Source's for a look that
 // says so: the stored file's answer, a 404) when the file went, is no regular
@@ -740,7 +777,11 @@ func (m *FileCache) refuse(path string, err error) error {
 // key was made from.
 func unchanged(src *os.File, info os.FileInfo) bool {
 	now, err := src.Stat()
-	return err == nil && now.Mode().IsRegular() && now.Size() == info.Size() && now.ModTime().Equal(info.ModTime())
+	return err == nil && sameSnapshot(src, info, now)
+}
+
+func sameSnapshot(src *os.File, info, now os.FileInfo) bool {
+	return now.Mode().IsRegular() && now.Size() == info.Size() && now.ModTime().Equal(info.ModTime()) && sameCacheSource(src, info, now)
 }
 
 // refused reports whether ffmpeg's failure err is its refusal of the file: an

@@ -290,9 +290,9 @@ func TestCoverMIMESniffsTheBytes(t *testing.T) {
 		"script": {[]byte("alert(document.domain)"), "", false},
 		"svg":    {[]byte(`<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>`), "", false},
 	} {
-		mime, ok := coverMIME(tc.data)
+		mime, ok := metadata.CoverMIME(tc.data)
 		if ok != tc.ok || (ok && mime != tc.mime) {
-			t.Errorf("%s: coverMIME = %q, %v; want %q, %v", name, mime, ok, tc.mime, tc.ok)
+			t.Errorf("%s: metadata.CoverMIME = %q, %v; want %q, %v", name, mime, ok, tc.mime, tc.ok)
 		}
 	}
 }

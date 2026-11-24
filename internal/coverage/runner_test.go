@@ -290,7 +290,7 @@ func TestRunWaitsForTheMirror(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.unknowns(t, 3)
-	r := New(e.cat, e.md, Options{On: e.on.Load, Now: e.clock.now, Ready: func() bool { return false }})
+	r := New(e.cat, e.md, Options{On: e.on.Load, Now: e.clock.now, Loaded: func() <-chan struct{} { return make(chan struct{}) }})
 	if err := r.RunOnce(context.Background()); !errors.Is(err, errNotReady) {
 		t.Fatalf("err = %v", err)
 	}
@@ -306,7 +306,7 @@ func TestRunMirrorSkipsPing(t *testing.T) {
 	e := newEnv(t)
 	e.unknowns(t, 3)
 	e.md.unreach = true // a Ping would fail the run
-	r := New(e.cat, e.md, Options{On: e.on.Load, Now: e.clock.now, Ready: func() bool { return true }})
+	r := New(e.cat, e.md, Options{On: e.on.Load, Now: e.clock.now, Loaded: loadedMirror})
 	if err := r.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -546,11 +546,26 @@ func TestWakeRunsWhenDue(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.unknowns(t, 2)
-	r := New(e.cat, e.md, Options{On: e.on.Load}) // the real clock: Run's timers
+	loaded := make(chan struct{})
+	waiting := make(chan struct{})
+	var looks atomic.Int32
+	r := New(e.cat, e.md, Options{On: e.on.Load, Loaded: func() <-chan struct{} {
+		if looks.Add(1) == 2 {
+			close(waiting)
+		} // the schedule is waiting after RunOnce
+		return loaded
+	}}) // the real clock: Run's timers
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
 	r.Wake()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner never checked the mirror")
+	}
+	close(loaded)
 	deadline := time.Now().Add(5 * time.Second)
 	for len(e.md.posted()) != 2 {
 		if time.Now().After(deadline) {
@@ -558,8 +573,6 @@ func TestWakeRunsWhenDue(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	cancel()
-	<-done
 }
 
 // Status says when the schedule runs the report next (server#448): an hour
@@ -658,4 +671,10 @@ func TestStatusNextRunAfterWake(t *testing.T) {
 	if got := next(); got != scheduled {
 		t.Fatalf("after the Wake: next_run_at = %q, want %q", got, scheduled)
 	}
+}
+
+func loadedMirror() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
 }

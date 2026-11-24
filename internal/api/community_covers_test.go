@@ -91,7 +91,7 @@ func coverHost(t *testing.T) (*httptest.Server, []byte) {
 	// A JPEG within storedCoverSide yet larger than an upload may be, drawn turned
 	// (EXIF orientation 6), which media.Thumbnail hands back as its own bytes.
 	var turned bytes.Buffer
-	if err := jpeg.Encode(&turned, big.SubImage(image.Rect(0, 0, 400, 400)), nil); err != nil {
+	if err := jpeg.Encode(&turned, big.SubImage(image.Rect(0, 0, 400, 240)), nil); err != nil {
 		t.Fatal(err)
 	}
 	turnedJPEG := turnedJPEGOver(turned.Bytes(), catalog.MaxCoverBytes)
@@ -109,6 +109,7 @@ func turnedJPEGOver(jpg []byte, n int) []byte {
 	}
 	tiff := []byte("MM\x00\x2a\x00\x00\x00\x08\x00\x01\x01\x12\x00\x03\x00\x00\x00\x01\x00\x06\x00\x00\x00\x00\x00\x00")
 	out := append([]byte{0xFF, 0xD8}, seg(0xE1, append([]byte("Exif\x00\x00"), tiff...))...)
+	out = append(out, seg(0xE2, []byte("ICC_PROFILE\x00\x01\x01test profile"))...)
 	for len(out) <= n {
 		out = append(out, seg(0xFE, make([]byte, 65000))...)
 	}
@@ -262,7 +263,7 @@ func TestSetCommunityCover(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg, format, err = image.DecodeConfig(bytes.NewReader(cv.Data)); err != nil || format != "jpeg" ||
-		cfg.Width != 400 || len(cv.Data) > catalog.MaxCoverBytes {
+		cfg.Width != 240 || cfg.Height != 400 || !bytes.Contains(cv.Data, []byte("ICC_PROFILE\x00\x01\x01")) || len(cv.Data) > catalog.MaxCoverBytes {
 		t.Fatalf("turned cover stored as %s %dx%d, %d bytes (%v)", format, cfg.Width, cfg.Height, len(cv.Data), err)
 	}
 }

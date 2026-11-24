@@ -90,25 +90,24 @@ type Options struct {
 	// Announce tells the admin about new releases (one call per run, never
 	// with none). nil announces nothing.
 	Announce func(ctx context.Context, releases []Release)
-	// Ready reports whether lookups answer locally yet (mirror mode: the
-	// local copy of the metadata is loaded). Run's first run waits for it, at
+	// Loaded supplies the signal that the local mirror can answer lookups. Run's first run waits for it, at
 	// most readyWait, so a start sends no lookups to the service while the
 	// copy loads (server#454). nil is always ready.
-	Ready func() bool
-	Now   func() time.Time
-	Log   *slog.Logger
+	Loaded func() <-chan struct{}
+	Now    func() time.Time
+	Log    *slog.Logger
 }
 
 // Schedule.
 const (
-	firstDelay  = time.Hour        // after the start
-	interval    = 24 * time.Hour   // between successful runs
-	jitter      = time.Hour        // +- on interval
-	retryDelay  = time.Hour        // after a failed run
-	maxRetries  = 3                // failed runs retried before waiting for the next day
-	offPoll     = time.Minute      // while off, how often the switch is looked at
-	readyWait   = 10 * time.Minute // the first run's longest wait for Options.Ready
-	readyPoll   = 2 * time.Second  // how often that wait looks again
+	firstDelay = time.Hour        // after the start
+	interval   = 24 * time.Hour   // between successful runs
+	jitter     = time.Hour        // +- on interval
+	retryDelay = time.Hour        // after a failed run
+	maxRetries = 3                // failed runs retried before waiting for the next day
+	offPoll    = time.Minute      // while off, how often the switch is looked at
+	readyWait  = 10 * time.Minute // the first run's longest wait for Options.Loaded
+
 	settleKicks = 30 * time.Second
 	maxSettle   = 10 * time.Minute
 
@@ -165,11 +164,11 @@ type Runner struct {
 	// how often a run looks at the switch (pool.WhileOn).
 	settle   time.Duration
 	offCheck time.Duration
-	// readyWait and readyPoll bound and pace the first run's wait for
-	// Options.Ready (waitReady); readied is set once it is over (Run's
+	// readyWait bounds the first run's wait for
+	// Options.Loaded (waitReady); readied is set once it is over (Run's
 	// goroutine alone reads and sets it).
-	readyWait, readyPoll time.Duration
-	readied              bool
+	readyWait time.Duration
+	readied   bool
 	// pending is the books whose work a step-1-alone run (resolveOnly) found
 	// new or changed, kept for the next full run's series step (resolveSeries),
 	// which would otherwise not look at their series again until the monthly
@@ -201,7 +200,7 @@ func New(cat *catalog.Catalog, md Metadata, opt Options) *Runner {
 	return &Runner{cat: cat, meta: md, opt: opt, log: opt.Log,
 		kick: make(chan struct{}, 1), wake: make(chan struct{}, 1), runNow: make(chan struct{}, 1),
 		settle: settleKicks, offCheck: time.Second,
-		readyWait: readyWait, readyPoll: readyPoll, pending: map[catalog.Ref]bool{}}
+		readyWait: readyWait, pending: map[catalog.Ref]bool{}}
 }
 
 // Kick asks for a light run once the kicks settle: a scan or an edit may have
@@ -318,14 +317,14 @@ func (r *Runner) Run(ctx context.Context) {
 	}
 }
 
-// waitReady waits, before Run's first run, until Options.Ready reports true, at
+// waitReady waits, before Run's first run, until the local mirror loads, at
 // most readyWait; false when ctx ended first. Only the first run waits: once
 // loaded, a copy answers until the server stops. Run's goroutine alone calls it.
 func (r *Runner) waitReady(ctx context.Context) bool {
-	if r.readied || r.opt.Ready == nil {
+	if r.readied || r.opt.Loaded == nil {
 		return true
 	}
-	isReady, live := pool.WaitReady(ctx, r.opt.Ready, r.readyWait, r.readyPoll)
+	isReady, live := pool.WaitReady(ctx, r.opt.Loaded(), r.readyWait)
 	if !live {
 		return false
 	}

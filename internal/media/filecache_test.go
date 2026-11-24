@@ -274,13 +274,14 @@ func TestRemuxerRefusesOtherCodecs(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "aac.mka")
 	writeMKA(t, src, "aac")
 	m, runs := countingRemuxer(t, nil)
+	m.freeSpace = func(string) (uint64, bool) { t.Error("checked disk space for AAC"); return 0, true }
 	ctx := context.Background()
 	for range 2 {
 		if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) {
 			t.Fatalf("open = %v, want ErrRefused", err)
 		}
 	}
-	if n := runs.Load(); n != 1 {
+	if n := runs.Load(); n != 0 {
 		t.Fatalf("%d runs, want the refusal remembered", n)
 	}
 	if entries, _ := os.ReadDir(m.dir); len(entries) != 0 {
@@ -288,7 +289,7 @@ func TestRemuxerRefusesOtherCodecs(t *testing.T) {
 	}
 	later := time.Now().Add(time.Hour)
 	_ = os.Chtimes(src, later, later)
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) || runs.Load() != 2 {
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) || runs.Load() != 0 {
 		t.Fatalf("changed file: %v after %d runs, want a retry", err, runs.Load())
 	}
 }
@@ -529,20 +530,20 @@ func TestRemuxerWarmAll(t *testing.T) {
 	ctx := context.Background()
 	m.WarmAll(ctx, "ffmpeg", dir, []string{one, aac, two})
 	m.Wait()
-	if n := runs.Load(); n != 3 || most.Load() != 1 {
-		t.Fatalf("%d runs, at most %d at once; want 3, one at a time", n, most.Load())
+	if n := runs.Load(); n != 2 || most.Load() != 1 {
+		t.Fatalf("%d runs, at most %d at once; want two MP3 copies, one at a time", n, most.Load())
 	}
 	m.WarmAll(ctx, "ffmpeg", dir, []string{one, aac, two, filepath.Join(dir, "missing.mka")})
 	m.Wait()
-	if n := runs.Load(); n != 3 {
-		t.Fatalf("second warm ran ffmpeg %d more times, want none", n-3)
+	if n := runs.Load(); n != 2 {
+		t.Fatalf("second warm ran ffmpeg %d more times, want none", n-2)
 	}
 	f, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(two), two)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
-	if n := runs.Load(); n != 3 {
+	if n := runs.Load(); n != 2 {
 		t.Fatalf("open after the warm ran ffmpeg again (%d runs)", n)
 	}
 }

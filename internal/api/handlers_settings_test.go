@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/pool"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/config"
@@ -55,9 +58,25 @@ func TestAdminSettingsMetadataToggle(t *testing.T) {
 		t.Fatalf("meta while off = %d %s, want 404", r.StatusCode, b)
 	}
 
+	checked := make(chan struct{}, 1)
+	e.api.chapterChecks.PassRunner = pool.NewPassRunner(pool.PassOptions{Interval: time.Hour}, func(context.Context) bool {
+		checked <- struct{}{}
+		return false
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); e.api.chapterChecks.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	<-checked // initial pass
+
 	// PATCH on: capability true and the lookup works again.
 	if r, b := e.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"metadata":{"enabled":true}}`); r.StatusCode != http.StatusOK || !strings.Contains(b, `"enabled":true`) {
 		t.Fatalf("patch on = %d %s, want 200 enabled:true", r.StatusCode, b)
+	}
+	select {
+	case <-checked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("enabling metadata did not wake chapter checks")
 	}
 	if _, si := e.do(t, "GET", "/api/v1/server", "", ""); !strings.Contains(si, `"metadata":true`) {
 		t.Fatalf("expected capability metadata:true after on, got %s", si)

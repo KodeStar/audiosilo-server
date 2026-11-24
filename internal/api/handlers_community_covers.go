@@ -119,7 +119,7 @@ func (a *API) fetchCommunityThumbnail(ctx context.Context, key, rawURL string, s
 	case err != nil:
 		return nil, err
 	default:
-		if jpg, err = a.decodeThumbnail(ctx, media.Thumbnail, raw, size, "url", rawURL); err != nil {
+		if jpg, err = a.decodeThumbnail(ctx, media.ThumbnailJPEG, raw, size, "url", rawURL); err != nil {
 			return nil, err
 		}
 	}
@@ -327,7 +327,7 @@ func (a *API) saveMatchCover(ctx context.Context, libraryID int64, path, rawURL 
 // showing it whole would have to decode (a small file can claim huge dimensions),
 // re-encoded within storedCoverSide when it is larger than an upload may be
 // (catalog.MaxCoverBytes), else as fetched. The re-encode is always one
-// (media.ThumbnailJPEG): a JPEG already within storedCoverSide that a viewer
+// (media.StoredCoverJPEG): a JPEG already within storedCoverSide that a viewer
 // draws from more than its pixels (CMYK, an orientation, a colour profile) would
 // otherwise come back as the same too-large bytes.
 func (a *API) keepableCover(ctx context.Context, data []byte, rawURL string) ([]byte, error) {
@@ -340,7 +340,7 @@ func (a *API) keepableCover(ctx context.Context, data []byte, rawURL string) ([]
 	case len(data) <= catalog.MaxCoverBytes:
 		return data, nil
 	}
-	jpg, err := a.decodeThumbnail(ctx, media.ThumbnailJPEG, data, storedCoverSide, "url", rawURL)
+	jpg, err := a.decodeThumbnail(ctx, media.StoredCoverJPEG, data, storedCoverSide, "url", rawURL)
 	if err == nil && jpg == nil {
 		err = catalog.ErrUnsupportedImage
 	}

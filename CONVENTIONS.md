@@ -765,8 +765,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.UpcomingPending`, path-keyed) so a restart keeps them (server#447). It makes no call while
   `metadataOn()` is false, and a run in flight stops within a second when switched off (`pool.WhileOn`,
   `errSwitchedOff`: a cancellation, no status recorded, no retry). In mirror mode every call goes to the
-  local copy, and the schedule's first run waits for it to load (`Options.Ready`,
-  `api.mirrorReady`, at most 10 min, as the chapter checks: server#454). A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
+  local copy, and the schedule's first run waits for it to load (`Options.Loaded`,
+  `api.mirrorLoaded`, at most 10 min, as the chapter checks: server#454). A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
   path-keyed, no FK to `books`, cascaded with the library, written through the user-state path; no
   content cache reads them but `upcoming_owned`'s rows, `work_id` and `id_key`, the list books' `work_id`,
   so a new or removed row, a changed work or a re-keyed one moves the content generation, a re-check does not):
@@ -1567,20 +1567,21 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   If-Modified-Since for the stored Matroska, or any date If-Range, gets the whole MP3, never a 304 or a
   spliced range), `download=1` named `<stem>.mp3`; `original=1`
   serves the stored bytes. Old native builds stream it with no change (an old iOS build saves a
-  download under `.mka`, which AVFoundation won't open offline). The cache is
-  `<data>/cache/remux/<sha256(abs, size, mtime)>.mp3` (0700, made again if it went; `.part` synced then
+  download under `.mka`, which AVFoundation won't open offline). The cache key hashes the case-folded NFC
+  absolute path and filesystem object ID, or the exact path on a filesystem without an ID, plus size and mtime.
+  The first request after the key change builds a fresh copy. Older entries age out under the usual cap.
+  Copies live in `<data>/cache/remux/<key>.mp3` (0700, made again if it went; `.part` synced then
   renamed, never under the key when the source changed while read; `.part` swept at
   start; LRU by mtime, a hit (no lock) touches it at most every 10 min, 8 GiB cap swept after each remux, the new copy kept; skipped
   under 1 GiB free after it and the other runs still writing, the rendition cache's too (one reservation,
   `FileCache.ShareDiskGuard`), `internal/diskspace`); single-flight per key, 2 at once, run under
-  `baseCtx` with a 30 min timeout from when it has a slot (a waiter that leaves doesn't stop it). ffmpeg's refusal (not one
-  MP3 stream: AAC/Opus/FLAC in `.mka`; an exit status before it wrote anything, so a run killed or
-  failed partway, a full disk or a read error, is not one, nor one whose log names an I/O error before any
-  output: `readFailed`, server#212; a run its own timeout killed is, server#289, the server shutting down is not)
-  is remembered per key in memory for an hour (`cacheRefusalTTL`: what looks like the file's fault may be the
-  environment's, an ffmpeg missing an encoder; a changed file is a new key at once) and the stored bytes served,
-  as they are for no regular file at the path (a 404),
-  so those still play on web only, through `?transcode=1`. A remux that can't be had now (still
+  `baseCtx` with a 30 min timeout from when it has a slot (a waiter that leaves doesn't stop it).
+  A bounded read of the Matroska track header identifies known non-MP3 codecs before reserving disk space.
+  A cold GET or HEAD for such a file serves the stored Matroska. Explicit `transcode=1` serves live MP3.
+  Unknown codecs still reach ffmpeg. A codec refusal, an ffmpeg rejection before any output, or the run's
+  own timeout records a refusal for that key for one hour (`cacheRefusalTTL`). A changed file gets a fresh key.
+  A full disk, a reported I/O error (`readFailed`, server#212), a partial copy or server shutdown leaves the
+  file eligible for another attempt. A missing regular file returns 404. A remux that can't be had now (still
   running after `remuxColdWait`, 2 s, under the player's 3 s stall timer and Android's 8 s read
   timeout; the disk guard; a failure other than that refusal) answers the plain URL with the live
   transcode instead (`serveRemuxed`; `download=1` still named `<stem>.mp3`), the remux going on for
@@ -1603,7 +1604,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book, as an `.aax` does (`library.folderAudio`), and out of the `/fs` listing too
   (`library.shadowedMKA`, the one rule both use); a lone `.mka` is listed. An `.epub` is never
   audio: `/stream` refuses it (404) and `/fs` doesn't list it; a book's ebook is served only by
-  `GET /libraries/{id}/ebook` (see Path-addressed API).
+  `GET /libraries/{id}/ebook` (see Path-addressed API). A primary MKA can supply a cover attachment
+  up to 16 MiB. Its bytes must identify a supported image. A named `cover.<ext>` takes precedence over
+  other image attachments. Migration 0096 queues previously negative MKA rows for the next scan's cover check.
 - **In-process probe (server#261, `metadata/fastprobe*.go`)**: `metadata.ExtractTimeout` opens a
   file once and reads its tags, the iTunes narrator and the probe through one 64 KiB block cache
   (at most 4 MiB kept; a read of more than four blocks goes to the file, but for what it shares with
@@ -1921,7 +1924,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `rendition_failed`, state `failed`), since a source short itself (a truncated MP3 whose Xing header names the
   whole length) would otherwise be encoded again on every request; like every refusal it is forgotten after an
   hour (`cacheRefusalTTL`), so a read error partway is tried again then. The cache is the remux's `media.FileCache` over another `cacheSpec`: key
-  sha256(abs, size, mtime, `watch-v1`), so a new encode version (`renditionVersion`) is a new key; 10 GiB LRU
+  the remux's source identity, size and mtime plus `watch-v1`, so a new encode version (`renditionVersion`) is a new key; 10 GiB LRU
   of its own `.m4a` files, one encode at a time, 2 h timeout from its slot, the same 1 GiB disk guard (one
   reservation with the remux's: both under `<data>/cache`), `.part` synced then renamed, never cached when the
   source changed while read, ffmpeg's refusal (an exit status before anything was written, or a copy with no
@@ -1931,7 +1934,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   never `pipe:0`, through which an M4B whose index sits at its end gave a copy with no track, the book's watch
   rendition a 422 "holds no audio" and its MKA remux a refusal, for good (server#498's regression,
   `TestRenditionWithoutFDReadsAnIndexAtTheEnd`, `TestFileCacheInputWithoutFD`). A failed run's error carries the first and last
-  2 KiB of ffmpeg's log. The remux is unchanged (same dir, keys, ETags). `GET
+  2 KiB of ffmpeg's log. `GET
   /libraries/{id}/stream?path=<file>&rendition=watch[&download=1]` (same auth as the stream: session, API key,
   `?token=`, a cast token for its book) is checked in this order: scope (403/404), kind (400 code `bad_rendition`
   for anything but `watch`, and for a podcast library: the watch has no podcasts, and a watch client never
@@ -2248,8 +2251,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`Scanner.EbookDigestNow`: a request recorded it before the scan), and `SetEbookDigest` records it
   with the signature of the file it hashed, only while the row still names that ebook (`ebook_path`)
   and still holds the digest its caller read as stale (`ebook_hashed_sig` as read before hashing), so
-  a slow hash of an older file never overwrites a newer one recorded meanwhile (server#265): a request
-  may record one for a file newer than the last scan, which that scan then finds current. An EPUB
+  a slow hash of an older file never overwrites a newer one recorded meanwhile (server#265). After a competing
+  write, the caller rereads the row and checks the on-disk signature before retrying. A request may record
+  a file newer than the last scan, which that scan then finds current. An EPUB
   replaced by one of the same size and mtime (and name) keeps the old digest until either changes:
   the signature is `size:mtime:name` (a known limit). Hashing every ebook would read a
   library whole over a network share.
@@ -3132,7 +3136,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   same thumbnail at once share one fetch, `communityFlights`); `PUT /admin/libraries/{id}/cover/community?path=` (`{url}`) keeps one as the book's
   custom cover through `saveCustomCover`, the upload's own path, once `keepableCover` has read its
   header (413 past `media.MaxThumbnailSourcePixels`), re-encoded within 1600 px first when it is
-  over 5 MiB (audited `book.cover_set`, `source: community`); 400 for a URL
+  over 5 MiB. The saved JPEG applies EXIF orientation to the pixels and retains the ICC profile
+  (audited `book.cover_set`, `source: community`); 400 for a URL
   that isn't http(s), 502 `cover_unavailable`, 413/415 as an upload. Both 404 `metadata_off`
   while metadata is off (`metadataOff`). Tests swap the fetch through `API.fetchCover`.
   **The player's community covers** (rail entries, "Previous books", the recording) come
@@ -3147,7 +3152,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is already cached in memory and in `meta_cache`, so the check is a lookup. Served only as
   a JPEG thumbnail through `communityThumbnail` (same cache key as the console's batch,
   `FetchCover`'s guards, `communityReads`), so upstream bytes and content types never
-  reach the client; ETag `"community-<size>-<CoverVersion(url)>"`, `coverCache` (a day).
+  reach the client; ETag `"community-<size>-<ThumbnailRev>-<CoverVersion(url)>"`, `coverCache` (a day).
   404 `no such cover` (unmatched, untagged, URL not handed out), 502 metadata unavailable,
   502 `cover_unavailable` (fetch failed, not cached but remembered per URL for
   `communityRetryAfter`, 1 min, so a broken or hung host isn't fetched on every render; the
@@ -5501,8 +5506,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   next tick whatever kicks it, and a book a check failed for waits an hour, so it
   can't hold up the books behind it. A kick waits 5 s for the kicks behind it (a
   scan kicks once per book), so a burst is one pass. In mirror mode the first pass after a start
-  (the first with metadata on: no copy loads while it is off) waits for the local copy (`mirrorReady`,
-  at most 10 min, server#282), so a start sends no lookups to the service while the copy loads. The book page's
+  (the first with metadata on: no copy loads while it is off) waits for the local copy
+  (`metamirror.Mirror.Loaded`, at most 10 min, server#282). Coverage and upcoming share this first-load
+  signal. Enabling metadata in settings also kicks the chapter checker. The book page's
   `community_check_failed` says the last check failed. Pause windows for a file run in one
   ffmpeg process (an ffmpeg older than 5.0, whose concat lists take no per-file options, or one
   without the concat demuxer, runs one a window, each within 30 s). They stop four minutes into the five-minute check, including lookup time.

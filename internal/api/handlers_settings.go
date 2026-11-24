@@ -147,6 +147,9 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if a.mirror != nil && next.Metadata.Enabled && !cur.Metadata.Enabled {
 		a.mirror.Wake()
 	}
+	if a.chapterChecks != nil && next.Metadata.Enabled && !cur.Metadata.Enabled {
+		a.chapterChecks.Kick()
+	}
 	// Upcoming releases switched on (or metadata back on): run soon when no
 	// run has succeeded for a day.
 	if a.upcoming != nil && next.Metadata.Enabled && next.Upcoming.Enabled &&

@@ -89,6 +89,12 @@ func TestMirrorDownloadsAndSwaps(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), DirName)
 	m := newMirror(t, dir, gh, Options{})
 
+	loaded := m.Loaded()
+	select {
+	case <-loaded:
+		t.Fatal("empty mirror signalled loaded")
+	default:
+	}
 	st := m.Status()
 	if st.State != StateEmpty || !st.Fallback || m.Ready() || st.NextCheckAt.IsZero() {
 		t.Fatalf("a new mirror = %+v", st)
@@ -98,6 +104,11 @@ func TestMirrorDownloadsAndSwaps(t *testing.T) {
 	}
 
 	m.check(context.Background())
+	select {
+	case <-loaded:
+	default:
+		t.Fatal("download did not signal loaded")
+	}
 	st = m.Status()
 	const tag = "data-v2026.10.09-ccccccc-ddddddd" // the newest data release, not the first listed
 	if st.State != StateReady || st.Fallback || st.Tag != tag || st.Error != "" {
@@ -341,6 +352,11 @@ func TestMirrorStateSurvivesRestart(t *testing.T) {
 	}
 
 	m2 := newMirror(t, dir, gh, Options{})
+	select {
+	case <-m2.Loaded():
+	default:
+		t.Fatal("stored copy did not signal loaded")
+	}
 	st := m2.Status()
 	if st.State != StateReady || st.Tag != tag || !m2.Ready() || st.DownloadedAt.IsZero() {
 		t.Fatalf("after a restart = %+v", st)
