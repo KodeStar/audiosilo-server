@@ -447,6 +447,8 @@ func wireCases(t *testing.T) []wireCase {
 		{name: "chapters", route: "GET /api/v1/libraries/{id}/chapters?path=<a two-file book>", body: lib("chapters", cradleBook)},
 		{name: "progress", route: "GET /api/v1/libraries/{id}/progress?path=<a book>", body: lib("progress", cradleBook)},
 		{name: "me-progress", route: "GET /api/v1/me/progress", body: get("/api/v1/me/progress", m.samTok)},
+		{name: "favourites", route: "GET /api/v1/me/favourites (a book and a navigation folder)",
+			body: get("/api/v1/me/favourites", m.samTok)},
 		{name: "listening-sync", route: "POST /api/v1/me/listening/sync", body: call(m.testEnv, "POST", syncURL, m.samTok,
 			syncBody("wire-device", listenJSON("wire-1", m.lib.ID, syncMistborn, 0, 60, "")))},
 		{name: "bookmarks", route: "GET /api/v1/libraries/{id}/bookmarks?path=<a book>", body: lib("bookmarks", cradleBook)},
@@ -490,7 +492,7 @@ func wireOK(t *testing.T, e *testEnv, method, path, tok, body string) string {
 // wireMainEnv: a copy of the fixture library with Cradle dressed in every
 // optional field a seed can cheaply give it (an Audiobookshelf metadata.json, an
 // ebook and its read-along map, generated characters), scanned; a listener (sam) granted it with a
-// place and a bookmark; a household member of the admin's; watch renditions on;
+// place, a bookmark and two favourites; a household member of the admin's; watch renditions on;
 // and a second library holding a book the mock metaserve matches. A field a
 // golden should guard has to appear here: an omitempty one left unset is absent
 // from the shape, so its removal would pass.
@@ -540,6 +542,10 @@ func newWireMainEnv(t *testing.T) *wireMainEnv {
 		t.Fatal(err)
 	}
 	wireOK(t, e, "PUT", bookURL(lib.ID, "progress", cradleBook), samTok, `{"position":42,"duration":120}`)
+	// A book and a navigation folder: the folder's row has no book fields.
+	for _, fav := range []string{cradleBook, "Will Wight"} {
+		wireOK(t, e, "POST", bookURL(lib.ID, "favourites", fav), samTok, "")
+	}
 	wireOK(t, e, "POST", bookURL(lib.ID, "bookmarks", cradleBook), samTok, `{"position":12,"note":"here","label":"favourite","client_id":"0f8c2c1e-5a3b-4c6d-9e7f-1a2b3c4d5e6f"}`)
 	member, _, _, err := e.auth.CreateMember(ctx, e.adminID, auth.NewMember{Name: "Pip", Kind: auth.MemberGrownup,
 		Access: auth.MemberAll}, auth.MemberPolicy{Enabled: true, Max: 5})

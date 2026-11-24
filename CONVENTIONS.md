@@ -3164,7 +3164,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   own version as `cover_art`, so `cover_version` follows a sidecar replaced in place
   and equals the thumbnail ETag's hash; `catalog.RecordCoverColors` is
   compare-and-set on the identity it was read under and bounded (250 ms, detached
-  from the request). Both are on the player `Book` JSON (`omitempty`).
+  from the request). Both are on the player `Book` JSON (`omitempty`). The player rows
+  that name a book without carrying one, `GET /me/progress` (`ListProgress` only: never
+  `GetProgress` or a save's echo, which `scanProgress` clears), `GET /me/favourites`, a
+  `/fs` book entry (`library.MarkBooks`) and a `/household/listening` row on an indexed
+  book, carry its `cover_version` too, omitted where the path is no indexed book
+  (server#215).
   Migration 0094 adds `books.cover_color_art`, the raw identity of the last art read,
   including a read that found no colour. `CoverColorsDue` pages the partial index
   of rows whose identity differs. At upgrade, `BackfillCoverColorArt` checks the
