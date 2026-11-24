@@ -132,6 +132,15 @@ func TestOptionsWordlessFallback(t *testing.T) {
 		// numberless first one on token overlap.
 		{"later volume", aud("The Mayor of Noobtown 2", "Ryan Rimmel", "Noobtown", 2), -1, -1},
 	})
+	// Under the default options a number read from the title alone (here a year)
+	// is no veto on the series-named book.
+	dune := []Book{{Author: "Frank Herbert", Title: "Dune", Series: "Dune"}}
+	if i, _, ok := BestWith(dune, Query{Author: "Frank Herbert", Title: "Dune (2021 Edition)", Series: "Dune Chronicles"}, Options{}); !ok || i != 0 {
+		t.Errorf("year in the title: got %d %v, want the series-named book", i, ok)
+	}
+	if _, _, ok := BestWith(dune, Query{Author: "Frank Herbert", Title: "Dune (2021 Edition)", Series: "Dune Chronicles", Sequence: 2, HasSequence: true}, Options{}); ok {
+		t.Error("stated sequence 2: matched the numberless series-named book")
+	}
 	o := Options{WordlessFallback: true}
 	const articleLast = "Mayor of Noobtown, The"
 	if got := CleanTitle(articleLast, "Mayor of Noobtown"); got != "The" {

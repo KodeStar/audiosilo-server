@@ -480,11 +480,13 @@ func (x *Index) BestScore(q Query) (int, float64, bool) {
 				score = scoreBareVol1
 			}
 		default:
-			if qHasSeq && x.seriesOnly(i) {
+			if qHasSeq && (o.WordlessFallback || q.HasSequence) && x.seriesOnly(i) {
 				// CleanTitle can give a series-named candidate its title's words
 				// back, so token overlap is the series matching itself: like a bare
 				// pair, only its number (1 when it states none) may agree, or one
-				// numberless volume would absorb every later one.
+				// numberless volume would absorb every later one. Under the default
+				// options only a stated sequence vetoes: a number read from the
+				// query's title can be a year ("Dune (2021 Edition)").
 				bSeq, ok := x.seqRef(i)
 				if !ok {
 					bSeq = 1
