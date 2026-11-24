@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // Job states (migration 0047).
@@ -1813,7 +1814,7 @@ var (
 
 // checkUpdate bounds what the Bridge sends: progress and result are JSON
 // objects (the request decoder already checked they are JSON), the error cleaned
-// to printable bounded text, line breaks kept (cleanText: a failed job's report
+// to printable bounded text, line breaks kept (textclean.Clean: a failed job's report
 // must land whatever its error quotes).
 func checkUpdate(u *Update) error {
 	for name, raw := range map[string]struct {
@@ -1831,7 +1832,7 @@ func checkUpdate(u *Update) error {
 		}
 	}
 	if u.Error != nil {
-		e := cleanText(*u.Error, maxErrorBytes, true)
+		e := textclean.Clean(*u.Error, maxErrorBytes, true)
 		u.Error = &e
 	}
 	return nil
@@ -2149,7 +2150,7 @@ func parkCode(progress json.RawMessage) string {
 	if json.Unmarshal(progress, &p) != nil || p.Park == nil {
 		return ""
 	}
-	return cleanText(p.Park.Code, maxShortText, false)
+	return textclean.Clean(p.Park.Code, maxShortText, false)
 }
 
 // Blocker returns the open job of another kind that refuses a new job of kind

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -143,8 +144,8 @@ func (a *API) handleRenditionStatus(w http.ResponseWriter, r *http.Request) {
 // as /item (403 outside the grant, 404 no book), the kind checked (the body's
 // for a prepare, else ?kind=), then each of its audio files, in play order,
 // queued (prepare: 202) or only read (200). Each file's join and stat are
-// metadata.Bounded calls (fileWait): one given up on is a 503
-// share_not_answering for the whole answer.
+// metadata.Bounded calls (fileWait), the stat the only one the file gets: one
+// given up on is a 503 share_not_answering for the whole answer.
 func (a *API) renditionsOfBook(w http.ResponseWriter, r *http.Request, prepare bool) {
 	lib, path, scope, code, msg := a.authorizedScope(r)
 	if code != 0 {
@@ -173,20 +174,23 @@ func (a *API) renditionsOfBook(w http.ResponseWriter, r *http.Request, prepare b
 	files := make([]renditionFile, 0, len(audio))
 	for _, f := range audio {
 		out := renditionFile{Path: f.RelPath, State: media.CacheFailed}
+		var info os.FileInfo
 		abs, err := library.SafeJoinBounded(r.Context(), lib.Root, f.RelPath, a.fileWait)
 		if err == nil {
-			_, err = media.Source(r.Context(), lib.Root, abs, a.fileWait)
+			info, err = media.Source(r.Context(), lib.Root, abs, a.fileWait)
 		}
 		if metadata.GaveUp(err) {
 			writeShareNotAnswering(w)
 			return
 		}
-		if abs != "" {
+		// No regular file there is failed as it stands; a file is looked at
+		// once, here, and its look handed on (server#359).
+		if err == nil {
 			var left time.Duration
 			if prepare {
-				out.State, out.Bytes, left = a.renditions.Queue(a.baseCtx, a.ffmpeg, lib.Root, abs)
+				out.State, out.Bytes, left = a.renditions.Queue(a.baseCtx, a.ffmpeg, lib.Root, abs, info)
 			} else {
-				out.State, out.Bytes, left = a.renditions.Status(lib.Root, abs)
+				out.State, out.Bytes, left = a.renditions.StatusOf(abs, info)
 			}
 			if left > 0 {
 				out.RetryAfter = retrySeconds(left)

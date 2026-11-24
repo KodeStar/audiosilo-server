@@ -198,7 +198,7 @@ func TestRender(t *testing.T) {
 	if err != nil || len(doc.Candidates) != 3 || doc.Candidates[0].URL != "https://a.example/f?x=1&y=2" {
 		t.Fatalf("round trip %v %+v\n%s", err, doc, out)
 	}
-	if !strings.Contains(string(out), `text="A &lt;b&gt; &amp; &#34;q&#34;"`) || !strings.Contains(string(out), `text="Podcast"`) || !strings.Contains(string(out), `text="`+strings.Repeat("é", MaxTitleRunes)+`"`) {
+	if !strings.Contains(string(out), `text="A &lt;b&gt; &amp; &#34;q&#34;"`) || !strings.Contains(string(out), `text="Podcast"`) || !strings.Contains(string(out), `text="`+strings.Repeat("é", MaxTitleBytes/2)+`"`) {
 		t.Fatalf("titles:\n%s", out)
 	}
 	big := make([]Entry, 20000)
@@ -207,14 +207,5 @@ func TestRender(t *testing.T) {
 	}
 	if _, err := Render(big); !errors.Is(err, ErrExportLimit) {
 		t.Fatalf("over 4 MiB = %v", err)
-	}
-}
-
-func TestCleanText(t *testing.T) {
-	if got := CleanText(" a\x00b\u0085c\td ", 3); got != "abc" {
-		t.Fatalf("%q", got)
-	}
-	if got := CleanText("\xff", 5); got != "�" {
-		t.Fatalf("%q", got)
 	}
 }

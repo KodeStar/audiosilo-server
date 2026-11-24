@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // A library file is read by ffprobe as an audio container only
@@ -92,7 +94,7 @@ func TestProbeReadsNoPlaylist(t *testing.T) {
 		if p.Duration <= 0 || p.Codec == "" || (tc.codec != "" && p.Codec != tc.codec) || len(p.Chapters) < tc.chapters {
 			t.Errorf("%s: duration %v, codec %q, %d chapters; want a duration, codec %q and at least %d chapters", tc.file, p.Duration, p.Codec, len(p.Chapters), tc.codec, tc.chapters)
 		}
-		if got := firstNonEmpty(p.Tags["album"], p.Tags["title"]); tc.title != "" && got != tc.title {
+		if got := textclean.FirstNonEmpty(p.Tags["album"], p.Tags["title"]); tc.title != "" && got != tc.title {
 			t.Errorf("%s: title %q, want %q", tc.file, got, tc.title)
 		}
 	}

@@ -12,13 +12,13 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/netguard"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
-	"github.com/kodestar/audiosilo-server/internal/podcast/opml"
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // Normalization bounds.
 const (
 	maxEntries   = 1000 // provider rows inspected
-	maxTextRunes = 500  // a title or author
+	maxTextBytes = 1000 // a title or author (textclean.Line)
 	maxURLBytes  = 2048
 	maxCount     = 2147483647
 	// ArtworkPath is the relative proxy URL a result's artwork_url starts with.
@@ -121,7 +121,7 @@ func (r rules) finish(rows []candidate, limit int) []Result {
 
 func firstText(vals []string) string {
 	for _, v := range vals {
-		if t := opml.CleanText(v, maxTextRunes); t != "" {
+		if t := textclean.Line(v, maxTextBytes); t != "" {
 			return t
 		}
 	}

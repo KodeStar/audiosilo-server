@@ -362,12 +362,17 @@ func parseScanned(raw string) (fields bookFields, stamp, rev string, err error) 
 // value, where it came from, what the scan found (the revert target), and who
 // last edited it.
 type FieldValue struct {
-	Value    string `json:"value"`
-	Source   string `json:"source"`
-	Scanned  string `json:"scanned"`
-	Locked   bool   `json:"locked"`
-	EditedBy string `json:"edited_by,omitempty"`
-	EditedAt string `json:"edited_at,omitempty"`
+	Value   string `json:"value"`
+	Source  string `json:"source"`
+	Scanned string `json:"scanned"`
+	// ScannedSource is where Scanned came from (SourceTag, SourcePath or
+	// SourceABS), omitted when the scan found nothing: the revert's hint names
+	// the layer the value goes back to, as Source did before an edit hid it.
+	// SourcePath is told by equality, as Source is (scannedFields).
+	ScannedSource string `json:"scanned_source,omitempty"`
+	Locked        bool   `json:"locked"`
+	EditedBy      string `json:"edited_by,omitempty"`
+	EditedAt      string `json:"edited_at,omitempty"`
 	// Enrichment is the Bridge's enrichment of the field (an ASIN or ISBN its
 	// Audible backfill stored) while an override hides it, omitted otherwise:
 	// what the field falls back to, over Scanned, once that override goes (an
@@ -566,6 +571,7 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 		default:
 			fv.Source = SourceTag
 		}
+		fv.ScannedSource = fv.Source
 		if v, ok := l.enrichment[field]; ok {
 			fv.Value, fv.Source = v, SourceCommunity
 		}

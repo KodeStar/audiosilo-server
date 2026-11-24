@@ -21,6 +21,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/diskspace"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/ttlset"
 )
 
 // The bounds every file cache shares: the free space a run must leave on the
@@ -121,8 +122,9 @@ type FileCache struct {
 
 	mu       sync.Mutex
 	inflight map[string]*cacheFlight
-	// failed holds the remembered refusals, each until when (cacheRefusalTTL).
-	failed map[string]time.Time
+	// failed holds the remembered refusals by key, each for cacheRefusalTTL,
+	// at most cacheFailedMax.
+	failed *ttlset.Set[string]
 	// evictMu serializes the sweeps; lowDisk is set while the disk guard is
 	// refusing, so it warns once per spell.
 	evictMu sync.Mutex
@@ -164,7 +166,7 @@ func newFileCache(dir string, spec cacheSpec, log *slog.Logger) (*FileCache, err
 		inflight:  map[string]*cacheFlight{},
 		now:       time.Now,
 		openWait:  sourceWait,
-		failed:    map[string]time.Time{},
+		failed:    ttlset.New[string](cacheRefusalTTL, cacheFailedMax),
 		reserved:  new(atomic.Int64),
 		warming:   map[string]struct{}{},
 		warmSlot:  make(chan struct{}, 1),
@@ -247,8 +249,8 @@ func (m *FileCache) Ext() string { return m.spec.ext }
 // file's answer, a 404, is the right one), such a link among them; a stat
 // given up on (metadata.GaveUp: a share that stopped answering, a transient
 // fault among them: transientGaveUp) or ctx's error as it is, never the file
-// gone. A request looks with it before asking the cache for the copy (Open, Status, Queue, RefusedFor), whose own stat of
-// the source then answers at once, as the share just did; that stat is given
+// gone. A request looks with it before asking the cache for the copy (Open, Status, RefusedFor), whose own stat of
+// the source then answers at once, as the share just did (Queue, StatusOf and a warm's open take that look and make none); that stat is given
 // sourceWait all the same, so one on a share that stopped answering since is
 // given up on rather than holding one of its mount's slots for good.
 func Source(ctx context.Context, root, abs string, wait time.Duration) (os.FileInfo, error) {
@@ -272,7 +274,7 @@ var statBelow = func(ctx context.Context, root, abs string, wait time.Duration) 
 	})
 }
 
-// sourceWait bounds a cache's own stat of a source (Open, Status, Queue,
+// sourceWait bounds a cache's own stat of a source (Open, Status,
 // RefusedFor, a warm's look): a scan's look time, never a run's (the spec's
 // timeout, half an hour and more), as no metadata.Bounded call is left with
 // none (metadata.Bounded: one that never gives up holds its mount's slot for
@@ -299,6 +301,12 @@ func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, root, abs stri
 	if err != nil {
 		return nil, "", err
 	}
+	return m.openOf(ctx, runCtx, ffmpegPath, root, abs, info)
+}
+
+// openOf is Open for a caller that has looked at abs itself (Source, a
+// warm's look): info is that look's, so the source isn't stat'ed again.
+func (m *FileCache) openOf(ctx, runCtx context.Context, ffmpegPath, root, abs string, info os.FileInfo) (*os.File, string, error) {
 	key := m.key(abs, info)
 	f, fl, err := m.begin(runCtx, ffmpegPath, key, root, abs, info, true)
 	if f != nil || err != nil {
@@ -379,7 +387,7 @@ func (m *FileCache) begin(runCtx context.Context, ffmpegPath, key, root, abs str
 	if f, ok := m.hit(key); ok {
 		return f, nil, nil
 	}
-	if left := m.refusalLeftLocked(key); left > 0 {
+	if left := m.failed.Left(key, m.now()); left > 0 {
 		return nil, nil, refusal{left}
 	}
 	fl, waiting := m.inflight[key]
@@ -436,12 +444,18 @@ func (m *FileCache) Status(root, abs string) (state CacheState, size int64, refu
 	if err != nil {
 		return CacheFailed, 0, 0
 	}
+	return m.StatusOf(abs, info)
+}
+
+// StatusOf is Status for a caller that has looked at abs itself (Source):
+// info is that look's, so the source isn't stat'ed again.
+func (m *FileCache) StatusOf(abs string, info os.FileInfo) (state CacheState, size int64, refusedFor time.Duration) {
 	key := m.key(abs, info)
 	// A key in flight or refused has no copy (a run renames its copy into
 	// place before it leaves inflight), so the cache file is stat'ed once,
 	// outside the lock.
 	m.mu.Lock()
-	left := m.refusalLeftLocked(key)
+	left := m.failed.Left(key, m.now())
 	_, running := m.inflight[key]
 	m.mu.Unlock()
 	switch {
@@ -457,14 +471,12 @@ func (m *FileCache) Status(root, abs string) (state CacheState, size int64, refu
 }
 
 // Queue starts making abs's copy under runCtx unless it is cached, refused or
-// under way, and returns where it stands then (as Status). It never waits for
-// the run. A cache with no queueMax, or as many runs in flight, starts nothing:
-// the file stays missing for the caller to ask again.
-func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, root, abs string) (state CacheState, size int64, refusedFor time.Duration) {
-	info, err := Source(runCtx, root, abs, sourceWait)
-	if err != nil {
-		return CacheFailed, 0, 0
-	}
+// under way, and returns where it stands then (as Status). info is the
+// caller's look at abs (Source), so the source isn't stat'ed again; the run
+// opens it under root. It never waits for the run. A cache with no queueMax,
+// or as many runs in flight, starts nothing: the file stays missing for the
+// caller to ask again.
+func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, root, abs string, info os.FileInfo) (state CacheState, size int64, refusedFor time.Duration) {
 	key := m.key(abs, info)
 	f, fl, err := m.begin(runCtx, ffmpegPath, key, root, abs, info, m.spec.queueMax > 0)
 	switch {
@@ -519,13 +531,17 @@ func (m *FileCache) WarmAll(runCtx context.Context, ffmpegPath, root string, pat
 			// Looked at under a look's time first: a share that stopped
 			// answering holds no warm (nor its slot) for good, and the rest of
 			// the book, on the same share, waits for the stream that asks.
-			if _, err := Source(runCtx, root, abs, sourceWait); metadata.GaveUp(err) {
+			info, err := Source(runCtx, root, abs, sourceWait)
+			if metadata.GaveUp(err) {
 				return
 			}
-			if st, _, _ := m.Status(root, abs); st == CacheReady {
+			if err != nil {
+				continue // no file there (or the run ending): nothing to warm, no second look
+			}
+			if st, _, _ := m.StatusOf(abs, info); st == CacheReady {
 				continue
 			}
-			if f, _, err := m.Open(runCtx, runCtx, ffmpegPath, root, abs); err == nil {
+			if f, _, err := m.openOf(runCtx, runCtx, ffmpegPath, root, abs, info); err == nil {
 				f.Close()
 			}
 		}
@@ -556,27 +572,12 @@ func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, root, abs stri
 	// ffmpeg's refusal of the file, never a source that could not be opened
 	// (openFault): the next look at that one answers for itself.
 	if errors.Is(err, ErrRefused) && !errors.Is(err, ErrNoSource) {
-		m.rememberLocked(key)
+		m.failed.Add(key, m.now())
 	}
 	delete(m.inflight, key)
 	fl.err = err
 	m.mu.Unlock()
 	close(fl.done)
-}
-
-// refusalLeftLocked is how long key's remembered refusal has left, 0 for
-// none, forgetting an expired one. The caller holds mu.
-func (m *FileCache) refusalLeftLocked(key string) time.Duration {
-	until, ok := m.failed[key]
-	if !ok {
-		return 0
-	}
-	left := until.Sub(m.now())
-	if left <= 0 {
-		delete(m.failed, key)
-		return 0
-	}
-	return left
 }
 
 // RefusedFor is how long the remembered refusal of abs's current file has
@@ -591,28 +592,7 @@ func (m *FileCache) RefusedFor(root, abs string) time.Duration {
 	key := m.key(abs, info)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.refusalLeftLocked(key)
-}
-
-// rememberLocked remembers key's refusal for cacheRefusalTTL, the map bounded
-// by cacheFailedMax (expired entries go first, else an arbitrary one). The
-// caller holds mu.
-func (m *FileCache) rememberLocked(key string) {
-	now := m.now()
-	if len(m.failed) >= cacheFailedMax {
-		for k, until := range m.failed {
-			if !now.Before(until) {
-				delete(m.failed, k)
-			}
-		}
-		if len(m.failed) >= cacheFailedMax {
-			for k := range m.failed { // drop one: the map stays bounded
-				delete(m.failed, k)
-				break
-			}
-		}
-	}
-	m.failed[key] = now.Add(cacheRefusalTTL)
+	return m.failed.Left(key, m.now())
 }
 
 // make writes key's copy: a temporary .part file, synced and renamed into

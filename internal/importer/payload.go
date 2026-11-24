@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"regexp"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // Payload is one ABS user's history, normalized: what an import keeps (gzipped
@@ -187,7 +188,7 @@ func buildPayload(u *absUserDetail, sessions []absSession, items *itemIndex) *Pa
 		p.Sessions = append(p.Sessions, Session{ItemID: s.LibraryItemID,
 			Started: int64(s.StartedAt), Updated: int64(s.UpdatedAt), StartPos: s.StartTime, EndPos: s.CurrentTime,
 			Duration: s.Duration, Listened: float64(s.TimeListening),
-			Device:        firstNonEmpty(d.DeviceName, join(d.Manufacturer, d.Model), browserOn(d.BrowserName, d.OSName), d.ClientName),
+			Device:        textclean.FirstNonEmpty(d.DeviceName, join(d.Manufacturer, d.Model), browserOn(d.BrowserName, d.OSName), d.ClientName),
 			ClientVersion: d.ClientVersion, Platform: platformOf(d.ClientName)})
 	}
 	for _, mp := range u.MediaProgress {
@@ -211,10 +212,6 @@ func buildPayload(u *absUserDetail, sessions []absSession, items *itemIndex) *Pa
 	return p
 }
 
-// seriesSeq splits a minified item's seriesName ("The Expanse #2.5", several
-// joined by ", ") into the first series and its sequence.
-var seriesSeq = regexp.MustCompile(`^(.*?)(?:\s+#([0-9]+(?:\.[0-9]+)?))?$`)
-
 // describe is the metadata's title, author(s), first series and its sequence,
 // from whichever shape it came in.
 func (m absMetadata) describe() (title, author, series, seq string) {
@@ -230,20 +227,11 @@ func (m absMetadata) describe() (title, author, series, seq string) {
 	if len(m.Series) > 0 {
 		return title, author, strings.TrimSpace(m.Series[0].Name), strings.TrimSpace(m.Series[0].Sequence)
 	}
+	// A minified item's seriesName joins several by ", " ("The Expanse #2.5,
+	// Other #4"): the first, read as the scanner reads a metadata.json's.
 	first, _, _ := strings.Cut(m.SeriesName, ", ")
-	if parts := seriesSeq.FindStringSubmatch(strings.TrimSpace(first)); parts != nil {
-		series, seq = parts[1], parts[2]
-	}
-	return title, author, series, seq
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v = strings.TrimSpace(v); v != "" {
-			return v
-		}
-	}
-	return ""
+	ref := metadata.SplitABSSeries(first)
+	return title, author, ref.Name, ref.Position
 }
 
 func join(a, b string) string { return strings.TrimSpace(a + " " + b) }

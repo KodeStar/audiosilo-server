@@ -119,7 +119,10 @@ contract:
 - **How it runs:** `audiosilo --data /config` and nothing else, so it relies on the
   headless first run (the admin banner in the log), the self-signed TLS default on
   port 8080, and writes staying under `--data` (it supports a read-only root
-  filesystem). Its readiness check reads `bind:` from `/config/config.yaml`.
+  filesystem). Its readiness check reads `bind:` from `/config/config.yaml`, port 8080
+  when there is none: config.yaml holds only what differs from the defaults (server#252),
+  so a bind left at its default is not in the file, and the default port must stay 8080
+  (or the image's fallback change with it).
 
 `release.yml`'s last step checks the archive side of this while the release is still
 a draft: both archives' exact names and layout, each Linux binary's tags

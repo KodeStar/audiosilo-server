@@ -38,7 +38,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   keeps their ratios (`TestBudgetStartsAfterAnotherDiscovery`, `TestRequestWaitsOutAnotherReadsProbe`).
 - **Wire goldens (`internal/api/wire_golden_test.go`, `internal/api/testdata/wire/`, audiosilo#96, server#347)**: the
   shape of each important player envelope (`/server`, the session and pairing envelopes, `/me`, the library
-  lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, `/meta`, `/me/upcoming`,
+  lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, favourites, `/meta`, `/me/upcoming`,
   `/household/listening`), produced by the real handlers against seeded envs: each field's JSON type, never a
   value, so ids and times never churn it. `TestWireGolden` fails on any change: a field removed or retyped
   breaks shipped clients (CROSS-REPO.md §15), and an addition must show in the diff. After an intended change
@@ -1602,7 +1602,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `GET /libraries/{id}/ebook` (see Path-addressed API).
 - **In-process probe (server#261, `metadata/fastprobe*.go`)**: `metadata.ExtractTimeout` opens a
   file once and reads its tags, the iTunes narrator and the probe through one 64 KiB block cache
-  (at most 4 MiB kept); the probe answers what ffprobe would (format duration as its `"%f"`
+  (at most 4 MiB kept; a read of more than four blocks goes to the file, but for what it shares with
+  dhowden's last such read, kept up to 16 MiB when an MP3's probe follows, so an ID3 picture dhowden read whole is not read again inside
+  the probe's whole-tag read, server#269); the probe answers what ffprobe would (format duration as its `"%f"`
   string, first audio stream's codec, chapters, the format tags `applyProbe` reads:
   `probeTagKeys`) for MP3, M4B/M4A/MP4, FLAC, Ogg Vorbis/Opus/FLAC and MKA, as ports of FFmpeg's
   demuxers. **Parity is the contract**: values equal the configured ffprobe's, by its release's
@@ -1691,7 +1693,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   neither the ebook nor the read-along, `warmRemux`'s answer: each would wait out its own `fileWait` on the same
   share, three of them the request's whole time). A file cache's run opens its source as a bounded look
   (`FileCache.openWait`, `sourceWait`), so a share that answered the stat but not the open frees the run's slot
-  rather than holding it and every run queued behind it; its own stats of the source (`Open`, `Status`, `Queue`, `RefusedFor`, a warm's first look) are
+  rather than holding it and every run queued behind it; its own stats of the source (`Open`, `Status`, `RefusedFor`, a warm's one look; `Queue` and `StatusOf` take the caller's, the renditions list's one look per file, and a warm hands its look to `StatusOf` and the run's open, server#359) are
   given a scan's look time (`media.sourceWait`), never none, so one on a share that stopped answering since never
   holds its mount's slot for good. A stream that waited on a remux gives its next look (the live transcode's it
   falls back to, or the stored file's open once the remux refused the file) at least `API.fileWait`
@@ -1935,7 +1937,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   download wait), then 503 `rendition_pending` with `Retry-After: 15` while it goes on under `baseCtx`; never a
   live transcode. 422 `rendition_failed` is a remembered refusal (ffmpeg's, or a short copy; for an hour), with
   `Retry-After` the seconds it has left (`FileCache.RefusedFor`, server#289; the listing's `retry_after_seconds` is
-  read with its state, `Status`/`Queue`'s `refusedFor`, so a refusal expiring between two looks keeps its hint, server#359);
+  read with its state, `StatusOf`/`Queue`'s `refusedFor`, so a refusal expiring between two looks keeps its hint, server#359);
   503 `rendition_error` (`Retry-After: 60`) a failure not the file's (disk guard, a run killed partway, the
   source changed). `POST
   /libraries/{id}/renditions?path=<book>` `{"kind":"watch"}` queues every file of the book whose copy is missing
@@ -2275,7 +2277,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, or for the title
   `metadata.PathTitle` (the path's title `TitleNotSeries` may take), else `tag`; one an ABS
   file gives is `abs`; an override is `edited` or
-  `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
+  `community`; an enrichment-attached ASIN/ISBN reads as `community`. Each field also carries
+  `scanned_source` (`FieldValue.ScannedSource`: `tag`, `path` or `abs`, omitted with no scanned
+  value), the scanned value's own source under an edit, so the console's Revert hint names the
+  layer it goes back to ("Audiobookshelf file: ...", or "Community: ..." for the `enrichment` an edit
+  hides, which a revert restores over `scanned`). Revert = delete the
   override + `refreshEffective` (restores the scanned value, the ABS file's where it gives one; no
   reindex, no disk).
   **Audiobookshelf metadata.json** (`metadata/absfile.go`, `catalog/absfile.go`, migration `0046`):
@@ -2287,7 +2293,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   tags): `bookLayers.overABS`, in `scannedFields` before `titlePosition`. `metadata.ParseABSFile` is
   lenient (a wrongly typed value costs that value; <= 4 MiB): title, subtitle, authors and
   narrators joined with ", " (strings or `{name}`; "; " when a name holds a comma, "Le Guin, Ursula
-  K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (the first is the main series
+  K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (`metadata.SplitABSSeries`, the
+  one ABS series parser, the listening import's `seriesName` too: cut at the last " #" only when
+  what follows reads as a sequence, one word or a spaced numeric range, either with one bracketed note
+  after it ("1 (Omnibus)", kept whole as the position text; a " #" inside that note is the note's), else all of it is the name,
+  "The #1 Ladies Detective Agency"; the first is the main series
   with its position, the rest `more_series`; a series without a position keeps the tag's only while
   it is the same series, by `seriesKey`), `publishedDate` else `publishedYear` as `published`, the
   HTML description as plain text, publisher, language, `abridged` (only `true` says anything: ABS
@@ -2297,7 +2307,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `/meta`, the community chapter check, a refresh run). `books.abs_file` holds those fields (JSON,
   `''` for none), `abs_sig` the file's signature (`metadata.ABSSignature`: size + mtime ns + `@` the reading's revision
   `absReadRev`, `''` for none: bump the revision and every stored file is read once more, as 2 did for
-  `joinCredit`'s "; ", server#454) and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
+  `joinCredit`'s "; ", server#454, and 3 for a series name holding " #") and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
   first so `Signatures` reads no JSON; `UpsertBook` writes all three (`absColumns`; nothing for a
   file book). Discovery records each folder's file signature from the walk itself (`audioDirs`'
   `absFiles`, the walk's own entry, no extra directory read; `IndexPath`, with no walk, stats it: `absSigAt`;
@@ -3172,7 +3182,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   own version as `cover_art`, so `cover_version` follows a sidecar replaced in place
   and equals the thumbnail ETag's hash; `catalog.RecordCoverColors` is
   compare-and-set on the identity it was read under and bounded (250 ms, detached
-  from the request). Both are on the player `Book` JSON (`omitempty`).
+  from the request). Both are on the player `Book` JSON (`omitempty`). The player rows
+  that name a book without carrying one, `GET /me/progress` (`ListProgress` only: never
+  `GetProgress` or a save's echo, which `scanProgress` clears), `GET /me/favourites`, a
+  `/fs` book entry (`library.MarkBooks`) and a `/household/listening` row on an indexed
+  book, carry its `cover_version` too, omitted where the path is no indexed book
+  (server#215).
   Migration 0094 adds `books.cover_color_art`, the raw identity of the last art read,
   including a read that found no colour. `CoverColorsDue` pages the partial index
   of rows whose identity differs. At upgrade, `BackfillCoverColorArt` checks the
@@ -3738,7 +3753,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   leniently, `readStoredStatus`, so a row a newer server wrote survives a rollback), and only the mappings of libraries the
   server has are stored, and of a setup item's `library_ids` only theirs (`Status.KeepLibraries`, the row written without HTML escaping; a beat whose library list can't be read is saved as sent, Validate-bounded, and answered with the fault, so a catalog read fault never shows the Bridge offline), so the row a
   heartbeat rewrites stays the size of the server's own libraries; free text is cleaned to printable bounded text,
-  `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside
+  `textclean.Clean` (the server's one cleaner for free text it keeps or shows: Bridge reports, Audible titles, podcast directory and OPML titles), never refused, as is a job report's `error` (line breaks kept): it is partly the outside
   world's, and a refused report is retried for ever while its job is re-run; one row, never a history)
   answers `{server_time,
   libraries[{id, name, root}], accepts}` (`accepts: ["setup"]`, `bridge.HeartbeatAccepts`: the optional
@@ -4691,7 +4706,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
   (`restart`) and its per-field check (`fix`). `applyEnv` walks the same table and records which keys the
   environment set (`fromEnv`); those are **locked** in the console (409 `setting_locked`) and `Save` writes
-  config.yaml's own value for them (`file`), so an env value never lands in the file. (The embedding
+  config.yaml's own value for them (`file`), so an env value never lands in the file. `Save` writes only the keys
+  whose value differs from `Default`'s (`savedYAML`, server#252; a section left with none is left out), so a setting
+  left at its default, or set back to it, follows a later release's default; a new default belongs in `Default`,
+  never frozen into the file. (The embedding
   launcher's overrides, `Pin` and the `"launcher"` lock were retired in v2.7.0 with the archived desktop
   manager: config.yaml and the environment are the only sources.) `WithSettings` returns a
   validated copy (all or nothing; `SettingError` with reason unknown/read_only/locked/invalid and the setting

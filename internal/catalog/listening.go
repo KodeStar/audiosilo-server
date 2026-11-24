@@ -52,6 +52,11 @@ type Progress struct {
 	// player ignores them, and a PUT that echoes them back is not refused (the
 	// server sets both itself).
 	OtherPlace *ListeningOtherPlace `json:"other_place,omitempty"`
+	// CoverVersion is the book's Book.CoverVersion, set on ListProgress' rows
+	// (GET /me/progress) only, so a Continue listening cover is cache-busted as
+	// a Book's is; "" (omitted) on a row whose path is no indexed book and on
+	// every other read. Never stored: a body's is ignored (scanProgress clears it).
+	CoverVersion string `json:"cover_version,omitempty"`
 }
 
 // ListeningOtherPlace is the listening twin of reading's OtherPlace: a place in
@@ -84,7 +89,7 @@ func scanProgress(row interface{ Scan(...any) error }, p *Progress) error {
 		&otherPos, &otherDev, &otherName, &otherAt); err != nil {
 		return err
 	}
-	p.OtherPlace = nil
+	p.OtherPlace, p.CoverVersion = nil, ""
 	if otherPos.Valid {
 		p.OtherPlace = &ListeningOtherPlace{Position: otherPos.Float64, DeviceID: otherDev.String,
 			DeviceName: otherName.String, UpdatedAt: otherAt.String}
@@ -343,23 +348,30 @@ func newerStamp(candidateAt string, candidateVersion int64, currentAt string, cu
 }
 
 // ListProgress returns a user's progress rows scoped to paths they can still
-// access (for offline sync seeding). scopes is the caller's effective access (see
-// UserScopes); an empty slice yields no rows.
+// access (for offline sync seeding), each with its book's cover version (the
+// indexed book at the row's path; none for any other). scopes is the caller's
+// effective access (see UserScopes); an empty slice yields no rows.
 func (c *Catalog) ListProgress(ctx context.Context, userID int64, scopes []Scope) ([]Progress, error) {
 	filter, fargs := scopesFilterSQL("library_id", "rel_path", scopes)
 	args := append([]any{userID}, fargs...)
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT `+progressColumns+` FROM progress WHERE user_id = ? AND `+filter, args...)
+		`SELECT COALESCE((SELECT b.cover_art FROM books b
+		                   WHERE b.library_id = progress.library_id AND b.rel_path = progress.rel_path), ''),
+		        `+progressColumns+` FROM progress WHERE user_id = ? AND `+filter, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Progress{} // a new user's list is [], never null
 	for rows.Next() {
-		var p Progress
-		if err := scanProgress(rows, &p); err != nil {
+		var (
+			p   Progress
+			art string
+		)
+		if err := scanProgress(prefixScan{rows: rows, pre: []any{&art}}, &p); err != nil {
 			return nil, err
 		}
+		p.CoverVersion = CoverVersion(art)
 		out = append(out, p)
 	}
 	return out, rows.Err()

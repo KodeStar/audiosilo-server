@@ -13,6 +13,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/ttlset"
 )
 
 // Community covers in the match dialog: a candidate's cover_url is an image on its
@@ -130,8 +131,8 @@ const (
 	// communityRetryAfter is how long a community cover whose fetch failed is
 	// answered as failed without being fetched again.
 	communityRetryAfter = time.Minute
-	// maxCommunityFailures bounds the failed cover URLs remembered at once; past
-	// it (after dropping the expired ones) a failure is simply not remembered.
+	// maxCommunityFailures bounds the failed cover URLs remembered at once
+	// (ttlset: the expired ones go first, else an arbitrary one).
 	maxCommunityFailures = 512
 )
 
@@ -145,8 +146,8 @@ var errCoverFailedRecently = errors.New("community cover failed recently; not fe
 type communityFlights struct {
 	mu     sync.Mutex
 	calls  map[string]*communityCall
-	failed map[string]time.Time // URL -> when it may be fetched again
-	now    func() time.Time     // time.Now unless a test sets it
+	failed *ttlset.Set[string] // URLs not fetched again yet (communityRetryAfter)
+	now    func() time.Time    // time.Now unless a test sets it
 }
 
 // communityCall is one thumbnail fetch in flight; its fields are set before done
@@ -174,11 +175,8 @@ func (f *communityFlights) clock() time.Time {
 func (f *communityFlights) join(key, rawURL string, retryFailed bool) (c *communityCall, lead bool, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if until, ok := f.failed[rawURL]; ok && !retryFailed {
-		if f.clock().Before(until) {
-			return nil, false, errCoverFailedRecently
-		}
-		delete(f.failed, rawURL)
+	if !retryFailed && f.failed.Left(rawURL, f.clock()) > 0 {
+		return nil, false, errCoverFailedRecently
 	}
 	if c = f.calls[key]; c != nil {
 		c.waiters++
@@ -244,21 +242,10 @@ func (f *communityFlights) do(ctx context.Context, key, rawURL string, retryFail
 // rememberFailure records rawURL as failed until communityRetryAfter from now;
 // f.mu is held.
 func (f *communityFlights) rememberFailure(rawURL string) {
-	now := f.clock()
 	if f.failed == nil {
-		f.failed = map[string]time.Time{}
+		f.failed = ttlset.New[string](communityRetryAfter, maxCommunityFailures)
 	}
-	if len(f.failed) >= maxCommunityFailures {
-		for u, until := range f.failed {
-			if !now.Before(until) {
-				delete(f.failed, u)
-			}
-		}
-		if len(f.failed) >= maxCommunityFailures {
-			return
-		}
-	}
-	f.failed[rawURL] = now.Add(communityRetryAfter)
+	f.failed.Add(rawURL, f.clock())
 }
 
 // handleAdminSetCommunityCover serves PUT /admin/libraries/{id}/cover/community?path=

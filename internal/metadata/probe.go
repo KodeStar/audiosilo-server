@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // ffprobeOutput is the subset of ffprobe -print_format json we consume.
@@ -317,7 +319,7 @@ func applyProbe(m *Metadata, p *probeResult) {
 	}
 	t := p.Tags
 	m.setTitle(t["album"], t["title"])
-	if v := firstNonEmpty(t["album_artist"], t["artist"], t["author"]); v != "" {
+	if v := textclean.FirstNonEmpty(t["album_artist"], t["artist"], t["author"]); v != "" {
 		m.Author = v
 	}
 	// An explicit narrator tag (this one, or one the tags read) beats composer.
@@ -326,7 +328,7 @@ func applyProbe(m *Metadata, p *probeResult) {
 	} else if v := strings.TrimSpace(t["composer"]); v != "" && !m.narratorExplicit {
 		m.Narrator = v
 	}
-	if v := firstNonEmpty(t["series"], t["show"], t["grouping"]); v != "" {
+	if v := textclean.FirstNonEmpty(t["series"], t["show"], t["grouping"]); v != "" {
 		m.setSeriesTag(v)
 	}
 	if v := firstReleaseDate(t["date"], t["year"]); v != "" {
