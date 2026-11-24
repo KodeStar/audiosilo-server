@@ -361,6 +361,44 @@ describe('book page', () => {
     expect(patches(calls)[0].body).toEqual({ set: { abridged: 'false', tags: '["Favourite"]' } });
   });
 
+  it("names the revert's source: an Audiobookshelf file, the path, else a tag", async () => {
+    const detail = bookDetail();
+    detail.fields.title = {
+      value: 'Kings',
+      source: 'edited',
+      scanned: 'The Way of Kings',
+      scanned_source: 'abs',
+      locked: true,
+    };
+    detail.fields.author = {
+      value: 'B. Sanderson',
+      source: 'edited',
+      scanned: 'Brandon Sanderson',
+      scanned_source: 'path',
+      locked: true,
+    };
+    detail.fields.narrator = {
+      value: 'Someone',
+      source: 'edited',
+      scanned: 'Michael Kramer',
+      locked: true,
+    };
+    mockFetch(routes(detail));
+    renderApp(URL);
+    expect(await screen.findByRole('button', { name: 'Revert Title to the file' })).toHaveAttribute(
+      'title',
+      'Audiobookshelf file: The Way of Kings',
+    );
+    expect(screen.getByRole('button', { name: 'Revert Author to the file' })).toHaveAttribute(
+      'title',
+      'Folder and file names: Brandon Sanderson',
+    );
+    expect(screen.getByRole('button', { name: 'Revert Narrator to the file' })).toHaveAttribute(
+      'title',
+      'File tag: Michael Kramer',
+    );
+  });
+
   it('reverts a locked field to the file, with an undo', async () => {
     const detail = bookDetail();
     detail.fields.title = {

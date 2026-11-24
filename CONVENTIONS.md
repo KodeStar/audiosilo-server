@@ -2260,7 +2260,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, or for the title
   `metadata.PathTitle` (the path's title `TitleNotSeries` may take), else `tag`; one an ABS
   file gives is `abs`; an override is `edited` or
-  `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
+  `community`; an enrichment-attached ASIN/ISBN reads as `community`. Each field also carries
+  `scanned_source` (`FieldValue.ScannedSource`: `tag`, `path` or `abs`, omitted with no scanned
+  value), the scanned value's own source under an edit, so the console's Revert hint names the
+  layer it goes back to ("Audiobookshelf file: ..."). Revert = delete the
   override + `refreshEffective` (restores the scanned value, the ABS file's where it gives one; no
   reindex, no disk).
   **Audiobookshelf metadata.json** (`metadata/absfile.go`, `catalog/absfile.go`, migration `0046`):
@@ -2272,7 +2275,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   tags): `bookLayers.overABS`, in `scannedFields` before `titlePosition`. `metadata.ParseABSFile` is
   lenient (a wrongly typed value costs that value; <= 4 MiB): title, subtitle, authors and
   narrators joined with ", " (strings or `{name}`; "; " when a name holds a comma, "Le Guin, Ursula
-  K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (the first is the main series
+  K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (`metadata.SplitABSSeries`, the
+  one ABS series parser, the listening import's `seriesName` too; the first is the main series
   with its position, the rest `more_series`; a series without a position keeps the tag's only while
   it is the same series, by `seriesKey`), `publishedDate` else `publishedYear` as `published`, the
   HTML description as plain text, publisher, language, `abridged` (only `true` says anything: ABS

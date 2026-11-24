@@ -638,6 +638,8 @@
   "book.revert.label": "Revert",
   "book.revert.aria": "Revert {{field}} to the file",
   "book.revert.tagHint": "File tag: {{value}}",
+  "book.revert.absHint": "Audiobookshelf file: {{value}}",
+  "book.revert.pathHint": "Folder and file names: {{value}}",
   "book.revert.noTag": "Not set in the file",
   "book.revert.done": "{{field}} reverted to the file",
   "book.revert.doneBody": "Now “{{value}}”. Rescans follow the file again.",

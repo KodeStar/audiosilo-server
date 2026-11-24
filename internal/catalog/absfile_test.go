@@ -55,13 +55,24 @@ func TestABSFileLayer(t *testing.T) {
 		t.Errorf("effective row = %q / %q", b.Title, b.ASIN)
 	}
 
-	// An edit goes over the file; its revert goes back to the file's value.
-	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldTitle: "Edited"}}); err != nil {
+	// An edit goes over the file; its revert goes back to the file's value. The
+	// scanned value under an edit keeps its own source (the revert's hint), the
+	// ABS file's or a tag's, and a field the scan left empty has none.
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{
+		FieldTitle: "Edited", FieldNarrator: "Edited Narrator", FieldSubtitle: "Edited Subtitle",
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	d, _ = c.AdminBookDetail(ctx, lib.ID, p)
-	if got := d.Fields[FieldTitle]; got.Value != "Edited" || got.Source != SourceEdited || got.Scanned != "ABS Title" {
+	if got := d.Fields[FieldTitle]; got.Value != "Edited" || got.Source != SourceEdited || got.Scanned != "ABS Title" ||
+		got.ScannedSource != SourceABS {
 		t.Errorf("edited title = %+v, want the edit over the file's value", got)
+	}
+	if got := d.Fields[FieldNarrator]; got.Scanned != "Tag Narrator" || got.ScannedSource != SourceTag {
+		t.Errorf("edited narrator = %+v, want the tag's value under it", got)
+	}
+	if got := d.Fields[FieldSubtitle]; got.Scanned != "" || got.ScannedSource != "" {
+		t.Errorf("edited subtitle = %+v, want no scanned value or source", got)
 	}
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Revert: []string{FieldTitle}}); err != nil {
 		t.Fatal(err)
