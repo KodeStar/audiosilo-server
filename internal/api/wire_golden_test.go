@@ -68,7 +68,8 @@ type wireCase struct {
 	empty []string
 	// types names the Go type encoded at each path ("$", "$.books[]"), and keys
 	// the functions whose map literals build the envelope ("handleChapters", a
-	// method's receiver left out): the coverage guard (wire_coverage_test.go)
+	// method's receiver left out), each with where its map lands when that is
+	// not "$" ("authMethods@$.auth"): the coverage guard (wire_coverage_test.go)
 	// holds every field and key they can write to appearing in some golden.
 	types map[string]reflect.Type
 	keys  []string
@@ -110,7 +111,14 @@ func TestWireGolden(t *testing.T) {
 		}
 	}
 	if !t.Failed() {
-		t.Run("coverage", func(t *testing.T) { checkWireCoverage(t, cases, shapes) })
+		t.Run("coverage", func(t *testing.T) {
+			// Under -run or -skip naming some cases, the others' shapes are
+			// missing and every field only they carry would read as a gap.
+			if len(shapes) < len(cases) {
+				t.Skipf("%d of %d cases ran: the guard needs them all", len(shapes), len(cases))
+			}
+			checkWireCoverage(t, cases, shapes)
+		})
 	}
 }
 
@@ -562,7 +570,7 @@ func wireCases(t *testing.T) []wireCase {
 
 // The types and keys several cases share.
 var (
-	wireServerKeys    = []string{"handleServerInfo", "coreCapabilities", "authMethods"}
+	wireServerKeys    = []string{"handleServerInfo", "coreCapabilities@$.capabilities", "authMethods@$.auth"}
 	wireSessionTypes  = map[string]reflect.Type{"$.user": reflect.TypeFor[meUser](), "$.addresses": reflect.TypeFor[Addresses]()}
 	wireBookTypes     = wireAt[catalog.Book]("$")
 	wireChaptersTypes = map[string]reflect.Type{"$.files[]": reflect.TypeFor[catalog.BookFile](), "$.chapters[]": reflect.TypeFor[metadata.Chapter]()}

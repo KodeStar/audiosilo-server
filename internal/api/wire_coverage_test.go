@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"encoding"
 	"encoding/json"
 	"go/ast"
@@ -29,18 +30,23 @@ import (
 //     the others must not change shape for, or list it in wireUnseen with why
 //     no golden can carry it;
 //   - a string key one of those functions writes into a map appears in none of
-//     its cases' goldens.
+//     its cases' goldens where that function's map lands (its place, "$"
+//     unless the case names another), outside the fields the case's types
+//     account for and the places of the case's other functions;
+//   - a case names no types and no keys, so the guard would see nothing of it.
 //
 // So a new field cannot ship without a golden, and the player's parity test
 // (which reads the goldens) sees it.
 
-// wireUnseen lists the fields no golden can carry, as "<Go type>.<json name>"
-// (or "<function>[<key>]" for a map key), each with the reason. A listed field
-// a golden now carries fails, so the entry goes when a seed arrives.
+// wireUnseen lists the fields no golden carries, as "<Go type>.<json name>"
+// (or "<function>[<key>]" for a map key), each with the reason: one no golden
+// can carry, or one only an admin's console view sets, which the player never
+// acts on. A listed field a golden now carries fails, so the entry goes when a
+// seed arrives.
 var wireUnseen = map[string]string{
 	"api.listenerLibrary.root": "shadows catalog.Library's root so a listener's row never carries it: always empty " +
 		"(the libraries golden, an admin's, carries root)",
-	"library.Entry.split_discs": "the console's: set on an admin's listing only (annotateWithBooks), never the player's",
+	"library.Entry.split_discs": "the console's: set for an admin caller only (annotateWithBooks); the player mirrors it but never acts on it",
 	"library.Listing.folder":    "the console's: an admin's ?detail=1 only",
 }
 
@@ -58,44 +64,50 @@ func checkWireCoverage(t *testing.T, cases []wireCase, shapes map[string]any) {
 // golden (shapes, by case name) carries and unseen does not excuse, and each
 // entry of unseen that is stale. keysOf lists a function's map keys.
 func wireGaps(cases []wireCase, shapes map[string]any, unseen map[string]string, keysOf func(string) []string) []string {
+	var gaps []string
 	cov := wireCoverage{}
-	keyed := map[string]map[string]bool{} // function -> the field names its cases' goldens hold
+	keyed := map[string]map[string]bool{} // function -> the field names its cases' goldens hold at its place
 	for _, c := range cases {
+		if len(c.types) == 0 && len(c.keys) == 0 {
+			gaps = append(gaps, c.name+" names no types and no keys, so the guard sees nothing of its envelope: name them")
+		}
 		paths := map[string]string{}
 		flattenShape(shapes[c.name], "$", paths)
+		typed := map[string]bool{} // the paths a type's field (or a map's data key) accounts for
 		for at, typ := range c.types {
 			// The type itself counts as a field: an optional block no golden
 			// holds is one gap, not one per field of it.
 			if cov.mark(typ.String(), paths, at) {
-				cov.walk(typ, at, paths)
+				cov.walk(typ, at, paths, typed)
 			}
 		}
-		if len(c.keys) == 0 {
-			continue
+		places := map[string]string{} // function -> where its map lands
+		for _, k := range c.keys {
+			fn, at, _ := strings.Cut(k, "@")
+			places[fn] = cmp.Or(at, "$")
 		}
-		names := map[string]bool{}
-		for p := range paths {
-			for _, seg := range pathFields(p) {
-				names[seg] = true
-			}
-		}
-		for _, fn := range c.keys {
+		for fn, at := range places {
 			if keyed[fn] == nil {
 				keyed[fn] = map[string]bool{}
 			}
-			maps.Copy(keyed[fn], names)
+			for p := range paths {
+				if wireKeyPath(p, at, places, typed) {
+					// The field the path ends in ("$.a.b[]" is b).
+					keyed[fn][strings.TrimRight(p[strings.LastIndex(p, ".")+1:], "[]")] = true
+				}
+			}
 		}
 	}
 	// A key counts as carried when some golden of a case naming its function
-	// holds a field of that name at any depth: the literal's place in the
-	// envelope (a nested map, a map another function returns) is not tracked.
+	// holds a field of that name below the function's place, at any depth there
+	// (a nested literal's keys sit deeper), but not in a field one of the case's
+	// types accounts for, nor below another function's place inside it.
 	for fn, names := range keyed {
 		for _, k := range keysOf(fn) {
 			id := fn + "[" + k + "]"
 			cov[id] = cov[id] || names[k]
 		}
 	}
-	var gaps []string
 	for _, id := range slices.Sorted(maps.Keys(cov)) {
 		_, listed := unseen[id]
 		switch {
@@ -116,15 +128,24 @@ func wireGaps(cases []wireCase, shapes map[string]any, unseen map[string]string,
 	return gaps
 }
 
-// pathFields are the field names along a flattened shape path ("$.a[].b" is a, b).
-func pathFields(p string) []string {
-	var out []string
-	for _, seg := range strings.Split(strings.TrimPrefix(p, "$"), ".") {
-		if seg = strings.TrimRight(seg, "[]"); seg != "" {
-			out = append(out, seg)
+// wireKeyPath reports whether golden path p can hold a key of the function
+// whose map lands at at: p is below at, in no field typed accounts for (p or
+// one of its parents), and below no other function's place inside at.
+func wireKeyPath(p, at string, places map[string]string, typed map[string]bool) bool {
+	if !strings.HasPrefix(p, at+".") {
+		return false
+	}
+	for q := p; q != at; q = q[:strings.LastIndexAny(q, ".[")] {
+		if typed[q] {
+			return false
 		}
 	}
-	return out
+	for _, other := range places {
+		if other != at && strings.HasPrefix(other, at+".") && strings.HasPrefix(p, other+".") {
+			return false
+		}
+	}
+	return true
 }
 
 // wireCoverage holds, per "<type>.<field>" (and per "<function>[<key>]") a
@@ -146,10 +167,11 @@ var (
 
 // walk follows typ, encoded at path, through the golden's paths: each field of
 // a struct is reached, seen when the golden holds it, and followed into its
-// own type there. A type that encodes itself (time.Time, json.RawMessage) and
-// an interface are leaves. Each step follows a longer path the golden holds,
-// so a recursive type ends with the golden.
-func (c wireCoverage) walk(typ reflect.Type, path string, paths map[string]string) {
+// own type there; typed gets each field's path (and each map data key's). A
+// type that encodes itself (time.Time, json.RawMessage) and an interface are
+// leaves. Each step follows a longer path the golden holds, so a recursive
+// type ends with the golden.
+func (c wireCoverage) walk(typ reflect.Type, path string, paths map[string]string, typed map[string]bool) {
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
@@ -161,8 +183,9 @@ func (c wireCoverage) walk(typ reflect.Type, path string, paths map[string]strin
 	case reflect.Struct:
 		for _, f := range jsonFields(typ) {
 			p := path + "." + f.name
+			typed[p] = true
 			if c.mark(f.owner.String()+"."+f.name, paths, p) {
-				c.walk(f.typ, p, paths)
+				c.walk(f.typ, p, paths, typed)
 			}
 		}
 	case reflect.Slice, reflect.Array:
@@ -170,14 +193,15 @@ func (c wireCoverage) walk(typ reflect.Type, path string, paths map[string]strin
 			return // []byte is a base64 string
 		}
 		if _, ok := paths[path+"[]"]; ok {
-			c.walk(typ.Elem(), path+"[]", paths)
+			c.walk(typ.Elem(), path+"[]", paths, typed)
 		}
 	case reflect.Map:
 		// The keys are data: follow the value type into each key the golden holds.
 		for p := range paths {
 			rest, ok := strings.CutPrefix(p, path+".")
 			if ok && !strings.ContainsAny(rest, ".[") {
-				c.walk(typ.Elem(), p, paths)
+				typed[p] = true
+				c.walk(typ.Elem(), p, paths, typed)
 			}
 		}
 	}
@@ -185,16 +209,40 @@ func (c wireCoverage) walk(typ reflect.Type, path string, paths map[string]strin
 
 // wireField is one JSON field of a struct: its name, its Go type, and the
 // struct declaring it (an embedded struct's fields belong to it, not to the
-// type embedding it).
+// type embedding it); depth (how many embedded structs down) and tagged (a
+// json tag names it) decide between fields of one name.
 type wireField struct {
-	name  string
-	typ   reflect.Type
-	owner reflect.Type
+	name   string
+	typ    reflect.Type
+	owner  reflect.Type
+	depth  int
+	tagged bool
 }
 
 // jsonFields are the fields encoding/json writes for struct typ, an untagged
-// embedded struct's promoted into it.
+// embedded struct's promoted into it. Of fields sharing a name it writes the
+// shallowest, at one depth the only tagged one, and else none of them.
 func jsonFields(typ reflect.Type) []wireField {
+	all := structFields(typ, 0)
+	var out []wireField
+	for i, f := range all {
+		written := true
+		for j, g := range all {
+			if j != i && g.name == f.name && (g.depth < f.depth || g.depth == f.depth && (g.tagged || !f.tagged)) {
+				written = false
+				break
+			}
+		}
+		if written {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// structFields are struct typ's JSON field candidates at depth, an untagged
+// embedded struct's among them one deeper.
+func structFields(typ reflect.Type, depth int) []wireField {
 	var out []wireField
 	for i := range typ.NumField() {
 		f := typ.Field(i)
@@ -208,16 +256,13 @@ func jsonFields(typ reflect.Type) []wireField {
 			ft = ft.Elem()
 		}
 		if f.Anonymous && name == "" && ft.Kind() == reflect.Struct {
-			out = append(out, jsonFields(ft)...)
+			out = append(out, structFields(ft, depth+1)...)
 			continue
 		}
 		if !f.IsExported() {
 			continue
 		}
-		if name == "" {
-			name = f.Name
-		}
-		out = append(out, wireField{name: name, typ: f.Type, owner: typ})
+		out = append(out, wireField{name: cmp.Or(name, f.Name), typ: f.Type, owner: typ, depth: depth, tagged: name != ""})
 	}
 	return out
 }
@@ -324,6 +369,23 @@ type wireTestOuter struct {
 	hide  string
 }
 
+// wireTestShadow's own b shadows wireTestBase's, and its two embedded C's
+// cancel out.
+type wireTestShadow struct {
+	wireTestBase
+	wireTestC1
+	wireTestC2
+	B int `json:"b"`
+}
+
+type wireTestC1 struct {
+	C string
+}
+
+type wireTestC2 struct {
+	C string
+}
+
 func TestWireGaps(t *testing.T) {
 	t.Parallel()
 	_ = wireTestOuter{}.hide
@@ -379,10 +441,34 @@ func TestWireGaps(t *testing.T) {
 		t.Fatalf("excused gaps: %q", got)
 	}
 
-	// A map key: carried when a golden of the function's case holds it.
-	keysOf := func(string) []string { return []string{"code", "error"} }
-	got = wireGaps([]wireCase{{name: "err", keys: []string{"f"}}}, map[string]any{"err": shape(`{"error":"string"}`)}, nil, keysOf)
-	if ids := gapIDs(got); !slices.Equal(ids, []string{"f[code]"}) {
+	// Denied: a case naming no types and no keys.
+	if got := gaps(map[string]string{"bare": bare}, nil, wireCase{name: "bare"}); len(got) != 1 ||
+		!strings.HasPrefix(got[0], "bare names no types and no keys") {
+		t.Fatalf("a case naming nothing: %q", got)
+	}
+
+	// Of fields sharing a name, the one encoding/json writes: the shallower b,
+	// and neither of two C at one depth.
+	if b, _ := json.Marshal(wireTestShadow{}); string(b) != `{"b":0}` {
+		t.Fatalf("encoding/json writes %s", b)
+	}
+	var fields []string
+	for _, f := range jsonFields(reflect.TypeFor[wireTestShadow]()) {
+		fields = append(fields, f.owner.String()+"."+f.name)
+	}
+	if !slices.Equal(fields, []string{"api.wireTestShadow.b"}) {
+		t.Fatalf("shadowed fields = %q", fields)
+	}
+
+	// A map key: carried when a golden of the function's case holds it below
+	// the function's place ("g@$.inner"; "$" when unnamed), but not in a field
+	// the case's types account for (f[x]) nor below another function's place
+	// (f[code]).
+	keys := map[string][]string{"f": {"code", "error", "x"}, "g": {"code"}}
+	keysOf := func(fn string) []string { return keys[fn] }
+	got = wireGaps([]wireCase{{name: "err", keys: []string{"f", "g@$.inner"}, types: wireAt[wireTestInner]("$.typed")}},
+		map[string]any{"err": shape(`{"error":"string","typed":` + inner + `,"inner":{"code":"string"}}`)}, nil, keysOf)
+	if ids := gapIDs(got); !slices.Equal(ids, []string{"f[code]", "f[x]"}) {
 		t.Fatalf("key gaps = %q", ids)
 	}
 
