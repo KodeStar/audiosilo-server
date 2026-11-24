@@ -1,0 +1,6 @@
+{
+  "route": "GET /api/v1/libraries/{id}/item?path=<no book> (the error envelope)",
+  "shape": {
+    "error": "string"
+  }
+}

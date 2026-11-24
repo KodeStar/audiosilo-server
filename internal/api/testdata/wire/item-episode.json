@@ -1,0 +1,45 @@
+{
+  "route": "GET /api/v1/libraries/{id}/item?path=<a podcast episode> (X-AudioSilo-Client: a current player)",
+  "shape": {
+    "added_at": "string",
+    "author": "string",
+    "description": "string",
+    "direct_playable": "boolean",
+    "duration": "number",
+    "episode": {
+      "downloaded": "boolean",
+      "duration_source": "string",
+      "episode": "number",
+      "episode_type": "string",
+      "explicit": "boolean",
+      "fetch": {
+        "bytes_received": "number",
+        "bytes_total": "null",
+        "error": {
+          "code": "string",
+          "message": "string"
+        },
+        "request_id": "null",
+        "retry_after_seconds": "number",
+        "state": "string"
+      },
+      "generation": "number",
+      "published": "string",
+      "removed": "boolean",
+      "season": "number",
+      "sha256": "string",
+      "show_path": "string",
+      "timeline_changed": "boolean"
+    },
+    "format": "string",
+    "id": "number",
+    "is_folder": "boolean",
+    "library_id": "number",
+    "narrator": "string",
+    "rel_path": "string",
+    "series": "string",
+    "series_index": "number",
+    "size": "number",
+    "title": "string"
+  }
+}

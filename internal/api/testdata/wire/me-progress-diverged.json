@@ -1,0 +1,28 @@
+{
+  "route": "GET /api/v1/me/progress (a place another device diverged from, a finished book)",
+  "shape": {
+    "progress": [
+      {
+        "cover_version": "string",
+        "device_id": "string",
+        "device_name": "string",
+        "duration": "number",
+        "finished": "boolean",
+        "finished_at": "string",
+        "library_id": "number",
+        "other_place": {
+          "device_id": "string",
+          "device_name": "string",
+          "position": "number",
+          "updated_at": "string"
+        },
+        "path": "string",
+        "playback_speed": "number",
+        "position": "number",
+        "started_at": "string",
+        "updated_at": "string",
+        "version": "number"
+      }
+    ]
+  }
+}

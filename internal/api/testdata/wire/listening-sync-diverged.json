@@ -1,0 +1,41 @@
+{
+  "route": "POST /api/v1/me/listening/sync (a span from behind another device's place, and one refused)",
+  "shape": {
+    "progress": [
+      {
+        "device_id": "string",
+        "device_name": "string",
+        "duration": "number",
+        "finished": "boolean",
+        "library_id": "number",
+        "other_place": {
+          "device_id": "string",
+          "device_name": "string",
+          "position": "number",
+          "updated_at": "string"
+        },
+        "path": "string",
+        "playback_speed": "number",
+        "position": "number",
+        "started_at": "string",
+        "updated_at": "string",
+        "version": "number"
+      }
+    ],
+    "results": [
+      {
+        "id": "string",
+        "kept": "string",
+        "other_place": {
+          "device_id": "string",
+          "device_name": "string",
+          "position": "number",
+          "updated_at": "string"
+        },
+        "reason": "string",
+        "status": "string"
+      }
+    ],
+    "server_time": "string"
+  }
+}

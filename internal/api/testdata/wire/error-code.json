@@ -1,0 +1,7 @@
+{
+  "route": "POST /api/v1/auth/password (a wrong current password: the error envelope with a code)",
+  "shape": {
+    "code": "string",
+    "error": "string"
+  }
+}

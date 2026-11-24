@@ -1,0 +1,68 @@
+{
+  "route": "GET /api/v1/libraries/{id}/item?path=<a matched book with other recordings, edited chapters and a cover colour>",
+  "shape": {
+    "added_at": "string",
+    "asin": "string",
+    "author": "string",
+    "chapters": [
+      {
+        "book_offset": "number",
+        "end": "number",
+        "file_index": "number",
+        "file_path": "string",
+        "index": "number",
+        "start": "number",
+        "title": "string"
+      }
+    ],
+    "chapters_source": "string",
+    "cover_color": {
+      "accent": "string",
+      "bg": "string",
+      "on_accent": "string"
+    },
+    "cover_version": "string",
+    "direct_playable": "boolean",
+    "duration": "number",
+    "files": [
+      {
+        "duration": "number",
+        "format": "string",
+        "rel_path": "string",
+        "seq": "number",
+        "size": "number"
+      }
+    ],
+    "format": "string",
+    "id": "number",
+    "is_folder": "boolean",
+    "library_id": "number",
+    "narrator": "string",
+    "other_recordings": [
+      {
+        "added_at": "string",
+        "asin": "string",
+        "author": "string",
+        "cover_version": "string",
+        "duration": "number",
+        "format": "string",
+        "id": "number",
+        "is_folder": "boolean",
+        "library_id": "number",
+        "narrator": "string",
+        "rel_path": "string",
+        "series": "string",
+        "series_index": "number",
+        "size": "number",
+        "title": "string",
+        "work_id": "string"
+      }
+    ],
+    "rel_path": "string",
+    "series": "string",
+    "series_index": "number",
+    "size": "number",
+    "title": "string",
+    "work_id": "string"
+  }
+}

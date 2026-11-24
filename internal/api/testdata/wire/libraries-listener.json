@@ -1,0 +1,14 @@
+{
+  "route": "GET /api/v1/libraries (a listener: no root)",
+  "shape": {
+    "libraries": [
+      {
+        "default_view": "string",
+        "id": "number",
+        "kind": "string",
+        "name": "string",
+        "sort_order": "number"
+      }
+    ]
+  }
+}
