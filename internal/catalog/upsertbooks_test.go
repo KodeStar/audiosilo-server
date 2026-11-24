@@ -189,4 +189,14 @@ func TestUpsertBooksCountBound(t *testing.T) {
 	if moved := f.gen(t) - before; moved != 3 {
 		t.Errorf("content generation moved %d times, want 3 (two, two, one)", moved)
 	}
+	// A count below one still takes a book a transaction, never none for ever.
+	before = f.gen(t)
+	for i, err := range f.c.upsertBooks(f.ctx, f.books("F", "G"), 0, 0) {
+		if err != nil {
+			t.Fatalf("count 0, book %d: %v", i, err)
+		}
+	}
+	if moved := f.gen(t) - before; moved != 2 {
+		t.Errorf("count 0: content generation moved %d times, want 2 (one, one)", moved)
+	}
 }

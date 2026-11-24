@@ -68,9 +68,10 @@ func (c *Catalog) UpsertBooks(ctx context.Context, books []*Book) []error {
 }
 
 // upsertBooks is UpsertBooks with its bounds: at most most books a
-// transaction, and another only while it has run for less than hold (0: no
-// bound).
+// transaction (at least one, so every transaction moves on), and another only
+// while it has run for less than hold (0: no bound).
 func (c *Catalog) upsertBooks(ctx context.Context, books []*Book, most int, hold time.Duration) []error {
+	most = max(most, 1)
 	errs := make([]error, len(books))
 	for start := 0; start < len(books); {
 		end := start // past the last book the transaction began
