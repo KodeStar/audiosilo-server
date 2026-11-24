@@ -179,7 +179,9 @@ describe('generate characters and recaps', () => {
 
   it('offers Generate, not Regenerate, when the only file generated here is masked by the community', async () => {
     // The player reads /meta's work.generated, where a masked file shows nowhere: the two
-    // label the book alike (server#218).
+    // label the book alike (server#218). The job still rewrites that file, so the dialog
+    // says so.
+    const user = userEvent.setup();
     mockFetch(
       routes({
         'GET /admin/bridge/estimate': {
@@ -193,9 +195,26 @@ describe('generate characters and recaps', () => {
       }),
     );
     renderApp(URL);
-    await screen.findByRole('button', { name: /generate characters/i });
+    const action = await screen.findByRole('button', { name: /generate characters/i });
     expect(screen.queryByRole('button', { name: 'Regenerate' })).toBeNull();
     expect(screen.queryByText('Generated on this server.')).toBeNull();
+    await user.click(action);
+    const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
+    expect(
+      await within(dialog).findByText('This replaces the characters and recaps generated before.'),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing is replaced when the book has no generated characters or recaps', async () => {
+    const user = userEvent.setup();
+    mockFetch(routes());
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Generate characters and recaps' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
+    await within(dialog).findByRole('button', { name: 'Generate' });
+    expect(
+      within(dialog).queryByText('This replaces the characters and recaps generated before.'),
+    ).toBeNull();
   });
 
   it('shows no covered line while the Bridge is away', async () => {
