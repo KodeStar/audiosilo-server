@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,7 +19,10 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/upcoming"
 )
 
 // Wire goldens (audiosilo#96, server#347): the shape of each important player
@@ -41,6 +45,12 @@ import (
 //
 // The player reads the same files (audiosilo-frontend src/api/__wire__/, synced
 // from here) and checks each against its hand-mirrored type in src/api/types.ts.
+//
+// The coverage guard (wire_coverage_test.go) then fails on a field of a case's
+// Go types, or a key its functions write, that no golden carries: an omitempty
+// field no seed sets would otherwise go unguarded. An envelope's other forms
+// (an item with other optional blocks, an error) are cases of their own in
+// wire_variants_test.go.
 
 var updateWire = flag.Bool("update", false, "rewrite the wire goldens in internal/api/testdata/wire")
 
@@ -56,18 +66,26 @@ type wireCase struct {
 	// carries there, so seed it instead. A path named here that holds a value
 	// fails too, so a seed added later takes its entry with it.
 	empty []string
+	// types names the Go type encoded at each path ("$", "$.books[]"), and keys
+	// the functions whose map literals build the envelope ("handleChapters", a
+	// method's receiver left out), each with where its map lands when that is
+	// not "$" ("authMethods@$.auth"): the coverage guard (wire_coverage_test.go)
+	// holds every field and key they can write to appearing in some golden.
+	types map[string]reflect.Type
+	keys  []string
 }
 
 func TestWireGolden(t *testing.T) {
 	t.Parallel()
 	cases := wireCases(t)
 	seen := map[string]bool{}
+	shapes := map[string]any{} // by case name, for the coverage guard
 	for _, c := range cases {
 		if seen[c.name] {
 			t.Fatalf("two cases named %q", c.name)
 		}
 		seen[c.name] = true
-		t.Run(c.name, func(t *testing.T) { checkWireGolden(t, c) })
+		t.Run(c.name, func(t *testing.T) { shapes[c.name] = checkWireGolden(t, c) })
 	}
 	// A golden with no case is a stale file: the player would keep checking a
 	// shape nothing produces any more.
@@ -92,6 +110,16 @@ func TestWireGolden(t *testing.T) {
 			t.Errorf("%s/%s has no case: remove it, or run with -update", wireDir, ent.Name())
 		}
 	}
+	if !t.Failed() {
+		t.Run("coverage", func(t *testing.T) {
+			// Under -run or -skip naming some cases, the others' shapes are
+			// missing and every field only they carry would read as a gap.
+			if len(shapes) < len(cases) {
+				t.Skipf("%d of %d cases ran: the guard needs them all", len(shapes), len(cases))
+			}
+			checkWireCoverage(t, cases, shapes)
+		})
+	}
 }
 
 // wireGolden is a golden file's content.
@@ -100,7 +128,9 @@ type wireGolden struct {
 	Shape any    `json:"shape"`
 }
 
-func checkWireGolden(t *testing.T, c wireCase) {
+// checkWireGolden holds the case's body to its committed golden (or writes it,
+// under -update) and returns the body's shape.
+func checkWireGolden(t *testing.T, c wireCase) any {
 	t.Helper()
 	body := c.body(t)
 	var v any
@@ -124,7 +154,7 @@ func checkWireGolden(t *testing.T, c wireCase) {
 		if err := os.WriteFile(file, wireGoldenBytes(t, got), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		return
+		return got.Shape
 	}
 	raw, err := os.ReadFile(file)
 	if err != nil {
@@ -150,6 +180,7 @@ func checkWireGolden(t *testing.T, c wireCase) {
 			"(audiosilo-frontend: npm run wire:sync) and mirror it in src/api/types.ts.",
 			c.route, file, strings.Join(diff, "\n  "))
 	}
+	return got.Shape
 }
 
 // wireGoldenBytes is a golden file's content, the one form of it: what -update
@@ -393,20 +424,24 @@ func TestShapeOf(t *testing.T) {
 func wireCases(t *testing.T) []wireCase {
 	t.Helper()
 	m, h, u := newWireMainEnv(t), newWireHouseEnv(t), newUpcomingEnv(t)
-	call := func(e *testEnv, method, path, tok, body string) func(*testing.T) string {
-		return func(t *testing.T) string { return wireOK(t, e, method, path, tok, body) }
-	}
-	get := func(path, tok string) func(*testing.T) string { return call(m.testEnv, "GET", path, tok, "") }
+	get := func(path, tok string) func(*testing.T) string { return wireCall(m.testEnv, "GET", path, tok, "") }
 	lib := func(endpoint, path string) func(*testing.T) string {
 		return get(bookURL(m.lib.ID, endpoint, path), m.samTok)
 	}
 	libRoute := "/api/v1/libraries/" + strconv.FormatInt(m.lib.ID, 10)
 
-	return []wireCase{
-		{name: "server", route: "GET /api/v1/server (signed in)", body: get("/api/v1/server", m.adminTok)},
-		{name: "server-anonymous", route: "GET /api/v1/server", body: get("/api/v1/server", "")},
-		{name: "auth-redeem", route: "POST /api/v1/auth/redeem", body: call(m.testEnv, "POST", "/api/v1/auth/redeem", "",
-			`{"code":"`+m.authCode+`"}`)},
+	cases := []wireCase{
+		{name: "server", route: "GET /api/v1/server (signed in)", body: get("/api/v1/server", m.adminTok),
+			keys:  wireServerKeys,
+			types: wireAt[bridgeInfo]("$.bridge"),
+		},
+		{name: "server-anonymous", route: "GET /api/v1/server", body: get("/api/v1/server", ""),
+			keys: wireServerKeys,
+		},
+		{name: "auth-redeem", route: "POST /api/v1/auth/redeem", body: wireCall(m.testEnv, "POST", "/api/v1/auth/redeem", "",
+			`{"code":"`+m.authCode+`"}`),
+			types: wireAt[PairingPayload]("$"),
+		},
 		{name: "auth-exchange", route: "POST /api/v1/auth/exchange (a household member's pairing)", body: func(t *testing.T) string {
 			_, pairing, err := m.auth.MemberPairing(context.Background(), m.adminID, m.member, m.credentialID(t, m.adminTok), time.Minute)
 			if err != nil {
@@ -417,7 +452,10 @@ func wireCases(t *testing.T) []wireCase {
 				t.Fatalf("exchange = %d %s", status, b)
 			}
 			return b
-		}},
+		},
+			keys:  []string{"sessionEnvelope"},
+			types: wireSessionTypes,
+		},
 		{name: "auth-oidc-finish", route: "POST /api/v1/auth/oidc/finish (a web sign-in started with an intent tag)",
 			body: func(t *testing.T) string {
 				e := newOIDCEnv(t, oidcAlice, nil)
@@ -435,28 +473,74 @@ func wireCases(t *testing.T) []wireCase {
 				return string(b)
 			},
 			// alice is no household member: auth-exchange guards those two.
-			empty: []string{"$.user.managed_by", "$.user.member_kind"}},
-		{name: "me", route: "GET /api/v1/me (a household member)", body: get("/api/v1/me", m.memberTok)},
-		{name: "libraries", route: "GET /api/v1/libraries (an admin: with root)", body: get("/api/v1/libraries", m.adminTok)},
-		{name: "fs", route: "GET /api/v1/libraries/{id}/fs?path=Will Wight", body: lib("fs", "Will Wight")},
-		{name: "books", route: "GET /api/v1/libraries/{id}/books", body: get(libRoute+"/books", m.samTok)},
-		{name: "authors", route: "GET /api/v1/libraries/{id}/authors", body: get(libRoute+"/authors", m.samTok)},
-		{name: "series", route: "GET /api/v1/libraries/{id}/series", body: get(libRoute+"/series", m.samTok)},
-		{name: "search", route: "GET /api/v1/search?q=cradle", body: get("/api/v1/search?q=cradle", m.samTok)},
-		{name: "item", route: "GET /api/v1/libraries/{id}/item?path=<a two-file book>", body: lib("item", cradleBook)},
-		{name: "chapters", route: "GET /api/v1/libraries/{id}/chapters?path=<a two-file book>", body: lib("chapters", cradleBook)},
-		{name: "progress", route: "GET /api/v1/libraries/{id}/progress?path=<a book>", body: lib("progress", cradleBook)},
-		{name: "me-progress", route: "GET /api/v1/me/progress", body: get("/api/v1/me/progress", m.samTok)},
+			empty: []string{"$.user.managed_by", "$.user.member_kind"},
+			keys:  []string{"sessionEnvelope"},
+			types: wireSessionTypes,
+		},
+		{name: "me", route: "GET /api/v1/me (a household member)", body: get("/api/v1/me", m.memberTok),
+			types: wireAt[meUser]("$"),
+		},
+		{name: "libraries", route: "GET /api/v1/libraries (an admin: with root)", body: get("/api/v1/libraries", m.adminTok),
+			keys:  []string{"handleListLibraries"},
+			types: wireAt[catalog.Library]("$.libraries[]"),
+		},
+		{name: "fs", route: "GET /api/v1/libraries/{id}/fs?path=Will Wight", body: lib("fs", "Will Wight"),
+			types: wireAt[library.Listing]("$"),
+		},
+		{name: "books", route: "GET /api/v1/libraries/{id}/books", body: get(libRoute+"/books", m.samTok),
+			types: wireAt[catalog.Page]("$"),
+		},
+		{name: "authors", route: "GET /api/v1/libraries/{id}/authors", body: get(libRoute+"/authors", m.samTok),
+			keys:  []string{"handleBrowsePeople"},
+			types: wireAt[catalog.PersonCount]("$.authors[]"),
+		},
+		{name: "series", route: "GET /api/v1/libraries/{id}/series", body: get(libRoute+"/series", m.samTok),
+			keys:  []string{"handleBrowseSeries"},
+			types: wireAt[catalog.SeriesCount]("$.series[]"),
+		},
+		{name: "search", route: "GET /api/v1/search?q=cradle", body: get("/api/v1/search?q=cradle", m.samTok),
+			keys:  []string{"handleSearch"},
+			types: wireAt[catalog.Book]("$.books[]"),
+		},
+		{name: "item", route: "GET /api/v1/libraries/{id}/item?path=<a two-file book>", body: lib("item", cradleBook),
+			types: wireBookTypes,
+		},
+		{name: "chapters", route: "GET /api/v1/libraries/{id}/chapters?path=<a two-file book>", body: lib("chapters", cradleBook),
+			keys:  []string{"handleChapters"},
+			types: wireChaptersTypes,
+		},
+		{name: "progress", route: "GET /api/v1/libraries/{id}/progress?path=<a book>", body: lib("progress", cradleBook),
+			keys:  []string{"handleGetProgress"},
+			types: wireAt[catalog.Progress]("$.progress"),
+		},
+		{name: "me-progress", route: "GET /api/v1/me/progress", body: get("/api/v1/me/progress", m.samTok),
+			keys:  []string{"handleListProgress"},
+			types: wireAt[catalog.Progress]("$.progress[]"),
+		},
 		{name: "favourites", route: "GET /api/v1/me/favourites (a book and a navigation folder)",
-			body: get("/api/v1/me/favourites", m.samTok)},
-		{name: "listening-sync", route: "POST /api/v1/me/listening/sync", body: call(m.testEnv, "POST", syncURL, m.samTok,
-			syncBody("wire-device", listenJSON("wire-1", m.lib.ID, syncMistborn, 0, 60, "")))},
-		{name: "bookmarks", route: "GET /api/v1/libraries/{id}/bookmarks?path=<a book>", body: lib("bookmarks", cradleBook)},
+			body:  get("/api/v1/me/favourites", m.samTok),
+			keys:  []string{"handleListFavourites"},
+			types: wireAt[catalog.Favourite]("$.favourites[]"),
+		},
+		{name: "listening-sync", route: "POST /api/v1/me/listening/sync", body: wireCall(m.testEnv, "POST", syncURL, m.samTok,
+			syncBody("wire-device", listenJSON("wire-1", m.lib.ID, syncMistborn, 0, 60, ""))),
+			types: wireAt[catalog.SyncAnswer]("$"),
+		},
+		{name: "bookmarks", route: "GET /api/v1/libraries/{id}/bookmarks?path=<a book>", body: lib("bookmarks", cradleBook),
+			keys:  []string{"handleListBookmarks"},
+			types: wireAt[catalog.Bookmark]("$.bookmarks[]"),
+		},
 		{name: "meta", route: "GET /api/v1/libraries/{id}/meta?path=<a matched book>",
-			body: get(bookURL(m.metaLib, "meta", metaBook), m.adminTok)},
-		{name: "upcoming", route: "GET /api/v1/me/upcoming", body: call(u.testEnv, "GET", upcomingPath, adminSession(t, u.testEnv), "")},
+			body:  get(bookURL(m.metaLib, "meta", metaBook), m.adminTok),
+			types: wireAt[meta.Enrichment]("$"),
+		},
+		{name: "upcoming", route: "GET /api/v1/me/upcoming", body: wireCall(u.testEnv, "GET", upcomingPath, adminSession(t, u.testEnv), ""),
+			types: wireAt[upcoming.Answer]("$"),
+		},
 		{name: "household-listening", route: "GET /api/v1/household/listening (sharing, two other people listening, one to a book no longer indexed)",
-			body: call(h.testEnv, "GET", "/api/v1/household/listening", h.patTok, "")},
+			body:  wireCall(h.testEnv, "GET", "/api/v1/household/listening", h.patTok, ""),
+			types: wireAt[houseListening]("$"),
+		},
 		// Last, and on an account of its own: the change signs that account's
 		// other device out, which no case before it may see.
 		{name: "auth-password", route: "POST /api/v1/auth/password (a change, one other device signed out)",
@@ -475,8 +559,31 @@ func wireCases(t *testing.T) []wireCase {
 				}
 				return wireOK(t, m.testEnv, "POST", "/api/v1/auth/password", phone,
 					`{"password":"new-password","current_password":"old-password"}`)
-			}},
+			},
+			keys: []string{"handleSetPassword"},
+		},
 	}
+	// The variants (wire_variants_test.go) go before auth-password, which stays last.
+	last := len(cases) - 1
+	return slices.Concat(cases[:last], wireVariantCases(t, m), cases[last:])
+}
+
+// The types and keys several cases share.
+var (
+	wireServerKeys    = []string{"handleServerInfo", "coreCapabilities@$.capabilities", "authMethods@$.auth"}
+	wireSessionTypes  = map[string]reflect.Type{"$.user": reflect.TypeFor[meUser](), "$.addresses": reflect.TypeFor[Addresses]()}
+	wireBookTypes     = wireAt[catalog.Book]("$")
+	wireChaptersTypes = map[string]reflect.Type{"$.files[]": reflect.TypeFor[catalog.BookFile](), "$.chapters[]": reflect.TypeFor[metadata.Chapter]()}
+)
+
+// wireCall is a case's body: the request's answer, through wireOK.
+func wireCall(e *testEnv, method, path, tok, body string) func(*testing.T) string {
+	return func(t *testing.T) string { return wireOK(t, e, method, path, tok, body) }
+}
+
+// wireAt is a case's types for one Go type, encoded at path.
+func wireAt[T any](path string) map[string]reflect.Type {
+	return map[string]reflect.Type{path: reflect.TypeFor[T]()}
 }
 
 // wireOK sends a request and returns its body, failing on anything but a 2xx.
@@ -491,7 +598,8 @@ func wireOK(t *testing.T, e *testEnv, method, path, tok, body string) string {
 
 // wireMainEnv: a copy of the fixture library with Cradle dressed in every
 // optional field a seed can cheaply give it (an Audiobookshelf metadata.json, an
-// ebook and its read-along map, generated characters), scanned; a listener (sam) granted it with a
+// ebook and its read-along map, generated characters) and Mistborn an ebook
+// whose read-along map is stale, scanned; a listener (sam) granted it with a
 // place, a bookmark and two favourites; a household member of the admin's; watch renditions on;
 // and a second library holding a book the mock metaserve matches. A field a
 // golden should guard has to appear here: an omitempty one left unset is absent
@@ -525,6 +633,7 @@ func newWireMainEnv(t *testing.T) *wireMainEnv {
 	epub := testEpub(t, false)
 	writeMap(t, root, cradleBook+"/"+metadata.ABSFileName, []byte(cradleABS))
 	writeMap(t, root, cradleBook+"/Book.epub", epub)
+	writeMap(t, root, mistbornBook+"/Book.epub", epub)
 	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	if err != nil {
 		t.Fatal(err)
@@ -532,6 +641,9 @@ func newWireMainEnv(t *testing.T) *wireMainEnv {
 	scanFixture(t, e, lib)
 	writeMap(t, root, cradleBook+"/.audiosilo/readalong.json",
 		readalongMapJSON(t, sha256Hex(epub), bookAudio(t, e.cat, lib.ID, cradleBook)))
+	// Mistborn's map was made of another ebook: stale, with its reason.
+	writeMap(t, root, mistbornBook+"/.audiosilo/readalong.json",
+		readalongMapJSON(t, sha256Hex([]byte("another ebook")), bookAudio(t, e.cat, lib.ID, mistbornBook)))
 	// Generated characters: Book.generated and generated_parts (server#218).
 	writeMap(t, root, cradleBook+"/.audiosilo/characters.json",
 		[]byte(`{"characters":[{"id":"lindon","name":"Lindon","reveal":{"chapter":1}}]}`))

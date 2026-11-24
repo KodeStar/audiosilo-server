@@ -1,0 +1,77 @@
+{
+  "route": "GET /api/v1/server (signed in, single sign-on on, a Bridge online)",
+  "shape": {
+    "api": "string",
+    "auth": {
+      "methods": [
+        "string"
+      ],
+      "oidc": {
+        "name": "string"
+      }
+    },
+    "bridge": {
+      "features": [
+        "string"
+      ],
+      "version": "string"
+    },
+    "capabilities": {
+      "addresses": "boolean",
+      "admin_ui": "boolean",
+      "annotations": "boolean",
+      "api_keys": "boolean",
+      "audible": "boolean",
+      "bookmark_client_id": "boolean",
+      "bridge": "boolean",
+      "browse_people": "boolean",
+      "cast": "boolean",
+      "collections": "boolean",
+      "contributions": "boolean",
+      "cover_sizes": "boolean",
+      "ebooks": "boolean",
+      "export": "boolean",
+      "household": "boolean",
+      "household_members": "boolean",
+      "listening_stay": "boolean",
+      "listening_sync": "boolean",
+      "meta_bundle": "boolean",
+      "meta_covers": "boolean",
+      "metadata": "boolean",
+      "my_devices": "boolean",
+      "next_book": "boolean",
+      "oidc": "boolean",
+      "other_recordings": "boolean",
+      "podcast_discovery": "boolean",
+      "podcast_fetch": "boolean",
+      "podcast_opml": "boolean",
+      "podcast_request_dismiss": "boolean",
+      "podcasts": "boolean",
+      "progress_edit": "boolean",
+      "queue": "boolean",
+      "ratings": "boolean",
+      "readalong": "boolean",
+      "renditions": "boolean",
+      "series_books": "boolean",
+      "series_memberships": "boolean",
+      "transcode": "boolean",
+      "unauthorized_mark": "boolean",
+      "upcoming": "boolean",
+      "upcoming_calendar": "boolean",
+      "upcoming_covers": "boolean",
+      "upload": "boolean",
+      "user_stats": "boolean",
+      "web_player": "boolean",
+      "websocket": "boolean"
+    },
+    "demo": {
+      "enabled": "boolean"
+    },
+    "name": "string",
+    "renditions": [
+      "string"
+    ],
+    "server_id": "string",
+    "version": "string"
+  }
+}

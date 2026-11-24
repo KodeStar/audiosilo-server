@@ -17,10 +17,14 @@ import (
 )
 
 type podcastRequest struct {
-	ID        int64                 `json:"id"`
-	LibraryID *int64                `json:"library_id"`
-	State     string                `json:"state"`
-	Feed      string                `json:"feed"`
+	ID        int64  `json:"id"`
+	LibraryID *int64 `json:"library_id"`
+	State     string `json:"state"`
+	Feed      string `json:"feed"`
+	// Title is the show's name as the follower's list or directory gave it
+	// (bridge.SubscribeParams.Title), null when none was given (a follow by
+	// address, a private feed, a request from before v2.7.0).
+	Title     *string               `json:"title"`
 	Private   bool                  `json:"private"`
 	ShowPath  *string               `json:"show_path"`
 	Error     *catalog.PodcastError `json:"error"`
@@ -83,6 +87,9 @@ func podcastRequestOf(job bridge.Job) podcastRequest {
 	}
 	if p.ShowPath != "" {
 		r.ShowPath = &p.ShowPath
+	}
+	if p.Title != "" {
+		r.Title = &p.Title
 	}
 	result, _ := bridge.PodcastOutcomeOf(j)
 	if result.ShowPath != "" {
@@ -217,6 +224,33 @@ func (a *API) handleMyPodcasts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"shows": shows, "requests": requests})
 }
 
+// handlePodcastRequestDismiss is DELETE /podcasts/requests/{id}: the caller's
+// own follow request, once it failed or was cancelled, leaves their list
+// (bridge.DismissSubscribe), 204. Anyone else's, or no such request, is 404
+// request_not_found (never saying which); one still open, ended done, or
+// ended a moment ago and not folded yet is 409 request_open. The old-client
+// gate applies (403 no_library_access), as for every podcast route.
+func (a *API) handlePodcastRequestDismiss(w http.ResponseWriter, r *http.Request) {
+	if !podcastGate(w, r) {
+		return
+	}
+	id, ok := pathInt(r, "id")
+	if !ok || a.bridge == nil {
+		writeErrorCode(w, 404, "request_not_found", "Follow request not found.")
+		return
+	}
+	switch err := a.bridge.DismissSubscribe(r.Context(), userFrom(r.Context()).ID, id); {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, bridge.ErrNotFound):
+		writeErrorCode(w, 404, "request_not_found", "Follow request not found.")
+	case errors.Is(err, bridge.ErrRequestNotDismissable):
+		writeErrorCode(w, 409, "request_open", "Only a failed or cancelled follow request can be dismissed, once it has settled.")
+	default:
+		a.writeCatalogError(w, err, "dismiss podcast request failed", "Could not dismiss the request.")
+	}
+}
+
 // podcastActionLibrary checks the gate and grant before the private-show scope:
 // knowing a private URL is the proof needed to follow that particular show.
 // It returns the library and the caller's scope in it, private shows applied,
@@ -241,8 +275,12 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 		Path      *string `json:"path"`
 		FeedURL   *string `json:"feed_url"`
 		Private   *bool   `json:"private"`
+		// Title labels a follow by URL's request (v2.7.0, optional): the
+		// directory's or list's name for the show, cleaned, never kept for a
+		// private feed.
+		Title *string `json:"title"`
 	}
-	if decodeJSON(r, &req, 8<<10) != nil || req.LibraryID <= 0 || (req.Path == nil) == (req.FeedURL == nil) || req.Path != nil && req.Private != nil {
+	if decodeJSON(r, &req, 8<<10) != nil || req.LibraryID <= 0 || (req.Path == nil) == (req.FeedURL == nil) || req.Path != nil && (req.Private != nil || req.Title != nil) {
 		writeErrorCode(w, 400, "invalid_request", "Send a path or a feed URL.")
 		return
 	}
@@ -252,7 +290,11 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 	}
 	user := userFrom(r.Context()).ID
 	if req.FeedURL != nil {
-		a.followByURL(w, r, lib.ID, *req.FeedURL, req.Private != nil && *req.Private)
+		title := ""
+		if req.Title != nil {
+			title = *req.Title
+		}
+		a.followByURL(w, r, lib.ID, *req.FeedURL, req.Private != nil && *req.Private, title)
 		return
 	}
 	p := *req.Path
@@ -284,8 +326,8 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 // followByURL is POST /podcasts/follow with a feed_url: podcast.Follower, the
 // implementation an OPML import's rows share. Both follow states answer 200
 // "following" (the shipped envelope); a queued or adopted subscription 202.
-func (a *API) followByURL(w http.ResponseWriter, r *http.Request, lib int64, raw string, private bool) {
-	out, err := a.follower().Follow(r.Context(), podcast.FollowURL{Caller: callerOf(r.Context()), LibraryID: lib, FeedURL: raw, Private: private})
+func (a *API) followByURL(w http.ResponseWriter, r *http.Request, lib int64, raw string, private bool, title string) {
+	out, err := a.follower().Follow(r.Context(), podcast.FollowURL{Caller: callerOf(r.Context()), LibraryID: lib, FeedURL: raw, Private: private, Title: title})
 	switch {
 	case err == nil:
 	case errors.Is(err, podcast.ErrNoWholeGrant):

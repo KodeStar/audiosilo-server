@@ -1,0 +1,185 @@
+{
+  "route": "GET /api/v1/libraries/{id}/meta?path=<a matched book two of a series>&include=previous",
+  "shape": {
+    "matched": "boolean",
+    "previous": [
+      {
+        "attribution": {
+          "credit": "string",
+          "license": "string",
+          "license_url": "string",
+          "source_url": "string"
+        },
+        "authors": [
+          {
+            "id": "string",
+            "name": "string"
+          }
+        ],
+        "community_description": {
+          "license": "string",
+          "text": "string"
+        },
+        "id": "string",
+        "language": "string",
+        "recap_summary": {
+          "ending": "string",
+          "in_short": "string"
+        },
+        "title": "string"
+      }
+    ],
+    "recording": {
+      "abridged": "boolean",
+      "chapter_count": "number",
+      "cover_url": "string",
+      "id": "string",
+      "librivox": {
+        "id": "number",
+        "url": "string",
+        "zip_url": "string"
+      },
+      "narrators": [
+        {
+          "id": "string",
+          "name": "string"
+        }
+      ],
+      "publisher": "string",
+      "release_date": "string",
+      "runtime_min": "number"
+    },
+    "series": [
+      {
+        "id": "string",
+        "name": "string",
+        "ordering": "string",
+        "ordering_of": "string",
+        "orderings": [
+          {
+            "id": "string",
+            "name": "string",
+            "ordering": "string",
+            "ordering_of": "string",
+            "position": "string",
+            "works": [
+              {
+                "authors": [
+                  {
+                    "id": "string",
+                    "name": "string"
+                  }
+                ],
+                "cover_url": "string",
+                "id": "string",
+                "local": {
+                  "library_id": "number",
+                  "path": "string"
+                },
+                "local_others": [
+                  {
+                    "library_id": "number",
+                    "path": "string"
+                  }
+                ],
+                "position": "string",
+                "release_date": "string",
+                "title": "string",
+                "web_url": "string"
+              }
+            ]
+          }
+        ],
+        "position": "string",
+        "works": [
+          {
+            "authors": [
+              {
+                "id": "string",
+                "name": "string"
+              }
+            ],
+            "cover_url": "string",
+            "id": "string",
+            "local": {
+              "library_id": "number",
+              "path": "string"
+            },
+            "local_others": [
+              {
+                "library_id": "number",
+                "path": "string"
+              }
+            ],
+            "position": "string",
+            "release_date": "string",
+            "title": "string",
+            "web_url": "string"
+          }
+        ]
+      }
+    ],
+    "web_url": "string",
+    "work": {
+      "attribution": {
+        "credit": "string",
+        "license": "string",
+        "license_url": "string",
+        "source_url": "string"
+      },
+      "authors": [
+        {
+          "id": "string",
+          "name": "string"
+        }
+      ],
+      "characters": [
+        {
+          "aliases": [
+            "string"
+          ],
+          "description": "string",
+          "id": "string",
+          "name": "string",
+          "reveal": {
+            "chapter": "number"
+          },
+          "role": "string"
+        }
+      ],
+      "description": "string",
+      "first_published": "string",
+      "generated": {
+        "characters": "boolean",
+        "description": "boolean",
+        "recap_summary": "boolean",
+        "recaps": "boolean"
+      },
+      "generated_description": {
+        "text": "string"
+      },
+      "id": "string",
+      "language": "string",
+      "position_scale": {
+        "length": "number",
+        "partial": "boolean",
+        "unit": "string"
+      },
+      "recap_summary": {
+        "ending": "string",
+        "in_short": "string"
+      },
+      "recaps": [
+        {
+          "scope": "string",
+          "text": "string",
+          "through": {
+            "chapter": "number"
+          }
+        }
+      ],
+      "subtitle": "string",
+      "title": "string"
+    }
+  }
+}

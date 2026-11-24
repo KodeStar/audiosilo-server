@@ -115,48 +115,49 @@ func (a *API) signedIn(r *http.Request) bool {
 // bridgeOn is the online Bridge, or nil.
 func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 	return map[string]bool{
-		"admin_ui":           true,                 // baked-in admin console at /admin
-		"web_player":         a.playerSource != "", // web player served at /web (when web_dir is populated)
-		"transcode":          a.ffmpeg != "",       // on-the-fly MP3 transcoding via ffmpeg
-		"upload":             false,                // Phase B
-		"websocket":          false,                // Phase C
-		"api_keys":           true,                 // user-minted personal access tokens (POST /auth/tokens)
-		"export":             true,                 // admin library export (GET /admin/libraries/{id}/export)
-		"metadata":           a.metadataOn(),       // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
-		"meta_bundle":        a.metadataOn(),       // /libraries/{id}/meta?include=previous&spoilers=hide
-		"meta_covers":        a.metadataOn(),       // community covers from this server (GET /libraries/{id}/meta/cover)
-		"other_recordings":   a.metadataOn(),       // other recordings of a work together: Book.work_id, /item other_recordings, /meta local_others
-		"browse_people":      true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
-		"series_memberships": true,                 // books in several series: memberships=1 on /books?series= and /series, Book.series_list
-		"series_books":       true,                 // the first page of several series' books in one request (GET /libraries/{id}/series/books)
-		"cover_sizes":        true,                 // cover thumbnails (GET /libraries/{id}/cover?size=96|160|320|640)
-		"next_book":          true,                 // what to play after a book (GET /libraries/{id}/next)
-		"podcast_fetch":      true,                 // on-demand podcast fetch/status (GET/POST /libraries/{id}/podcasts/fetch; 503 fetch on /stream)
-		"podcast_discovery":  a.discoveryOn(),      // podcast directory search (/podcasts/discovery/*): discovery enabled at start AND the podcasts module on
-		"podcast_opml":       true,                 // OPML subscription transfer (POST /podcasts/opml/import needs the module, GET /podcasts/opml/export does not)
-		"queue":              true,                 // the up-next queue (/me/queue)
-		"collections":        true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
-		"user_stats":         true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
-		"ratings":            true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
-		"progress_edit":      true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
-		"my_devices":         true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
-		"annotations":        true,                 // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
-		"bookmark_client_id": true,                 // an idempotent bookmark POST: client_id (a UUID) on the body and the row, a replay answering 200
-		"addresses":          true,                 // home/away addresses on pairing, exchange and login; GET /addresses
-		"household":          true,                 // listening in the house (GET/PUT /me/household, GET /household/listening)
-		"cast":               true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
-		"household_members":  true,                 // household members (/me/household/members; user.managed_by/member_kind; also_members)
-		"bridge":             bridgeOn != nil,      // a Bridge is paired and online (its heartbeat < 2 min old); its block rides beside capabilities
-		"ebooks":             true,                 // the reader: Book.ebook, GET /libraries/{id}/ebook, GET/PUT /libraries/{id}/reading-progress
-		"readalong":          true,                 // read-along: Book.readalong on /item, GET /libraries/{id}/readalong
-		"upcoming":           a.upcomingOn(),       // upcoming releases in the caller's series (GET /me/upcoming): metadata on AND upcoming.enabled
-		"upcoming_calendar":  a.upcomingOn(),       // the calendar feed (GET/POST/DELETE /me/upcoming/calendar, GET /me/upcoming/releases.ics), with upcoming
-		"upcoming_covers":    a.upcomingOn(),       // the Upcoming covers (GET /me/upcoming/cover?work=&size=), with upcoming
-		"listening_sync":     true,                 // Sync v2: POST /me/listening/sync (events, other_place on progress)
-		"listening_stay":     true,                 // a sync listen's start "stay" (a Stay on another device's offer wins: 0080)
-		"renditions":         a.renditionsOn(),     // watch renditions: GET /stream?rendition=, POST/GET /libraries/{id}/renditions; the kinds in the top-level "renditions"
-		"oidc":               a.oidcOn(),           // Sign in with OpenID Connect: GET /auth/oidc/start; the button's name in auth.oidc
-		"unauthorized_mark":  true,                 // every 401 the server writes carries X-AudioSilo-Unauthorized (headerUnauthorized), so a 401 without it came from a proxy
+		"admin_ui":                true,                 // baked-in admin console at /admin
+		"web_player":              a.playerSource != "", // web player served at /web (when web_dir is populated)
+		"transcode":               a.ffmpeg != "",       // on-the-fly MP3 transcoding via ffmpeg
+		"upload":                  false,                // Phase B
+		"websocket":               false,                // Phase C
+		"api_keys":                true,                 // user-minted personal access tokens (POST /auth/tokens)
+		"export":                  true,                 // admin library export (GET /admin/libraries/{id}/export)
+		"metadata":                a.metadataOn(),       // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
+		"meta_bundle":             a.metadataOn(),       // /libraries/{id}/meta?include=previous&spoilers=hide
+		"meta_covers":             a.metadataOn(),       // community covers from this server (GET /libraries/{id}/meta/cover)
+		"other_recordings":        a.metadataOn(),       // other recordings of a work together: Book.work_id, /item other_recordings, /meta local_others
+		"browse_people":           true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
+		"series_memberships":      true,                 // books in several series: memberships=1 on /books?series= and /series, Book.series_list
+		"series_books":            true,                 // the first page of several series' books in one request (GET /libraries/{id}/series/books)
+		"cover_sizes":             true,                 // cover thumbnails (GET /libraries/{id}/cover?size=96|160|320|640)
+		"next_book":               true,                 // what to play after a book (GET /libraries/{id}/next)
+		"podcast_fetch":           true,                 // on-demand podcast fetch/status (GET/POST /libraries/{id}/podcasts/fetch; 503 fetch on /stream)
+		"podcast_discovery":       a.discoveryOn(),      // podcast directory search (/podcasts/discovery/*): discovery enabled at start AND the podcasts module on
+		"podcast_opml":            true,                 // OPML subscription transfer (POST /podcasts/opml/import needs the module, GET /podcasts/opml/export does not)
+		"podcast_request_dismiss": true,                 // DELETE /podcasts/requests/{id}: a listener removes their failed or cancelled follow request (works with the module off); also POST /podcasts/follow's optional title, which the player sends only when this is true (an older server refuses the field)
+		"queue":                   true,                 // the up-next queue (/me/queue)
+		"collections":             true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
+		"user_stats":              true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
+		"ratings":                 true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
+		"progress_edit":           true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
+		"my_devices":              true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
+		"annotations":             true,                 // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
+		"bookmark_client_id":      true,                 // an idempotent bookmark POST: client_id (a UUID) on the body and the row, a replay answering 200
+		"addresses":               true,                 // home/away addresses on pairing, exchange and login; GET /addresses
+		"household":               true,                 // listening in the house (GET/PUT /me/household, GET /household/listening)
+		"cast":                    true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
+		"household_members":       true,                 // household members (/me/household/members; user.managed_by/member_kind; also_members)
+		"bridge":                  bridgeOn != nil,      // a Bridge is paired and online (its heartbeat < 2 min old); its block rides beside capabilities
+		"ebooks":                  true,                 // the reader: Book.ebook, GET /libraries/{id}/ebook, GET/PUT /libraries/{id}/reading-progress
+		"readalong":               true,                 // read-along: Book.readalong on /item, GET /libraries/{id}/readalong
+		"upcoming":                a.upcomingOn(),       // upcoming releases in the caller's series (GET /me/upcoming): metadata on AND upcoming.enabled
+		"upcoming_calendar":       a.upcomingOn(),       // the calendar feed (GET/POST/DELETE /me/upcoming/calendar, GET /me/upcoming/releases.ics), with upcoming
+		"upcoming_covers":         a.upcomingOn(),       // the Upcoming covers (GET /me/upcoming/cover?work=&size=), with upcoming
+		"listening_sync":          true,                 // Sync v2: POST /me/listening/sync (events, other_place on progress)
+		"listening_stay":          true,                 // a sync listen's start "stay" (a Stay on another device's offer wins: 0080)
+		"renditions":              a.renditionsOn(),     // watch renditions: GET /stream?rendition=, POST/GET /libraries/{id}/renditions; the kinds in the top-level "renditions"
+		"oidc":                    a.oidcOn(),           // Sign in with OpenID Connect: GET /auth/oidc/start; the button's name in auth.oidc
+		"unauthorized_mark":       true,                 // every 401 the server writes carries X-AudioSilo-Unauthorized (headerUnauthorized), so a 401 without it came from a proxy
 	}
 }
 

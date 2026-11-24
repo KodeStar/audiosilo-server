@@ -1,0 +1,35 @@
+{
+  "route": "GET /api/v1/search?q=hobbit (a book in two libraries: one row, the other copy under other_locations)",
+  "shape": {
+    "books": [
+      {
+        "added_at": "string",
+        "author": "string",
+        "cover_version": "string",
+        "dedup_key": "string",
+        "duration": "number",
+        "format": "string",
+        "id": "number",
+        "is_folder": "boolean",
+        "library_id": "number",
+        "multi_file": "boolean",
+        "narrator": "string",
+        "other_locations": [
+          {
+            "format": "string",
+            "library_id": "number",
+            "library_name": "string",
+            "multi_file": "boolean",
+            "path": "string",
+            "size": "number"
+          }
+        ],
+        "rel_path": "string",
+        "series": "string",
+        "series_index": "number",
+        "size": "number",
+        "title": "string"
+      }
+    ]
+  }
+}

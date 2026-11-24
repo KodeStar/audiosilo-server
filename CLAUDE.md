@@ -392,7 +392,7 @@ keep this index in step (one line per topic).
 
 - **Conventions**
   - Every feature ships with a test
-  - Wire goldens (`internal/api/wire_golden_test.go`, `testdata/wire/`: the player envelopes' shapes, `-update`, the player's copy)
+  - Wire goldens (`internal/api/wire_golden_test.go`, `testdata/wire/`: the player envelopes' shapes, `-update`, the player's copy; `TestWireGolden/coverage` fails when a wire field or map key appears in no golden)
   - Migrations are append-only
   - Secrets
   - The server's own 401s are marked (`X-AudioSilo-Unauthorized`, capability `unauthorized_mark`; an unchecked token is a 503)
@@ -484,7 +484,7 @@ keep this index in step (one line per topic).
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`, `other_recordings`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `bookmark_client_id`, `addresses`, `household`, `cast`,
-`household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`, `upcoming`,
+`household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `podcast_request_dismiss`, `ebooks`, `readalong`, `upcoming`,
 `upcoming_calendar`, `upcoming_covers`, `listening_sync`, `listening_stay`, `renditions`, `oidc`, `unauthorized_mark`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on

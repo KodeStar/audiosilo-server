@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // element kinds on the parser's stack.
@@ -150,11 +152,20 @@ func (doc *Document) open(t xml.StartElement, stack []frame, heads, bodies *int)
 		}
 		url, has := xmlURL(t.Attr)
 		if has || strings.EqualFold(strings.TrimSpace(attr(t.Attr, "type")), "rss") {
-			doc.Candidates = append(doc.Candidates, Candidate{Index: doc.Outlines, URL: strings.TrimSpace(url)})
+			doc.Candidates = append(doc.Candidates, Candidate{Index: doc.Outlines, URL: strings.TrimSpace(url), Title: outlineTitle(t.Attr)})
 		}
 		return f, nil
 	}
 	return frame{kind: kindOther}, nil
+}
+
+// outlineTitle is an outline's title attribute, else its text, cleaned to one
+// line (textclean.Line, MaxTitleBytes); "" when both clean to nothing.
+func outlineTitle(attrs []xml.Attr) string {
+	if title := textclean.Line(attr(attrs, "title"), MaxTitleBytes); title != "" {
+		return title
+	}
+	return textclean.Line(attr(attrs, "text"), MaxTitleBytes)
 }
 
 // attr is the unprefixed attribute name's value, "" when absent.

@@ -923,3 +923,147 @@ func TestSubscribeClaimUnreadableParamsFailed(t *testing.T) {
 		t.Fatalf("last subscribe = %+v, %v; want it failed", stored, err)
 	}
 }
+
+// A subscribe request keeps the title its follower gave, cleaned to one line,
+// never for a private feed; the params check refuses a title that isn't so.
+func TestSubscribeTitle(t *testing.T) {
+	t.Parallel()
+	q := podcastQueue(t)
+	ctx := context.Background()
+	j, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/titled.xml", Title: "  The\nShow  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p SubscribeParams
+	if err := json.Unmarshal(j.Params, &p); err != nil || p.Title != "The Show" {
+		t.Fatalf("title %q %v", p.Title, err)
+	}
+	// A title naming the show by its address is redacted as the feed's label.
+	byURL, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/by-url.xml", Title: "Feed https://example.com/feeds/abc123/rss"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var byURLParams SubscribeParams
+	if err := json.Unmarshal(byURL.Params, &byURLParams); err != nil || byURLParams.Title != "Feed https://example.com/..." {
+		t.Fatalf("title by URL %q %v", byURLParams.Title, err)
+	}
+	priv, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/private?auth=SECRET123", Private: true, Title: "Members"})
+	if err != nil || strings.Contains(string(priv.Params), "Members") {
+		t.Fatalf("private %s %v", priv.Params, err)
+	}
+	base := `"feed_url_sha256":"` + strings.Repeat("a", 64) + `","feed_host":"example.com"`
+	if _, err := subscribeParams(json.RawMessage(`{` + base + `,"private":true,"title":"x"}`)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("private title = %v", err)
+	}
+	// The public params Subscribe stored pass the check as they are; the same
+	// params with a title that isn't cleaned to one line are refused.
+	if _, err := subscribeParams(j.Params); err != nil {
+		t.Fatalf("stored params = %v", err)
+	}
+	for _, title := range []string{" padded ", "The\nShow", strings.Repeat("x", MaxSubscribeTitleBytes+1)} {
+		bad := p
+		bad.Title = title
+		raw, _ := json.Marshal(bad)
+		if _, err := subscribeParams(raw); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("title %q = %v", title, err)
+		}
+	}
+}
+
+// DismissSubscribe removes only the caller's own request, and only once it
+// failed or was cancelled and its outcome was folded (or can no longer be,
+// past PollFoldWindow): never an open or done one, never another user's.
+func TestDismissSubscribe(t *testing.T) {
+	t.Parallel()
+	q := podcastQueue(t)
+	ctx := context.Background()
+	other := q.admin + 1000
+	if _, err := q.db.ExecContext(ctx, `INSERT INTO users(id, username, password_hash, role, created_at, updated_at) VALUES(?, 'bob', '', 'user', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, other); err != nil {
+		t.Fatal(err)
+	}
+	end := func(url, state string) *Job {
+		t.Helper()
+		j, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, url, false, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state == "" {
+			return j
+		}
+		claimed, err := q.ClaimFor(ctx, q.token, nil, 0)
+		if err != nil || claimed == nil || claimed.ID != j.ID {
+			t.Fatalf("claim %+v %v", claimed, err)
+		}
+		if _, err := q.UpdateHeld(ctx, j.ID, Update{Attempt: claimed.Attempts, State: &state, Result: json.RawMessage(`{"code":"not_a_feed","message":"no"}`)}); err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	fold := func(id int64) {
+		t.Helper()
+		if _, err := q.db.ExecContext(ctx, `INSERT INTO podcast_folded(job_id,at) VALUES(?,'2026-10-15T12:00:00Z')`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open := end("https://example.com/open.xml", "")
+	if err := q.DismissSubscribe(ctx, q.admin, open.ID); !errors.Is(err, ErrRequestNotDismissable) {
+		t.Fatalf("open = %v", err)
+	}
+	if _, err := q.Cancel(ctx, open.ID); err != nil {
+		t.Fatal(err)
+	}
+	failed := end("https://example.com/failed.xml", StateFailed)
+	if err := q.DismissSubscribe(ctx, q.admin, failed.ID); !errors.Is(err, ErrRequestNotDismissable) {
+		t.Fatalf("unfolded = %v", err)
+	}
+	fold(failed.ID)
+	fold(open.ID)
+	if j, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, "https://example.com/failed.xml", time.Hour); err != nil || j == nil || j.ID != failed.ID {
+		t.Fatalf("recent failure before dismiss %+v %v", j, err)
+	}
+	if err := q.DismissSubscribe(ctx, other, failed.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another user's = %v", err)
+	}
+	for _, id := range []int64{failed.ID, open.ID} {
+		if err := q.DismissSubscribe(ctx, q.admin, id); err != nil {
+			t.Fatalf("dismiss %d = %v", id, err)
+		}
+		if err := q.DismissSubscribe(ctx, q.admin, id); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("again %d = %v", id, err)
+		}
+	}
+	// A cleared failure no longer holds the feed back from an import, and the
+	// console's job history keeps it.
+	if j, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, "https://example.com/failed.xml", time.Hour); err != nil || j != nil {
+		t.Fatalf("recent failure after dismiss %+v %v", j, err)
+	}
+	history, _, err := q.List(ctx, Filter{Kind: KindPodcastSubscribe, State: StateFailed})
+	if err != nil || len(history) != 1 || history[0].ID != failed.ID || history[0].Error == "" && string(history[0].Result) == "{}" {
+		t.Fatalf("history %+v %v", history, err)
+	}
+	var kept SubscribeParams
+	if err := json.Unmarshal(history[0].Params, &kept); err != nil || !kept.Dismissed || kept.FeedHost != "example.com" {
+		t.Fatalf("kept params %s %v", history[0].Params, err)
+	}
+	done := end("https://example.com/done.xml", StateDone)
+	fold(done.ID)
+	if err := q.DismissSubscribe(ctx, q.admin, done.ID); !errors.Is(err, ErrRequestNotDismissable) {
+		t.Fatalf("done = %v", err)
+	}
+	// A failure whose fold never landed stays while the sweep may still fold
+	// it, and may go once it ended before PollFoldWindow (the sweep no longer
+	// reads it, the listener's list still shows it).
+	stale := end("https://example.com/stale.xml", StateFailed)
+	q.advance(PollFoldWindow - time.Minute)
+	if err := q.DismissSubscribe(ctx, q.admin, stale.ID); !errors.Is(err, ErrRequestNotDismissable) {
+		t.Fatalf("unfolded within the window = %v", err)
+	}
+	q.advance(2 * time.Minute)
+	if err := q.DismissSubscribe(ctx, q.admin, stale.ID); err != nil {
+		t.Fatalf("unfolded past the window = %v", err)
+	}
+	reqs, err := q.SubscribeRequests(ctx, q.admin)
+	if err != nil || len(reqs) != 1 || reqs[0].ID != done.ID {
+		t.Fatalf("left %+v %v", reqs, err)
+	}
+}
