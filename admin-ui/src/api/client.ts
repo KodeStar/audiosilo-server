@@ -994,10 +994,10 @@ export const api = {
     }),
   deleteCover: (libraryId: number, path: string) =>
     request<void>('DELETE', `/admin/libraries/${libraryId}/cover${pathQuery(path)}`),
-  /** Reads one book's files again now; answers with its page (404 not_indexable if it's gone). */
   /**
-   * Reads a book's files again now: its fresh page, or null when the read was still
-   * going at the server's answer (202 still_reading: it goes on and is saved).
+   * Reads a book's files again now: its fresh page (404 not_indexable if it's gone), or
+   * null when the read was still going at the server's answer (202 still_reading: it
+   * goes on and is saved).
    */
   rescanBook: async (libraryId: number, path: string): Promise<AdminBookDetail | null> => {
     const r = await request<AdminBookDetail & { still_reading?: boolean }>(
