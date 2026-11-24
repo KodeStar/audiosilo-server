@@ -36,6 +36,7 @@
       "podcast_discovery": "boolean",
       "podcast_fetch": "boolean",
       "podcast_opml": "boolean",
+      "podcast_request_dismiss": "boolean",
       "podcasts": "boolean",
       "progress_edit": "boolean",
       "queue": "boolean",

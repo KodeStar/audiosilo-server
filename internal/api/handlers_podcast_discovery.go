@@ -340,9 +340,9 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 
 // opmlImportContext is the context an import's rows are followed under: the
 // request's values and its bound (the deadline the timeout middleware set,
-// opmlImportTimeout) without its cancellation. A player gives the upload up
-// after 45 s, and the import that client no longer waits for still runs to
-// its end, holding its slot until then, so the rows it had not reached are
+// opmlImportTimeout) without its cancellation. A 2.6.x player gives the
+// upload up after 45 s, and the import that client no longer waits for still
+// runs to its end, holding its slot until then, so the rows it had not reached are
 // not left for an upload again. The server stopping ends it.
 func (a *API) opmlImportContext(r *http.Request) (context.Context, context.CancelFunc) {
 	ctx := context.WithoutCancel(r.Context())

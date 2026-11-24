@@ -51,6 +51,10 @@ type FollowURL struct {
 	// private:true). A URL that looks private is private whatever it says, and
 	// nothing makes a private URL public.
 	Private bool
+	// Title is the show's name as the caller's list or directory gave it: a
+	// new request's label (bridge.SubscribeRequest.Title), never a private
+	// one's.
+	Title string
 	// AdoptOnly: a new subscription may not be queued, only an open one
 	// adopted (bridge.ErrNoNewRequest otherwise).
 	AdoptOnly bool
@@ -160,7 +164,7 @@ func (f *Follower) Follow(ctx context.Context, r FollowURL) (*FollowOutcome, err
 	if h == nil || !h.Offers(bridge.KindPodcastSubscribe) {
 		return out, ErrBridgeUnavailable
 	}
-	j, created, err := f.Queue.Subscribe(ctx, bridge.SubscribeRequest{LibraryID: r.LibraryID, User: r.Caller.ID, FeedURL: norm, Private: out.Private, ShowPath: showPath, AdoptOnly: r.AdoptOnly})
+	j, created, err := f.Queue.Subscribe(ctx, bridge.SubscribeRequest{LibraryID: r.LibraryID, User: r.Caller.ID, FeedURL: norm, Private: out.Private, ShowPath: showPath, Title: r.Title, AdoptOnly: r.AdoptOnly})
 	if err != nil {
 		return out, err
 	}

@@ -4444,7 +4444,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   request timeout, under `opmlImportTimeout` (5 min) on its context with its answer unbuffered
   (`unbufferedBound`, as the Bridge's claim); one its bound ends answers the timeout's 503 (`writeOPMLImport`),
   never the rows it got to as all of them (server#179). Its rows are followed under that bound without the
-  request's cancellation (`opmlImportContext`): a player gives the upload up after 45 s, and the import
+  request's cancellation (`opmlImportContext`): a 2.6.x player gave the upload up after 45 s (since v2.7.0
+  it waits past the bound), and the import
   runs to its end all the same, its slot held until then (the server stopping ends it). A library the caller holds no whole grant on, or
   none at that id, is 403 `no_library_access` before its kind, as for the single follow: neither tells
   which ids exist. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
@@ -4457,6 +4458,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cors_origins` is set every answer carries `Vary: Origin` (`liveConfig.corsOn`); `timeout` seeds it
   into TimeoutHandler's own header map, so a handler's Vary (spa's Accept-Encoding) adds to it. Shared
   fixtures: the byte-identical `internal/podcast/testdata/phase2c3/` copy.
+  **Request titles and dismissing (v2.7.0, fe#126)**: an import row never echoes the document, but its
+  outline's title (`opml.Candidate.Title`: its `title` attribute, else `text`, `textclean.Line` to
+  `opml.MaxTitleBytes`) labels the request it queues, and a follow by URL may send an optional `title`
+  (400 beside a `path`; the player sends a directory result's). Either goes into the subscribe's params
+  (`SubscribeParams.Title`: any URL in it redacted as the feed's label is, then cleaned to
+  `MaxSubscribeTitleBytes`, the params check refusing a title not so cleaned) for a public feed only, never a private one's, and the request row (`/me/podcasts`, the 202)
+  answers it as `title` (null when none). `DELETE /podcasts/requests/{id}` (`requireAuth` + `notDemo` + the
+  client gate, not the module's; capability `podcast_request_dismiss`, always true) clears the caller's
+  own request from their list once it failed or was cancelled AND its fold landed, or it ended before
+  `PollFoldWindow` (the sweep folds it no more; `bridge.DismissSubscribe`, one UPDATE marking the params
+  `dismissed`, not a DELETE: follow requests are never pruned and the console's job history keeps the
+  failure and who asked), 204; anyone else's or none is 404
+  `request_not_found`, an open, done or unfolded one 409 `request_open`. The same capability is the
+  player's sign that the follow takes `title` (the strict decoder of an older server answers the field
+  400), so it stays unconditional. Dismissing a feed's failures lets the next import queue it again
+  (`RecentSubscribeFailure` reads the newest request not cleared, an older failure in the hour still counts).
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
   by itself (pairing a Bridge doesn't). A module is a `modules.Module` value: `ID` (its capability flag,
