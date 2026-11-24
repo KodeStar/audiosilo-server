@@ -129,7 +129,7 @@ func TestUpsertBooksIsolatesAFailingBook(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := f.gen(t)
-	errs := f.c.UpsertBooks(f.ctx, f.books("A", "B", "C"))
+	errs := f.c.upsertBooks(f.ctx, f.books("A", "B", "C"), UpsertBatch, 0)
 	if errs[0] != nil || errs[1] == nil || errs[2] != nil {
 		t.Fatalf("errors = %v, want only B's", errs)
 	}
@@ -158,7 +158,7 @@ func TestUpsertBooksRetriesAFailedTransactionSingly(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := f.gen(t)
-	errs := f.c.UpsertBooks(f.ctx, f.books("A", "B", "C", "D"))
+	errs := f.c.upsertBooks(f.ctx, f.books("A", "B", "C", "D"), UpsertBatch, 0)
 	if errs[0] != nil || errs[1] == nil || errs[2] != nil || errs[3] != nil {
 		t.Fatalf("errors = %v, want only B's", errs)
 	}
