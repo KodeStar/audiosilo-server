@@ -4670,7 +4670,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
   (`restart`) and its per-field check (`fix`). `applyEnv` walks the same table and records which keys the
   environment set (`fromEnv`); those are **locked** in the console (409 `setting_locked`) and `Save` writes
-  config.yaml's own value for them (`file`), so an env value never lands in the file. (The embedding
+  config.yaml's own value for them (`file`), so an env value never lands in the file. `Save` writes only the keys
+  whose value differs from `Default`'s (`savedYAML`, server#252; a section left with none is left out), so a setting
+  left at its default, or set back to it, follows a later release's default; a new default belongs in `Default`,
+  never frozen into the file. (The embedding
   launcher's overrides, `Pin` and the `"launcher"` lock were retired in v2.7.0 with the archived desktop
   manager: config.yaml and the environment are the only sources.) `WithSettings` returns a
   validated copy (all or nothing; `SettingError` with reason unknown/read_only/locked/invalid and the setting

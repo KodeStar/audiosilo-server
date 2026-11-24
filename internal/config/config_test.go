@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -368,5 +369,64 @@ func TestLoadMirrorInterval(t *testing.T) {
 		if got := again.Metadata.MirrorSettings.Interval; got != tc.want {
 			t.Fatalf("interval %s after a save: got %v, want %v", tc.interval, got, tc.want)
 		}
+	}
+}
+
+// TestSaveWritesOnlyWhatDiffers (server#252): config.yaml holds only the keys
+// whose value differs from the defaults, so a setting left at its default (or
+// written out at it by an older release) follows a later default; a section
+// keeps only its changed keys, and loading the file back gives the same config.
+func TestSaveWritesOnlyWhatDiffers(t *testing.T) {
+	dir := t.TempDir()
+	fresh := Default(dir)
+	fresh.ServerID = "srv-1"
+	if err := fresh.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(Path(dir)); err != nil || string(raw) != "server_id: srv-1\n" {
+		t.Fatalf("a default config saved:\n%s (%v)", raw, err)
+	}
+
+	// An older release's file, every default frozen in, and three values set.
+	frozen := "server_id: srv-1\nbind: 0.0.0.0:8080\nupdate_check: false\n" +
+		"activity:\n  session_days: " + strconv.Itoa(DefaultSessionDays) + "\n" +
+		"household:\n  members_enabled: true\n  max_members: 3\n" +
+		"upcoming:\n  enabled: true\n  window_days: " + strconv.Itoa(DefaultUpcomingWindowDays) + "\n" +
+		"libraries:\n  - name: Books\n    root: /books\n"
+	if err := os.WriteFile(Path(dir), []byte(frozen), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "server_id: srv-1\nupdate_check: false\nlibraries:\n    - name: Books\n      root: /books\n" +
+		"household:\n    max_members: 3\n"
+	if string(raw) != want {
+		t.Fatalf("saved:\n%s\nwant:\n%s", raw, want)
+	}
+	again, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(again.asSaved(), cfg.asSaved()) {
+		t.Fatalf("loaded back:\n%+v\nwant:\n%+v", again, cfg)
+	}
+
+	// Set back to its default, a value leaves the file.
+	cfg.UpdateCheck = true
+	cfg.Household.MaxMembers = DefaultMaxMembers
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ = os.ReadFile(Path(dir)); strings.Contains(string(raw), "update_check") || strings.Contains(string(raw), "household") {
+		t.Fatalf("values set back to their defaults were saved:\n%s", raw)
 	}
 }

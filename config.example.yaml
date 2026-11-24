@@ -1,7 +1,9 @@
 # AudioSilo server configuration.
 #
-# This file is written to <data-dir>/config.yaml on first run with secure
-# defaults. Edit it and restart, change most of it in the admin console (Server >
+# The server writes <data-dir>/config.yaml on first run and on every console
+# save, holding only what differs from the defaults (at first, its server_id):
+# a key left out is its default, a later release's default once that changes.
+# Every key is listed below with its default. Edit it and restart, change most of it in the admin console (Server >
 # Settings, which saves here), or override selected values with environment
 # variables (shown in brackets). A value an environment variable sets wins at
 # every start, shows as locked in the console, and is never written into this
