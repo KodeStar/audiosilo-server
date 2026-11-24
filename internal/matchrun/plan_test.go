@@ -872,7 +872,8 @@ func TestQueryForTagHints(t *testing.T) {
 			"B0OWN00001", ""},
 	} {
 		q := QueryFor(&tc.book, "", "")
-		wantHint := tc.book.ASIN == "" && tc.book.ISBN == "" && (tc.wantASIN != "" || tc.wantISBN != "")
+		// Only a tag's or an import's identifier is a hint, never the book's own.
+		wantHint := tc.name == "hints alone" || strings.HasPrefix(tc.name, "an ABS") || tc.name == "both ABS identifiers"
 		if q.BookIdentifierHint != wantHint {
 			t.Errorf("%s: BookIdentifierHint = %v, want %v", tc.name, q.BookIdentifierHint, wantHint)
 		}

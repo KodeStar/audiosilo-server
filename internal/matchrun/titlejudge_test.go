@@ -112,8 +112,10 @@ func atPosition(c *meta.MatchCandidate, n int, stem string) bool {
 		}
 		for _, form := range match.SeriesForms(s.Name) {
 			// No number is removed from the actual series name.
-			if wordStem(titleWords(withAnd(form))) == stem || wordStem(titleWords(withAnd(beforeColon(form)))) == stem {
-				return true
+			for _, f := range []string{form, beforeColon(form)} {
+				if wordStem(titleWords(withAnd(f))) == stem {
+					return true
+				}
 			}
 		}
 		return false

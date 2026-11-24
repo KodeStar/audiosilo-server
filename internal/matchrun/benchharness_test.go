@@ -749,13 +749,14 @@ func diagOf(local *meta.Service, b *lfBook, m *lfMatched, res *lfResult, region,
 			right = res.HandWork
 		}
 	}
-	d.RightRank = new(int)
+	rank := 0
 	for i := range full {
 		d.Cands = append(d.Cands, diagCandOf(&full[i]))
-		if right != "" && full[i].WorkID == right && *d.RightRank == 0 {
-			*d.RightRank, d.RightScore = i+1, full[i].Score
+		if right != "" && full[i].WorkID == right && rank == 0 {
+			rank, d.RightScore = i+1, full[i].Score
 		}
 	}
+	d.RightRank = &rank
 	return d
 }
 

@@ -36,6 +36,9 @@ var genreFluff = map[string]bool{
 	"fantasy": true, "adventure": true, "novel": true, "novella": true,
 }
 
+// noteJoiners are the joining words a genre note holds ("A Novel of the Expanse").
+var noteJoiners = map[string]bool{"a": true, "an": true, "the": true, "of": true}
+
 // A delimiter after the work title introduces a subtitle or a catalogue note.
 var titleBreak = regexp.MustCompile(`[:,(\[]|\s+[-–]\s+`)
 
@@ -110,7 +113,7 @@ func tidyTitle(st *catalog.MatchState, p catalog.MatchProposal) string {
 			if n, ok := numberOf(file[i+1]); !ok || !stated[n] {
 				return ""
 			}
-		case i >= note && (genreFluff[w] || w == "a" || w == "an" || w == "the" || w == "of"):
+		case i >= note && (genreFluff[w] || noteJoiners[w]):
 		default:
 			if n, ok := numberOf(w); !ok || !stated[n] {
 				return ""
