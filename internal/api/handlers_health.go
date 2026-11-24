@@ -230,7 +230,9 @@ func (a *API) applyIgnore(w http.ResponseWriter, r *http.Request, action string,
 // book's files again now (tags, ffprobe, cover, read problems), outside the job
 // queue (it's one book), and return its page. A path the library no longer has a
 // book at (gone, or ignored) is a 404 with code not_indexable. A read still
-// going at stillReadingAt is answered 202 {"still_reading": true}: it goes on
+// going where the request's waits on another read of its book end
+// (flightWaitEnd, ahead of the request timeout) is answered 202
+// {"still_reading": true}: it goes on
 // and is saved (the book's next look shows it), so the console says so rather
 // than meeting the request timeout's bare 503 (server#224).
 func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
@@ -242,14 +244,14 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 	done := make(chan error, 1)
 	go func() {
 		// No wait cap (lookCtx's): the read is not given up on at the request's
-		// time, the answer is (stillReadingAt). A look that gets no answer in
+		// time, the answer is (flightWaitEnd). A look that gets no answer in
 		// fileWait still ends it, as a 503 share_not_answering when in time.
 		_, err := readAt(a, library.WithLookTimeout(a.baseCtx, a.fileWait), func(ctx context.Context) (*catalog.Book, error) {
 			return a.scanner.ReindexPath(ctx, *lib, p)
 		})
 		done <- err
 	}()
-	wait := time.NewTimer(time.Until(a.stillReadingAt(r.Context())))
+	wait := time.NewTimer(time.Until(a.flightWaitEnd(r.Context())))
 	defer wait.Stop()
 	select {
 	case err := <-done:
@@ -268,13 +270,6 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 	}
-}
-
-// stillReadingAt is when a Re-read still going is answered 202: where a
-// request's waits on another read of its book end (flightWaitEnd), ahead of the
-// request timeout.
-func (a *API) stillReadingAt(ctx context.Context) time.Time {
-	return a.flightWaitEnd(ctx)
 }
 
 // rescanAt runs read, a re-read of what is at p in lib, as readAt does under

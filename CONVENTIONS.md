@@ -3325,7 +3325,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   sends one member and the group’s `key` as `group_key`), `POST
   /admin/libraries/{id}/book/rescan?path=` (`ReindexPath` now, on a context detached from the
   request timeout so a slow re-read is still saved; 404 `not_indexable`; a read still going at
-  `stillReadingAt`, where a request's waits on another read of its book end, is answered 202
+  `flightWaitEnd`, where a request's waits on another read of its book end, is answered 202
   `{"still_reading": true}` and goes on, so the console says it shows when done rather than meeting
   the timeout's bare 503: its looks keep `API.fileWait` but no wait cap, server#224), `GET
   /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`
