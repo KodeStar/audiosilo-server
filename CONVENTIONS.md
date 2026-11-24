@@ -1594,7 +1594,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `GET /libraries/{id}/ebook` (see Path-addressed API).
 - **In-process probe (server#261, `metadata/fastprobe*.go`)**: `metadata.ExtractTimeout` opens a
   file once and reads its tags, the iTunes narrator and the probe through one 64 KiB block cache
-  (at most 4 MiB kept); the probe answers what ffprobe would (format duration as its `"%f"`
+  (at most 4 MiB kept; a read of more than four blocks goes to the file, but for what it shares with
+  dhowden's last such read, kept up to 16 MiB when an MP3's probe follows, so an ID3 picture dhowden read whole is not read again inside
+  the probe's whole-tag read, server#269); the probe answers what ffprobe would (format duration as its `"%f"`
   string, first audio stream's codec, chapters, the format tags `applyProbe` reads:
   `probeTagKeys`) for MP3, M4B/M4A/MP4, FLAC, Ogg Vorbis/Opus/FLAC and MKA, as ports of FFmpeg's
   demuxers. **Parity is the contract**: values equal the configured ffprobe's, by its release's
@@ -1683,7 +1685,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   neither the ebook nor the read-along, `warmRemux`'s answer: each would wait out its own `fileWait` on the same
   share, three of them the request's whole time). A file cache's run opens its source as a bounded look
   (`FileCache.openWait`, `sourceWait`), so a share that answered the stat but not the open frees the run's slot
-  rather than holding it and every run queued behind it; its own stats of the source (`Open`, `Status`, `Queue`, `RefusedFor`, a warm's first look) are
+  rather than holding it and every run queued behind it; its own stats of the source (`Open`, `Status`, `RefusedFor`, a warm's one look; `Queue` and `StatusOf` take the caller's, the renditions list's one look per file, and a warm hands its look to `StatusOf` and the run's open, server#359) are
   given a scan's look time (`media.sourceWait`), never none, so one on a share that stopped answering since never
   holds its mount's slot for good. A stream that waited on a remux gives its next look (the live transcode's it
   falls back to, or the stored file's open once the remux refused the file) at least `API.fileWait`
@@ -1927,7 +1929,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   download wait), then 503 `rendition_pending` with `Retry-After: 15` while it goes on under `baseCtx`; never a
   live transcode. 422 `rendition_failed` is a remembered refusal (ffmpeg's, or a short copy; for an hour), with
   `Retry-After` the seconds it has left (`FileCache.RefusedFor`, server#289; the listing's `retry_after_seconds` is
-  read with its state, `Status`/`Queue`'s `refusedFor`, so a refusal expiring between two looks keeps its hint, server#359);
+  read with its state, `StatusOf`/`Queue`'s `refusedFor`, so a refusal expiring between two looks keeps its hint, server#359);
   503 `rendition_error` (`Retry-After: 60`) a failure not the file's (disk guard, a run killed partway, the
   source changed). `POST
   /libraries/{id}/renditions?path=<book>` `{"kind":"watch"}` queues every file of the book whose copy is missing
@@ -3743,7 +3745,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   leniently, `readStoredStatus`, so a row a newer server wrote survives a rollback), and only the mappings of libraries the
   server has are stored, and of a setup item's `library_ids` only theirs (`Status.KeepLibraries`, the row written without HTML escaping; a beat whose library list can't be read is saved as sent, Validate-bounded, and answered with the fault, so a catalog read fault never shows the Bridge offline), so the row a
   heartbeat rewrites stays the size of the server's own libraries; free text is cleaned to printable bounded text,
-  `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside
+  `textclean.Clean` (the server's one cleaner for free text it keeps or shows: Bridge reports, Audible titles, podcast directory and OPML titles), never refused, as is a job report's `error` (line breaks kept): it is partly the outside
   world's, and a refused report is retried for ever while its job is re-run; one row, never a history)
   answers `{server_time,
   libraries[{id, name, root}], accepts}` (`accepts: ["setup"]`, `bridge.HeartbeatAccepts`: the optional
@@ -4696,7 +4698,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
   (`restart`) and its per-field check (`fix`). `applyEnv` walks the same table and records which keys the
   environment set (`fromEnv`); those are **locked** in the console (409 `setting_locked`) and `Save` writes
-  config.yaml's own value for them (`file`), so an env value never lands in the file. (The embedding
+  config.yaml's own value for them (`file`), so an env value never lands in the file. `Save` writes only the keys
+  whose value differs from `Default`'s (`savedYAML`, server#252; a section left with none is left out), so a setting
+  left at its default, or set back to it, follows a later release's default; a new default belongs in `Default`,
+  never frozen into the file. (The embedding
   launcher's overrides, `Pin` and the `"launcher"` lock were retired in v2.7.0 with the archived desktop
   manager: config.yaml and the environment are the only sources.) `WithSettings` returns a
   validated copy (all or nothing; `SettingError` with reason unknown/read_only/locked/invalid and the setting

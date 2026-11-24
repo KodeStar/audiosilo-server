@@ -17,6 +17,7 @@ package metadata
 // estimate (SRV-16, server#452).
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -305,6 +306,9 @@ func ExactDuration(ctx context.Context, r io.ReaderAt, size int64, format string
 const (
 	bfBlock   = 64 << 10
 	maxBlocks = 64
+	// maxBig bounds the large read a blockFile keeps (big): dhowden reads a
+	// picture of up to 10 MiB whole, a larger one through the blocks.
+	maxBig = 16 << 20
 )
 
 // blockFile reads the file in 64 KiB blocks it keeps, so dhowden, the narrator
@@ -318,6 +322,15 @@ type blockFile struct {
 	blocks map[int64][]byte
 	err    error
 	ff     ffRules // the rules the probe reads it by
+
+	// big is dhowden's last read of more than four blocks (a blockReader that
+	// keeps: an MP3's probe follows), a copy, from bigOff: an ID3v2 tag's picture is
+	// read whole by dhowden, then again inside the whole tag the probe reads,
+	// and a cover of MiBs is not read from the file twice. The probe's own
+	// large reads are not kept (nothing reads them again), nor a read of the
+	// tags alone, and big is let go once a read has used it.
+	big    []byte
+	bigOff int64
 
 	stuck  *stuckReads     // the file's mount's reads given up on (waitRead)
 	ctx    context.Context // the probe's, its deadline included; nil when not armed
@@ -399,8 +412,11 @@ func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
 		n   int
 		err error
 	}
+	// The file alone, not b: a read given up on keeps its goroutine, and that
+	// must not keep the blocks and big alive with it.
+	f := b.f
 	r, ok := await(b.ctx, b.stuck, func() res {
-		n, err := b.f.ReadAt(p, off)
+		n, err := f.ReadAt(p, off)
 		return res{n, err}
 	}, nil)
 	if !ok {
@@ -492,8 +508,12 @@ func (b *blockFile) block(i int64) []byte {
 }
 
 // ReadAt reads through the block cache; a large read (a picture) goes straight
-// to the file.
-func (b *blockFile) ReadAt(p []byte, off int64) (int, error) {
+// to the file, but for what it shares with dhowden's last one (big).
+func (b *blockFile) ReadAt(p []byte, off int64) (int, error) { return b.readAt(p, off, false) }
+
+// readAt is ReadAt; keep makes a large read the one kept (big): dhowden's,
+// through a blockReader whose (MP3's) probe follows.
+func (b *blockFile) readAt(p []byte, off int64, keep bool) (int, error) {
 	b.tick()
 	if off < 0 {
 		return 0, errors.New("negative offset")
@@ -502,9 +522,15 @@ func (b *blockFile) ReadAt(p []byte, off int64) (int, error) {
 		return 0, io.EOF
 	}
 	if len(p) > 4*bfBlock {
+		if lo, hi := max(off, b.bigOff), min(off+int64(len(p)), b.bigOff+int64(len(b.big))); lo < hi {
+			return b.aroundBig(p, off, lo, hi)
+		}
 		n, err := b.raw(p, off)
 		if n == len(p) {
 			err = nil
+			if keep && len(p) <= maxBig {
+				b.big, b.bigOff = bytes.Clone(p), off
+			}
 		}
 		return n, err
 	}
@@ -520,6 +546,27 @@ func (b *blockFile) ReadAt(p []byte, off int64) (int, error) {
 	}
 	if n < len(p) {
 		return n, io.EOF
+	}
+	return n, nil
+}
+
+// aroundBig is ReadAt of p at off whose bytes lo to hi are big's: those are
+// copied from it, and big let go, and only the rest is read (through the
+// blocks, or the file).
+func (b *blockFile) aroundBig(p []byte, off, lo, hi int64) (int, error) {
+	copy(p[lo-off:hi-off], b.big[lo-b.bigOff:hi-b.bigOff])
+	b.big = nil
+	if head := p[:lo-off]; len(head) > 0 {
+		if n, err := b.ReadAt(head, off); n < len(head) {
+			return n, err
+		}
+	}
+	n := int(hi - off)
+	if tail := p[hi-off:]; len(tail) > 0 {
+		m, err := b.ReadAt(tail, hi)
+		if n += m; m < len(tail) {
+			return n, err
+		}
 	}
 	return n, nil
 }
@@ -540,17 +587,20 @@ func (b *blockFile) bytesAt(off int64, n int) ([]byte, bool) {
 	return buf, m == n
 }
 
-// blockReader is a ReadSeeker over a blockFile, for dhowden.
+// blockReader is a ReadSeeker over a blockFile, for dhowden. keep makes its
+// large reads the one the blockFile keeps (big): only when an MP3's probe follows
+// that reads them again, never for a read of the tags alone.
 type blockReader struct {
-	b   *blockFile
-	pos int64
+	b    *blockFile
+	pos  int64
+	keep bool
 }
 
 func (r *blockReader) Read(p []byte) (int, error) {
 	if r.pos >= r.b.size {
 		return 0, io.EOF
 	}
-	n, err := r.b.ReadAt(p, r.pos)
+	n, err := r.b.readAt(p, r.pos, r.keep)
 	r.pos += int64(n)
 	if n > 0 && errors.Is(err, io.EOF) {
 		err = nil

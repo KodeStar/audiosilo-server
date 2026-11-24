@@ -633,16 +633,73 @@ func Load(dataDir string) (cfg *Config, firstRun bool, err error) {
 // Save writes the config to disk with restrictive permissions. A field an
 // AUDIOSILO_* variable set keeps config.yaml's own value: the environment wins at
 // every load anyway, and writing it into the file would make it outlive the
-// variable.
+// variable. Only what differs from the defaults is written (savedYAML).
 func (c *Config) Save() error {
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		return err
 	}
-	out, err := yaml.Marshal(c.asSaved())
+	out, err := c.savedYAML()
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(Path(c.DataDir), out, 0o600)
+}
+
+// savedYAML is asSaved as config.yaml holds it: only the keys whose value
+// differs from Default's, and no section left with none (server#252). A
+// setting left at its default, or set back to it, is read as the default at
+// every load (Load starts from Default), so a later release's default reaches
+// an install instead of the one it first saved staying frozen in its file.
+func (c *Config) savedYAML() ([]byte, error) {
+	var saved, def yaml.Node
+	if err := saved.Encode(c.asSaved()); err != nil {
+		return nil, err
+	}
+	if err := def.Encode(Default(c.DataDir)); err != nil {
+		return nil, err
+	}
+	dropDefaults(&saved, &def)
+	return yaml.Marshal(&saved)
+}
+
+// dropDefaults removes from the mapping n each key whose value is def's for
+// that key, a mapping by its keys, and a mapping left empty by that.
+func dropDefaults(n, def *yaml.Node) {
+	if n.Kind != yaml.MappingNode || def.Kind != yaml.MappingNode {
+		return
+	}
+	defaults := make(map[string]*yaml.Node, len(def.Content)/2)
+	for i := 0; i+1 < len(def.Content); i += 2 {
+		defaults[def.Content[i].Value] = def.Content[i+1]
+	}
+	kept := n.Content[:0]
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		if d := defaults[k.Value]; d != nil {
+			if v.Kind == yaml.MappingNode && d.Kind == yaml.MappingNode {
+				if dropDefaults(v, d); len(v.Content) == 0 {
+					continue
+				}
+			} else if sameYAML(v, d) {
+				continue
+			}
+		}
+		kept = append(kept, k, v)
+	}
+	n.Content = kept
+}
+
+// sameYAML reports whether a and b encode the same value.
+func sameYAML(a, b *yaml.Node) bool {
+	if a.Kind != b.Kind || a.ShortTag() != b.ShortTag() || a.Value != b.Value || len(a.Content) != len(b.Content) {
+		return false
+	}
+	for i := range a.Content {
+		if !sameYAML(a.Content[i], b.Content[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // asSaved is c as Save writes it to config.yaml: the file's own values for the

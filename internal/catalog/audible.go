@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -251,7 +252,7 @@ type rowScanner interface{ Scan(...any) error }
 
 // checkAudibleAccount checks and normalises an account mapping's own fields.
 func checkAudibleAccount(in *AudibleAccountInput) error {
-	in.Label = bridge.CleanText(in.Label, maxAudibleLabel)
+	in.Label = textclean.Line(in.Label, maxAudibleLabel)
 	in.Marketplace = strings.ToLower(strings.TrimSpace(in.Marketplace))
 	switch {
 	case !slices.Contains(AudiblePolicies, in.Policy):
@@ -688,14 +689,14 @@ func checkAudibleTitle(t *AudibleTitleInput) error {
 	if err := checkAudiblePlan(t.Planned); err != nil {
 		return err
 	}
-	t.Title = bridge.CleanText(t.Title, maxAudibleTitle)
-	t.Reason = bridge.CleanText(t.Reason, maxAudibleReason)
+	t.Title = textclean.Line(t.Title, maxAudibleTitle)
+	t.Reason = textclean.Line(t.Reason, maxAudibleReason)
 	authors := make([]string, 0, min(len(t.Authors), maxAudibleNames))
 	for _, a := range t.Authors {
 		if len(authors) == maxAudibleNames {
 			break
 		}
-		if a = bridge.CleanText(a, maxAudibleName); a != "" {
+		if a = textclean.Line(a, maxAudibleName); a != "" {
 			authors = append(authors, a)
 		}
 	}
@@ -705,7 +706,7 @@ func checkAudibleTitle(t *AudibleTitleInput) error {
 		if len(series) == maxAudibleSeries {
 			break
 		}
-		s.Name, s.Position = bridge.CleanText(s.Name, maxAudibleName), bridge.CleanText(s.Position, maxAudiblePosition)
+		s.Name, s.Position = textclean.Line(s.Name, maxAudibleName), textclean.Line(s.Position, maxAudiblePosition)
 		if s.Name != "" {
 			series = append(series, s)
 		}
@@ -748,7 +749,7 @@ func checkAudiblePlan(p *AudiblePlan) error {
 		return audibleInvalid("planned.template must be at most %d bytes", bridge.MaxAudibleTemplate)
 	}
 	if failed {
-		p.Conflict = bridge.CleanText(p.Conflict, maxAudibleReason)
+		p.Conflict = textclean.Line(p.Conflict, maxAudibleReason)
 	} else if !slices.Contains(audiblePlanConflicts, p.Conflict) {
 		return audibleInvalid("planned.conflict must be file, book, audio or empty")
 	}

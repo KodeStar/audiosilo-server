@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // LibriVox L6: adding a LibriVox recording to a books library. The admin picks
@@ -84,7 +85,7 @@ func librivoxFetchSuffix(j NewJob) string {
 // by admin requestedBy. A title is kept to one line of at most
 // maxLibrivoxTitle bytes.
 func LibrivoxFetch(p LibrivoxFetchParams, requestedBy int64) NewJob {
-	p.Title = CleanText(p.Title, maxLibrivoxTitle)
+	p.Title = textclean.Line(p.Title, maxLibrivoxTitle)
 	raw, _ := json.Marshal(p)
 	lib := p.LibraryID
 	return NewJob{Kind: KindLibrivoxFetch, LibraryID: &lib, Params: raw, RequestedBy: requestedBy}

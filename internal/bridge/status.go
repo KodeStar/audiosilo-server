@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // OnlineWindow is how recent the last heartbeat must be for the Bridge to count
@@ -121,7 +122,7 @@ func (e *Estimates) validate() {
 		e.Sidecars = nil
 		return
 	}
-	sc.AgentBackend = cleanText(sc.AgentBackend, maxShortText, false)
+	sc.AgentBackend = textclean.Clean(sc.AgentBackend, maxShortText, false)
 }
 
 // inRange reports whether v is a number from 0 to max (JSON carries no NaN or
@@ -336,9 +337,11 @@ func tooLarge(what string) error { return fmt.Errorf("%w: %w: %s", ErrInvalid, E
 // ErrTooLarge). An estimate out of its bounds is dropped, and so is a setup
 // block that doesn't decode (a setup item it can't keep is left out). Its free text (the version,
 // each mapping's paths and error, the workers, the estimates' backend) is
-// cleaned to printable bounded text instead (cleanText).
+// cleaned to printable bounded text instead (textclean.Clean): it is partly the
+// outside world's (a tool's output, a file's name, an OS error), and a refused
+// heartbeat leaves the Bridge offline.
 func (st *Status) Validate() error {
-	st.Version = cleanText(st.Version, maxShortText, false)
+	st.Version = textclean.Clean(st.Version, maxShortText, false)
 	if len(st.Kinds) > maxKinds {
 		return tooLarge("too many kinds")
 	}
@@ -358,17 +361,17 @@ func (st *Status) Validate() error {
 			return invalid("library %d", l.LibraryID)
 		}
 		seen[l.LibraryID] = true
-		l.MountPath = cleanText(l.MountPath, maxLongText, false)
-		l.CheckedPath = cleanText(l.CheckedPath, maxLongText, false)
-		l.Error = cleanText(l.Error, maxLongText, false)
+		l.MountPath = textclean.Clean(l.MountPath, maxLongText, false)
+		l.CheckedPath = textclean.Clean(l.CheckedPath, maxLongText, false)
+		l.Error = textclean.Clean(l.Error, maxLongText, false)
 	}
 	if len(st.Workers) > maxWorkers {
 		return tooLarge("too many workers")
 	}
 	for i := range st.Workers {
 		w := &st.Workers[i]
-		w.Name, w.Version = cleanText(w.Name, maxShortText, false), cleanText(w.Version, maxShortText, false)
-		w.Platform, w.LastSeen = cleanText(w.Platform, maxShortText, false), cleanText(w.LastSeen, maxShortText, false)
+		w.Name, w.Version = textclean.Clean(w.Name, maxShortText, false), textclean.Clean(w.Version, maxShortText, false)
+		w.Platform, w.LastSeen = textclean.Clean(w.Platform, maxShortText, false), textclean.Clean(w.LastSeen, maxShortText, false)
 	}
 	if st.UIURL != "" {
 		if err := checkText("ui_url", st.UIURL, maxLongText); err != nil {
@@ -402,34 +405,9 @@ func checkText(name, v string, max int) error {
 	return nil
 }
 
-// isControl is a control character (C0 or DEL), which free text never keeps.
+// isControl is a control character (C0 or DEL), which a checked field refuses
+// (checkText; free text is cleaned instead, textclean).
 func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
-
-// cleanText is v as printable bounded text: valid UTF-8 (a broken sequence
-// becomes U+FFFD), each control character a space (but a line break when lines
-// keeps them), at most max bytes, cut at a character's boundary. What the Bridge
-// reports is partly the outside world's (a tool's output, a file's name, an OS
-// error), so its free text is cleaned rather than the whole report refused: a
-// refused job report is retried for ever while its job is re-run, and a refused
-// heartbeat leaves the Bridge offline.
-func cleanText(v string, max int, lines bool) string {
-	v = strings.Map(func(r rune) rune {
-		if isControl(r) && !(lines && r == '\n') {
-			return ' '
-		}
-		return r
-	}, strings.ToValidUTF8(v, "\uFFFD"))
-	if len(v) <= max {
-		return v
-	}
-	cut := max
-	for cut > 0 && !utf8.RuneStart(v[cut]) {
-		cut--
-	}
-	// A copy: the cut text is kept (the cached heartbeat), and a slice of v
-	// would hold all of it, up to a heartbeat's whole body.
-	return strings.Clone(v[:cut])
-}
 
 // ErrNotPaired is a call from a Bridge that is no longer the paired one: its
 // token was revoked (an unpair, or another Bridge paired) after the request was

@@ -84,7 +84,7 @@ func TestUpsertBooksBatches(t *testing.T) {
 			f.c.OnBookChange(func() { heard++ })
 			books := f.books("A", "B", "C")
 			before := f.gen(t)
-			for i, err := range f.c.UpsertBooks(f.ctx, books, tc.budget) {
+			for i, err := range f.c.upsertBooks(f.ctx, books, UpsertBatch, tc.budget) {
 				if err != nil {
 					t.Fatalf("book %d: %v", i, err)
 				}
@@ -104,7 +104,7 @@ func TestUpsertBooksBatches(t *testing.T) {
 				}
 			}
 			// Written again (a re-index), the same rows: the upsert's conflict path.
-			for i, err := range f.c.UpsertBooks(f.ctx, f.books("A", "B", "C"), tc.budget) {
+			for i, err := range f.c.upsertBooks(f.ctx, f.books("A", "B", "C"), UpsertBatch, tc.budget) {
 				if err != nil {
 					t.Fatalf("again, book %d: %v", i, err)
 				}
@@ -129,7 +129,7 @@ func TestUpsertBooksIsolatesAFailingBook(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := f.gen(t)
-	errs := f.c.UpsertBooks(f.ctx, f.books("A", "B", "C"), 0)
+	errs := f.c.upsertBooks(f.ctx, f.books("A", "B", "C"), UpsertBatch, 0)
 	if errs[0] != nil || errs[1] == nil || errs[2] != nil {
 		t.Fatalf("errors = %v, want only B's", errs)
 	}
@@ -158,7 +158,7 @@ func TestUpsertBooksRetriesAFailedTransactionSingly(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := f.gen(t)
-	errs := f.c.UpsertBooks(f.ctx, f.books("A", "B", "C", "D"), 0)
+	errs := f.c.upsertBooks(f.ctx, f.books("A", "B", "C", "D"), UpsertBatch, 0)
 	if errs[0] != nil || errs[1] == nil || errs[2] != nil || errs[3] != nil {
 		t.Fatalf("errors = %v, want only B's", errs)
 	}
@@ -172,5 +172,31 @@ func TestUpsertBooksRetriesAFailedTransactionSingly(t *testing.T) {
 	}
 	if ok, _, _ := f.rows(t, "B"); ok {
 		t.Error("B has a books row")
+	}
+}
+
+// A transaction takes at most its count of books (UpsertBatch in a scan),
+// however fast they are written: five books two a transaction are three.
+func TestUpsertBooksCountBound(t *testing.T) {
+	t.Parallel()
+	f := newUpsertFixture(t)
+	before := f.gen(t)
+	for i, err := range f.c.upsertBooks(f.ctx, f.books("A", "B", "C", "D", "E"), 2, 0) {
+		if err != nil {
+			t.Fatalf("book %d: %v", i, err)
+		}
+	}
+	if moved := f.gen(t) - before; moved != 3 {
+		t.Errorf("content generation moved %d times, want 3 (two, two, one)", moved)
+	}
+	// A count below one still takes a book a transaction, never none for ever.
+	before = f.gen(t)
+	for i, err := range f.c.upsertBooks(f.ctx, f.books("F", "G"), 0, 0) {
+		if err != nil {
+			t.Fatalf("count 0, book %d: %v", i, err)
+		}
+	}
+	if moved := f.gen(t) - before; moved != 2 {
+		t.Errorf("count 0: content generation moved %d times, want 2 (one, one)", moved)
 	}
 }
