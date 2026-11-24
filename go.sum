@@ -16,6 +16,8 @@ github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs
 github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
 github.com/kodestar/audiosilo-meta v0.27.0 h1:F/O5vzsAzBqS694zCy9SOWRDv5IGhcMZSPzSKr/ZxhQ=
 github.com/kodestar/audiosilo-meta v0.27.0/go.mod h1:Fb/SSVbp+xHPn/YF0U437LuNyhFYMTV3g+7QdPhmxuk=
+github.com/kodestar/audiosilo-meta v0.27.1-0.20261124184937-df3a5311999e h1:bz/BrMpr3gBlo7bDMqCYCHr0qzUrxRCcBxhtPJUrPYk=
+github.com/kodestar/audiosilo-meta v0.27.1-0.20261124184937-df3a5311999e/go.mod h1:Fb/SSVbp+xHPn/YF0U437LuNyhFYMTV3g+7QdPhmxuk=
 github.com/mattn/go-isatty v0.0.24 h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=
 github.com/mattn/go-isatty v0.0.24/go.mod h1:nMCL3Zebbrt45jsMDgnfIwz6ydEQApk5oEI3HqDio6A=
 github.com/mattn/go-sqlite3 v1.14.53 h1:mnTM0owzUMrKuLo+0w51NUiB0ir2Fo7kFXlPt/l3BGs=

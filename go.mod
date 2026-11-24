@@ -12,7 +12,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/go-jose/go-jose/v4 v4.1.9
-	github.com/kodestar/audiosilo-meta v0.27.0
+	github.com/kodestar/audiosilo-meta v0.27.1-0.20261124184937-df3a5311999e
 	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.59.0
@@ -36,5 +36,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
-
-replace github.com/kodestar/audiosilo-meta => /Volumes/ADATA_NVME/audiosilo/wt/meta-match-exports
