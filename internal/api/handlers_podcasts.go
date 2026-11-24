@@ -235,7 +235,7 @@ func (a *API) handlePodcastRequestDismiss(w http.ResponseWriter, r *http.Request
 		return
 	}
 	id, ok := pathInt(r, "id")
-	if !ok || id <= 0 || a.bridge == nil {
+	if !ok || a.bridge == nil {
 		writeErrorCode(w, 404, "request_not_found", "Follow request not found.")
 		return
 	}

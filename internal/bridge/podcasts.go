@@ -103,8 +103,10 @@ type SubscribeParams struct {
 	Title string `json:"title,omitempty"`
 }
 
-// MaxSubscribeTitleBytes bounds a subscribe request's Title.
-const MaxSubscribeTitleBytes = 500
+// MaxSubscribeTitleBytes bounds a subscribe request's Title: the same bound
+// as the directory's titles and an OPML outline's (opml.MaxTitleBytes), so a
+// title the player showed comes back whole.
+const MaxSubscribeTitleBytes = 1000
 
 type PollParams struct {
 	ShowID       string `json:"show_id,omitempty"`
@@ -810,18 +812,19 @@ var ErrRequestNotDismissable = errors.New("the follow request has not failed or 
 // ErrRequestNotDismissable for one that may not go (yet). A following import
 // may queue the feed again: the listener let the failure go.
 func (s *Service) DismissSubscribe(ctx context.Context, user, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM bridge_jobs WHERE id=? AND kind='`+KindPodcastSubscribe+`' AND requested_by=? AND state IN ('`+StateFailed+`','`+StateCancelled+`') AND EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=bridge_jobs.id)`, id, user)
+	mine := `j.id=? AND j.kind='` + KindPodcastSubscribe + `' AND j.requested_by=?`
+	res, err := s.db.ExecContext(ctx, `DELETE FROM bridge_jobs AS j WHERE `+mine+` AND j.state IN ('`+StateFailed+`','`+StateCancelled+`') AND NOT `+UnfoldedSQL, id, user)
 	if err != nil {
 		return err
 	}
 	if n, err := res.RowsAffected(); err != nil || n > 0 {
 		return err
 	}
-	var mine bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE id=? AND kind='`+KindPodcastSubscribe+`' AND requested_by=?)`, id, user).Scan(&mine); err != nil {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs j WHERE `+mine+`)`, id, user).Scan(&exists); err != nil {
 		return err
 	}
-	if !mine {
+	if !exists {
 		return ErrNotFound
 	}
 	return ErrRequestNotDismissable
