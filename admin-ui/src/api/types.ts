@@ -3208,6 +3208,11 @@ export interface BridgeEstimate {
   can_describe: boolean;
   has: {
     community: SidecarsCoverage;
+    /**
+     * Every file generated here, one the community's dimension masks included
+     * (`generatedShown` says which show); recaps only with a recap list, never a
+     * summary alone.
+     */
     local: SidecarsCoverage;
     /** The community couldn't be asked right now: `community` is no answer. */
     community_unknown?: boolean;

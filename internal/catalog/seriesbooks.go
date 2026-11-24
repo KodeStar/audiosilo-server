@@ -314,7 +314,8 @@ type SeriesMember struct {
 const maxEarlierInSeries = 200
 
 // EarlierInSeries returns the books of one library before book in its series
-// that have no generated recaps (book_attachments), the nearest
+// that have no generated recaps (book_attachments with no recap list,
+// recapListExpr: a summary alone isn't recaps), the nearest
 // maxEarlierInSeries of them in reading order (position, then a range's end,
 // then path), list shape: the series is book's first numbered one (its main
 // series when that has a position, else the first of its others that does), any
@@ -334,11 +335,11 @@ func (c *Catalog) EarlierInSeries(ctx context.Context, libraryID int64, book *Bo
 		return nil, nil
 	}
 	q, args := numberedSeriesMembers(libraryID, book.RelPath, series.Name, Scope{LibraryID: libraryID, AllowAll: true})
-	// writeAttachments stores '' for a file a book doesn't have. The nearest are
-	// read (newest position first), then put back into reading order.
+	// The nearest are read (newest position first), then put back into reading
+	// order.
 	rows, err := c.db.QueryContext(ctx, `SELECT `+derivedBookCols+`, pos, pos_end FROM (`+q+`) m
 		   LEFT JOIN book_attachments a ON a.book_id = m.id
-		 WHERE pos < ? AND COALESCE(a.recaps, '') = ''
+		 WHERE pos < ? AND NOT `+recapListExpr("a.recaps")+`
 		 ORDER BY pos DESC, pos_end DESC, rel_path DESC LIMIT ?`, append(args, series.Position, maxEarlierInSeries)...)
 	if err != nil {
 		return nil, err

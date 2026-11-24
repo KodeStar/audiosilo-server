@@ -57,7 +57,8 @@ export function GenerateSection({ book }: { book: AdminBook }) {
 
   const has = estimate.data?.has;
   const action = has ? generateAction(has) : undefined;
-  // Files generated here before show nowhere once the community covers both.
+  // Only generated files that show (generatedShown): one the community's dimension
+  // masks shows nowhere, and so does every one once it covers both.
   const generated = action === 'regenerate';
   const jobOpen = job ? isOpen(job.state) : false;
   // The book's chapters being found, or its files being shared with the

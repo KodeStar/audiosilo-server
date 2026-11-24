@@ -534,10 +534,11 @@ func TestEarlierInSeries(t *testing.T) {
 		t.Fatalf("before the first = %v, want none", got)
 	}
 	// A book with generated recaps is left out; generated characters alone
-	// don't count.
+	// don't count, and neither does a whole-book summary with no recap list.
 	if err := c.SetAttachments(ctx, lib.ID, map[string]AttachmentsReading{
 		"omnibus": {Sig: "r", Files: metadata.AttachmentFiles{Recaps: &model.Recaps{Recaps: []model.Recap{{Text: "So far."}}}}},
 		"cw2":     {Sig: "c", Files: metadata.AttachmentFiles{Characters: &model.Characters{Characters: []model.Character{{ID: "v", Name: "Vimes"}}}}},
+		"gg":      {Sig: "s", Files: metadata.AttachmentFiles{Recaps: &model.Recaps{InShort: "Guards."}}},
 	}); err != nil {
 		t.Fatal(err)
 	}
