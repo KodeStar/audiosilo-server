@@ -381,7 +381,7 @@ func (m *FileCache) begin(runCtx context.Context, ffmpegPath, key, root, abs str
 	if f, ok := m.hit(key); ok {
 		return f, nil, nil
 	}
-	if left := m.refusalLeftLocked(key); left > 0 {
+	if left := m.failed.Left(key, m.now()); left > 0 {
 		return nil, nil, refusal{left}
 	}
 	fl, waiting := m.inflight[key]
@@ -449,7 +449,7 @@ func (m *FileCache) StatusOf(abs string, info os.FileInfo) (state CacheState, si
 	// place before it leaves inflight), so the cache file is stat'ed once,
 	// outside the lock.
 	m.mu.Lock()
-	left := m.refusalLeftLocked(key)
+	left := m.failed.Left(key, m.now())
 	_, running := m.inflight[key]
 	m.mu.Unlock()
 	switch {
@@ -525,11 +525,14 @@ func (m *FileCache) WarmAll(runCtx context.Context, ffmpegPath, root string, pat
 			// Looked at under a look's time first: a share that stopped
 			// answering holds no warm (nor its slot) for good, and the rest of
 			// the book, on the same share, waits for the stream that asks.
-			if _, err := Source(runCtx, root, abs, sourceWait); metadata.GaveUp(err) {
+			info, err := Source(runCtx, root, abs, sourceWait)
+			if metadata.GaveUp(err) {
 				return
 			}
-			if st, _, _ := m.Status(root, abs); st == CacheReady {
-				continue
+			if err == nil {
+				if st, _, _ := m.StatusOf(abs, info); st == CacheReady {
+					continue
+				}
 			}
 			if f, _, err := m.Open(runCtx, runCtx, ffmpegPath, root, abs); err == nil {
 				f.Close()
@@ -570,12 +573,6 @@ func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, root, abs stri
 	close(fl.done)
 }
 
-// refusalLeftLocked is how long key's remembered refusal has left, 0 for
-// none. The caller holds mu.
-func (m *FileCache) refusalLeftLocked(key string) time.Duration {
-	return m.failed.Left(key, m.now())
-}
-
 // RefusedFor is how long the remembered refusal of abs's current file has
 // left (its copy is tried again once it expires, or as soon as the file
 // changes), 0 when there is none: the hint a client is given to ask again
@@ -588,7 +585,7 @@ func (m *FileCache) RefusedFor(root, abs string) time.Duration {
 	key := m.key(abs, info)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.refusalLeftLocked(key)
+	return m.failed.Left(key, m.now())
 }
 
 // make writes key's copy: a temporary .part file, synced and renamed into
