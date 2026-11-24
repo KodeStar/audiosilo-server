@@ -938,6 +938,15 @@ func TestSubscribeTitle(t *testing.T) {
 	if err := json.Unmarshal(j.Params, &p); err != nil || p.Title != "The Show" {
 		t.Fatalf("title %q %v", p.Title, err)
 	}
+	// A title naming the show by its address is redacted as the feed's label.
+	byURL, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/by-url.xml", Title: "Feed https://example.com/feeds/abc123/rss"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var byURLParams SubscribeParams
+	if err := json.Unmarshal(byURL.Params, &byURLParams); err != nil || byURLParams.Title != "Feed https://example.com/..." {
+		t.Fatalf("title by URL %q %v", byURLParams.Title, err)
+	}
 	priv, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/private?auth=SECRET123", Private: true, Title: "Members"})
 	if err != nil || strings.Contains(string(priv.Params), "Members") {
 		t.Fatalf("private %s %v", priv.Params, err)

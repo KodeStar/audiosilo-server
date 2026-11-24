@@ -97,9 +97,10 @@ type SubscribeParams struct {
 	Private       bool   `json:"private"`
 	ShowPath      string `json:"show_path"`
 	// Title is the show's name as the follower's list or directory gave it
-	// (textclean.Line, at most MaxSubscribeTitleBytes): the request row's
-	// label until the show is added. Never for a private feed. Additive: a
-	// Bridge reads the params leniently and ignores it.
+	// (textclean.Line, at most MaxSubscribeTitleBytes, any URL in it redacted
+	// as a request's feed label is): the request row's label until the show
+	// is added. Never for a private feed. Additive: a Bridge reads the params
+	// leniently and ignores it.
 	Title string `json:"title,omitempty"`
 }
 
@@ -242,8 +243,9 @@ type SubscribeRequest struct {
 	FeedURL   string // normalized (feed.NormalizeFeedURL)
 	Private   bool
 	ShowPath  string // a known show this repairs, "" for a new one
-	// Title labels a new request (SubscribeParams.Title): cleaned here, and
-	// dropped for a private feed. An adopted request keeps its own.
+	// Title labels a new request (SubscribeParams.Title): cleaned and its URLs
+	// redacted here, and dropped for a private feed. An adopted request keeps
+	// its own.
 	Title string
 	// AdoptOnly answers the open request for this feed and user (created
 	// false), or ErrNoNewRequest: nothing new is queued.
@@ -268,7 +270,9 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 	}
 	p := SubscribeParams{FeedURL: norm, FeedURLSHA256: feed.FeedURLHash(norm), FeedHost: u.Hostname(), Private: private, ShowPath: show}
 	if !private {
-		p.Title = textclean.Line(r.Title, MaxSubscribeTitleBytes)
+		// A list that names a show by its address (an outline whose text is
+		// the feed URL) labels it as the request's feed is: redacted.
+		p.Title = textclean.Line(redactPodcastText(r.Title), MaxSubscribeTitleBytes)
 	}
 	if show != "" {
 		// A show pruned since the caller found it has no identity left to bind:

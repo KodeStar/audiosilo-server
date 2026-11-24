@@ -4445,8 +4445,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   outline's title (`opml.Candidate.Title`: its `title` attribute, else `text`, `textclean.Line` to
   `opml.MaxTitleBytes`) labels the request it queues, and a follow by URL may send an optional `title`
   (400 beside a `path`; the player sends a directory result's). Either goes into the subscribe's params
-  (`SubscribeParams.Title`, cleaned to `MaxSubscribeTitleBytes`, the params check refusing any other
-  spelling) for a public feed only, never a private one's, and the request row (`/me/podcasts`, the 202)
+  (`SubscribeParams.Title`: any URL in it redacted as the feed's label is, then cleaned to
+  `MaxSubscribeTitleBytes`, the params check refusing a title not so cleaned) for a public feed only, never a private one's, and the request row (`/me/podcasts`, the 202)
   answers it as `title` (null when none). `DELETE /podcasts/requests/{id}` (`requireAuth` + `notDemo` + the
   client gate, not the module's; capability `podcast_request_dismiss`, always true) removes the caller's
   own request once it failed or was cancelled AND its fold landed, or it ended before `PollFoldWindow`
