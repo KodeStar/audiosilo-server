@@ -21,6 +21,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/diskspace"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/ttlset"
 )
 
 // The bounds every file cache shares: the free space a run must leave on the
@@ -121,8 +122,9 @@ type FileCache struct {
 
 	mu       sync.Mutex
 	inflight map[string]*cacheFlight
-	// failed holds the remembered refusals, each until when (cacheRefusalTTL).
-	failed map[string]time.Time
+	// failed holds the remembered refusals by key, each for cacheRefusalTTL,
+	// at most cacheFailedMax.
+	failed *ttlset.Set[string]
 	// evictMu serializes the sweeps; lowDisk is set while the disk guard is
 	// refusing, so it warns once per spell.
 	evictMu sync.Mutex
@@ -164,7 +166,7 @@ func newFileCache(dir string, spec cacheSpec, log *slog.Logger) (*FileCache, err
 		inflight:  map[string]*cacheFlight{},
 		now:       time.Now,
 		openWait:  sourceWait,
-		failed:    map[string]time.Time{},
+		failed:    ttlset.New[string](cacheRefusalTTL, cacheFailedMax),
 		reserved:  new(atomic.Int64),
 		warming:   map[string]struct{}{},
 		warmSlot:  make(chan struct{}, 1),
@@ -560,7 +562,7 @@ func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, root, abs stri
 	// ffmpeg's refusal of the file, never a source that could not be opened
 	// (openFault): the next look at that one answers for itself.
 	if errors.Is(err, ErrRefused) && !errors.Is(err, ErrNoSource) {
-		m.rememberLocked(key)
+		m.failed.Add(key, m.now())
 	}
 	delete(m.inflight, key)
 	fl.err = err
@@ -569,18 +571,9 @@ func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, root, abs stri
 }
 
 // refusalLeftLocked is how long key's remembered refusal has left, 0 for
-// none, forgetting an expired one. The caller holds mu.
+// none. The caller holds mu.
 func (m *FileCache) refusalLeftLocked(key string) time.Duration {
-	until, ok := m.failed[key]
-	if !ok {
-		return 0
-	}
-	left := until.Sub(m.now())
-	if left <= 0 {
-		delete(m.failed, key)
-		return 0
-	}
-	return left
+	return m.failed.Left(key, m.now())
 }
 
 // RefusedFor is how long the remembered refusal of abs's current file has
@@ -596,27 +589,6 @@ func (m *FileCache) RefusedFor(root, abs string) time.Duration {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.refusalLeftLocked(key)
-}
-
-// rememberLocked remembers key's refusal for cacheRefusalTTL, the map bounded
-// by cacheFailedMax (expired entries go first, else an arbitrary one). The
-// caller holds mu.
-func (m *FileCache) rememberLocked(key string) {
-	now := m.now()
-	if len(m.failed) >= cacheFailedMax {
-		for k, until := range m.failed {
-			if !now.Before(until) {
-				delete(m.failed, k)
-			}
-		}
-		if len(m.failed) >= cacheFailedMax {
-			for k := range m.failed { // drop one: the map stays bounded
-				delete(m.failed, k)
-				break
-			}
-		}
-	}
-	m.failed[key] = now.Add(cacheRefusalTTL)
 }
 
 // make writes key's copy: a temporary .part file, synced and renamed into

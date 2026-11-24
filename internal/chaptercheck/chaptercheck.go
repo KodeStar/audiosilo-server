@@ -91,6 +91,8 @@ type Runner struct {
 	mu   sync.Mutex
 	busy map[catalog.Ref]bool // books being checked now
 	// failed are the books the background's checks last failed for, and when.
+	// Not a ttlset: the book page reads it (Failed) past retryAfter, until a
+	// pass forgets it, since the check it shows is then the one before.
 	failed map[catalog.Ref]time.Time
 	wg     sync.WaitGroup // Start's checks
 }

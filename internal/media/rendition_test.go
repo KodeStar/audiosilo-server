@@ -745,21 +745,20 @@ func TestRefusalExpires(t *testing.T) {
 		}
 	}
 
-	// The bound: full of expired refusals, a new one evicts them, not live ones.
+	// The set is the bounded one (ttlset, its own tests): a refusal is
+	// remembered for cacheRefusalTTL, at most cacheFailedMax.
 	m, err := NewRenditionCache(filepath.Join(t.TempDir(), "bound"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := time.Now()
-	m.now = func() time.Time { return clock }
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for i := range cacheFailedMax - 1 {
-		m.failed["old"+strconv.Itoa(i)] = clock.Add(-time.Second)
+	now := time.Now()
+	for i := range cacheFailedMax + 1 {
+		m.failed.Add(strconv.Itoa(i), now)
 	}
-	m.failed["live"] = clock.Add(time.Minute)
-	m.rememberLocked("new")
-	if len(m.failed) != 2 || m.refusalLeftLocked("live") <= 0 || m.refusalLeftLocked("new") <= 0 {
-		t.Fatalf("after the sweep: %d remembered, want live and new", len(m.failed))
+	if n := m.failed.Len(); n != cacheFailedMax {
+		t.Fatalf("%d refusals remembered, want at most %d", n, cacheFailedMax)
+	}
+	if left := m.failed.Left(strconv.Itoa(cacheFailedMax), now); left != cacheRefusalTTL {
+		t.Fatalf("the newest refusal has %v left, want %v", left, cacheRefusalTTL)
 	}
 }

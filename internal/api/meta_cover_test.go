@@ -368,7 +368,10 @@ func TestCommunityThumbnailAbandonedLeader(t *testing.T) {
 		t.Fatalf("fetched %d times, want 2 (the abandoned one, then the waiter's)", n)
 	}
 	e.api.community.mu.Lock()
-	failed := len(e.api.community.failed)
+	failed := 0
+	if e.api.community.failed != nil {
+		failed = e.api.community.failed.Len()
+	}
 	e.api.community.mu.Unlock()
 	if failed != 0 {
 		t.Fatalf("an abandoned fetch was remembered as failed (%d)", failed)

@@ -141,6 +141,7 @@ internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) whe
 internal/metamirror/  metadata mirror mode: the runner keeping a local copy of the community metadata database in <data>/meta-mirror/ (audiosilo-meta's pkg/release download, pkg/query handler over it; see "Mirror mode" below)
 internal/mirrortest/  mirror-mode test support (tests only): the data releases published on audiosilo-meta's releasetest GitHub fake (querytest's artifact, a schema_version rewrite, a realistic release list), a remote metadata service that counts and answers 500 (Remote)
 internal/textclean/   free text the server keeps or shows but did not write (Bridge reports, Audible titles, podcast directory and OPML titles): Clean / Line, cleaned and bounded rather than refused (a path or id is checked, never cleaned); FirstNonEmpty
+internal/ttlset/      Set: a bounded set of keys each remembered for a while, guarded by its owner's lock (FileCache's refused files, the community covers' failed URLs)
 internal/testwait/    test support (tests only): Scaled, a test's wait for this build (four times as long under -race), Eventually (a condition polled up to a Scaled deadline), and Race; see "Every feature ships with a test" in CONVENTIONS.md
 internal/diskspace/   a filesystem's size and free space per OS (statfs / GetDiskFreeSpaceEx): Health > System's roots and the mirror's disk guard
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
