@@ -145,27 +145,12 @@ var readalongLstat = metadata.LstatBelow
 // metadata.MaxReadalongFile bytes). ErrNoReadalong when there is none to serve;
 // any other error is one reading it right now.
 func ReadReadalongMap(lib catalog.Library, bookPath string, folder bool) ([]byte, fs.FileInfo, error) {
-	b := &catalog.Book{RelPath: bookPath, IsFolder: folder}
-	dir, prefix := attachmentsPlace(b)
-	full, err := ContentJoin(lib.Root, dir)
-	if metadata.GaveUp(err) {
-		return nil, nil, err // the join's look a share failed: not known, never no map
-	}
+	file, err := readalongMapFile(lib, bookPath, folder)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", ErrNoReadalong, err)
-	}
-	attDir := filepath.Join(full, metadata.AttachmentsDir)
-	info, err := readalongLstat(lib.Root, attDir)
-	switch {
-	case err == nil && !isAttachmentsDir(fs.FileInfoToDirEntry(info), path.Join(dir, metadata.AttachmentsDir), ParseIgnore(lib.IgnorePatterns)):
-		return nil, nil, ErrNoReadalong
-	case err != nil && absentOK(err) == nil:
-		return nil, nil, ErrNoReadalong
-	case err != nil:
 		return nil, nil, err
 	}
 	// metadata reads a map the Bridge renamed in mid-read once more.
-	data, fi, err := metadata.ReadReadalongFile(lib.Root, filepath.Join(attDir, prefix+metadata.AttachmentReadalong))
+	data, fi, err := metadata.ReadReadalongFile(lib.Root, file)
 	switch {
 	case err == nil:
 		return data, fi, nil
@@ -173,4 +158,48 @@ func ReadReadalongMap(lib catalog.Library, bookPath string, folder bool) ([]byte
 		return nil, nil, fmt.Errorf("%w: %w", ErrNoReadalong, err)
 	}
 	return nil, nil, err
+}
+
+// StatReadalongMap is ReadReadalongMap's file looked at, not read: its info
+// (never through a link), for a revalidation the index can answer
+// (metadata.AttachmentSignature of it in the book's attachments signature).
+// ErrNoReadalong when there is none, or it isn't a regular file.
+func StatReadalongMap(lib catalog.Library, bookPath string, folder bool) (fs.FileInfo, error) {
+	file, err := readalongMapFile(lib, bookPath, folder)
+	if err != nil {
+		return nil, err
+	}
+	info, err := metadata.LstatBelow(lib.Root, file)
+	switch {
+	case err == nil && info.Mode().IsRegular():
+		return info, nil
+	case err == nil, absentOK(err) == nil:
+		return nil, ErrNoReadalong
+	}
+	return nil, err
+}
+
+// readalongMapFile is where the read-along map of the book at bookPath is
+// (ReadReadalongMap's placement rules), its .audiosilo folder checked.
+func readalongMapFile(lib catalog.Library, bookPath string, folder bool) (string, error) {
+	b := &catalog.Book{RelPath: bookPath, IsFolder: folder}
+	dir, prefix := attachmentsPlace(b)
+	full, err := ContentJoin(lib.Root, dir)
+	if metadata.GaveUp(err) {
+		return "", err // the join's look a share failed: not known, never no map
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrNoReadalong, err)
+	}
+	attDir := filepath.Join(full, metadata.AttachmentsDir)
+	info, err := readalongLstat(lib.Root, attDir)
+	switch {
+	case err == nil && !isAttachmentsDir(fs.FileInfoToDirEntry(info), path.Join(dir, metadata.AttachmentsDir), ParseIgnore(lib.IgnorePatterns)):
+		return "", ErrNoReadalong
+	case err != nil && absentOK(err) == nil:
+		return "", ErrNoReadalong
+	case err != nil:
+		return "", err
+	}
+	return filepath.Join(attDir, prefix+metadata.AttachmentReadalong), nil
 }

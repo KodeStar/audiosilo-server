@@ -751,7 +751,7 @@ func (a *API) handleEndKeys(w http.ResponseWriter, r *http.Request) {
 
 // adminLibrary is a library as the admin console lists it: the stored fields
 // plus its indexed book count, whether its root folder is reachable right now
-// (see library.Scanner.RootAvailable) and its scan progress, so one poll of the
+// (see library.Scanner.RootsAvailable) and its scan progress, so one poll of the
 // list shows every library's state.
 type adminLibrary struct {
 	catalog.Library

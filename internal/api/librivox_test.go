@@ -214,6 +214,7 @@ func TestLibrivoxFetchNotifications(t *testing.T) {
 	ctx := context.Background()
 	events := func(kind string) []catalog.ServerEvent {
 		t.Helper()
+		b.notify.Flush() // events are recorded in the background
 		evs, _, err := b.cat.ListServerEvents(ctx, 0, 20, kind)
 		if err != nil {
 			t.Fatal(err)

@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -32,9 +34,10 @@ const (
 // handleReadalong serves the read-along map of the book at ?path= (exactly the
 // book's own path): the file's bytes as JSON, gzipped for a client that accepts
 // it (gzipAccepted: never for a Range request), with an ETag of its size and
-// mtime, its own for the gzip answer (304 on a match). It is header-auth
-// only (requireAuth: a session or an API key, never ?token=), scoped like
-// /ebook. Before sending it re-reads the file and checks it against the index
+// mtime, its own for the gzip answer (304 on a match; for a map the index has
+// read and still vouches for, without reading the file: readalongUnchanged).
+// It is header-auth only (requireAuth: a session or an API key, never
+// ?token=), scoped like /ebook. Before sending it re-reads the file and checks it against the index
 // now (never trusting the indexed head for the bytes it sends): a map whose
 // head fails its checks, a book with no ebook or no map, a part's path or a
 // podcast library is 404 no_readalong; a map made from another ebook or other
@@ -63,12 +66,16 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusNotFound, codeNoReadalong, msgNoReadalong)
 		return
 	}
+	wantGzip := gzipAccepted(r)
+	if a.readalongUnchanged(w, r, lib, book, wantGzip) {
+		return
+	}
 	type readalongMap struct {
 		data []byte
 		info fs.FileInfo
 	}
 	m, err := metadata.Bounded(r.Context(), filepath.Join(lib.Root, filepath.FromSlash(book.RelPath)), a.fileWait, func() (readalongMap, error) {
-		data, info, err := library.ReadReadalongMap(*lib, book.RelPath, book.IsFolder)
+		data, info, err := a.readalongRead(*lib, book.RelPath, book.IsFolder)
 		return readalongMap{data, info}, err
 	}, nil)
 	data, info := m.data, m.info
@@ -114,17 +121,7 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Add("Vary", "Accept-Encoding")
-	// The gzip answer is another representation, so it has an ETag of its own
-	// ("-gz", as spa.Files' are; server#265): a cache never pairs one with the
-	// other's bytes. It is chosen by the request, before any gzipping, so a 304
-	// costs none; a map gzip can't shrink goes out plain under it, which is
-	// still the one answer that ETag ever names.
-	wantGzip := gzipAccepted(r)
-	etag := fileETag(info)
-	if wantGzip {
-		etag = etag[:len(etag)-1] + `-gz"`
-	}
-	c := conditional{etag: etag, cacheControl: readalongCache}
+	c := conditional{etag: readalongETag(info, wantGzip), cacheControl: readalongCache}
 	if c.notModified(w, r) {
 		return
 	}
@@ -143,6 +140,75 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(body)
 	}
+}
+
+// readalongUnchanged answers a revalidation of an unchanged, still current map
+// with a 304 without reading it (server#265), and reports whether it did: when
+// r's If-None-Match names the map's ETag as the file is now, the index's head
+// was read from that very file (its signature in the book's attachments
+// signature) and that head still holds against the ebook (its digest, read
+// from the index while the file is unchanged) and the audio. Anything else
+// (no If-None-Match, a changed map, one the index hasn't read, a look that
+// failed) is left to the full answer, which reads and checks the file itself;
+// but a look at the map or the ebook given up on (fileWait: a share that
+// stopped answering), or failing as a share does that a retry may get past, is
+// answered 503 share_not_answering here, as the full answer's read of the same
+// files would only wait it out a second time.
+func (a *API) readalongUnchanged(w http.ResponseWriter, r *http.Request, lib *catalog.Library, book *catalog.Book, gzip bool) bool {
+	inm := r.Header.Get("If-None-Match")
+	if inm == "" {
+		return false
+	}
+	// The index first: a book it holds no head for touches no share.
+	ctx := r.Context()
+	idx, err := a.cat.BookReadalongAt(ctx, lib.ID, book.RelPath)
+	if err != nil || idx.Head == nil {
+		return false
+	}
+	info, err := metadata.LookBounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(book.RelPath)), a.fileWait, func() (fs.FileInfo, error) {
+		return library.StatReadalongMap(*lib, book.RelPath, book.IsFolder)
+	})
+	if metadata.GaveUp(err) || metadata.TransientFault(err) {
+		writeShareNotAnswering(w)
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	c := conditional{etag: readalongETag(info, gzip), cacheControl: readalongCache}
+	if !spa.ETagListMatches(inm, c.etag) ||
+		!slices.Contains(strings.Split(idx.AttachmentsSig, ","), metadata.AttachmentSignature(metadata.AttachmentReadalong, info)) {
+		return false
+	}
+	digest, err := a.scanner.EbookDigestNow(ctx, *lib, idx, book.RelPath, book.Ebook.Path, book.IsFolder, a.fileWait)
+	switch {
+	case metadata.GaveUp(err) || metadata.TransientFault(err):
+		// The full answer would wait on the same ebook again for its 503.
+		writeShareNotAnswering(w)
+		return true
+	case err != nil:
+		return false
+	}
+	files := catalog.BookAudioFiles(book.RelPath, book.IsFolder, book.Duration, book.Files)
+	if catalog.ReadalongState(idx.Head, digest, files).State != catalog.ReadalongReady {
+		return false
+	}
+	w.Header().Add("Vary", "Accept-Encoding")
+	return c.notModified(w, r)
+}
+
+// readalongETag is the map's ETag as the file info has it. The gzip answer is
+// another representation, so it has an ETag of its own ("-gz", as spa.Files'
+// are; server#265): a cache never pairs one with the other's bytes. It is
+// chosen by the request, before any gzipping, so a 304 costs none; a map gzip
+// can't shrink goes out plain under it, which is still the one answer that
+// ETag ever names.
+func readalongETag(info fs.FileInfo, gzip bool) string {
+	etag := fileETag(info)
+	if gzip {
+		etag = etag[:len(etag)-1] + `-gz"`
+	}
+	return etag
 }
 
 // readalongCache is a map's Cache-Control: the Bridge may rewrite it at any

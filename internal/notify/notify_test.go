@@ -140,7 +140,8 @@ func (f *fakeDest) count() int {
 	return len(f.got)
 }
 
-// newTestService is a service over cat, not yet running.
+// newTestService is a service over cat, not yet running. It records events in
+// the background: a test reads the feed after Flush.
 func newTestService(cat *catalog.Catalog) *Service {
 	return New(cat, "1.2.3", func() Server { return Server{Name: "Hearthside", PublicURL: "https://books.example.com"} },
 		slog.New(slog.DiscardHandler))
@@ -152,6 +153,7 @@ func newService(t *testing.T) (*Service, *catalog.Catalog, context.Context) {
 	t.Cleanup(cancel)
 	cat := catalog.New(storetest.Open(t), time.Now)
 	s := newTestService(cat)
+	t.Cleanup(s.Close) // the events still queued are recorded before the database closes
 	s.delays = []time.Duration{time.Millisecond, time.Millisecond}
 	s.Run(ctx)
 	return s, cat, ctx
@@ -208,6 +210,7 @@ func TestWebhookDelivery(t *testing.T) {
 	// The outcome is recorded on the destination.
 	waitRecorded(t, cat, 1)
 	// The event is in the feed either way.
+	s.Flush()
 	events, _, err := cat.ListServerEvents(ctx, 0, 10, "")
 	if err != nil || len(events) != 1 || events[0].Kind != KindNewDevice {
 		t.Fatalf("feed = %+v, %v", events, err)
@@ -243,6 +246,7 @@ func TestNtfyAndDiscordBodies(t *testing.T) {
 		t.Fatalf("ntfy body = %v", got.body)
 	}
 
+	s.Flush()
 	events, _, _ := cat.ListServerEvents(ctx, 0, 1, "")
 	m := compose(events[0], s.server())
 	b, _ := json.Marshal(discordBody(m, s.server()))
@@ -308,6 +312,7 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 	s.UpdateFound(ctx, "v2.0.0", "Two", "https://github.com/KodeStar/audiosilo-server/releases/v2.0.0")
 	s.UpdateFound(ctx, "v2.0.0", "Two", "https://github.com/KodeStar/audiosilo-server/releases/v2.0.0")
 	s.UpdateFound(ctx, "v2.0.1", "Two.1", "https://github.com/KodeStar/audiosilo-server/releases/v2.0.1")
+	s.Flush()
 	if events, _, _ := cat.ListServerEvents(ctx, 0, 10, ""); len(events) != 2 {
 		t.Fatalf("update events = %d, want one per version", len(events))
 	}
@@ -327,6 +332,7 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 		s.ScanFinished(ctx, library.RunReport{Library: *lib, RunID: id, Status: status})
 	}
 	count := func() int {
+		s.Flush()
 		events, _, _ := cat.ListServerEvents(ctx, 0, 50, "")
 		n := 0
 		for _, e := range events {
@@ -354,32 +360,40 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 
 // TestConcurrentEmitsDedupOnce (server#408): emits of one kind and dedup key
 // at the same moment (two callbacks for one waiting sign-in) announce it
-// once; another key is still announced.
+// once; another key is still announced. Queued (one goroutine records them)
+// and once closed, where each records on its caller's goroutine, at once
+// (dedupMu).
 func TestConcurrentEmitsDedupOnce(t *testing.T) {
-	s, cat, ctx := newService(t)
-	const n = 16
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			key := "pending:1"
-			if i == 0 {
-				key = "pending:2"
+	for _, closed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("closed=%v", closed), func(t *testing.T) {
+			s, cat, ctx := newService(t)
+			if closed {
+				s.Close()
 			}
-			s.Emit(ctx, Event{Kind: KindOIDCPending, Data: map[string]any{"provider": "Keycloak"}, Dedup: key})
-		}()
-	}
-	close(start)
-	wg.Wait()
-	events, _, err := cat.ListServerEvents(ctx, 0, 50, KindOIDCPending)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 2 {
-		t.Fatalf("%d events for two keys emitted %d times at once, want 2", len(events), n)
+			const n = 16
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			for i := range n {
+				wg.Go(func() {
+					<-start
+					key := "pending:1"
+					if i == 0 {
+						key = "pending:2"
+					}
+					s.Emit(ctx, Event{Kind: KindOIDCPending, Data: map[string]any{"provider": "Keycloak"}, Dedup: key})
+				})
+			}
+			close(start)
+			wg.Wait()
+			s.Flush()
+			events, _, err := cat.ListServerEvents(ctx, 0, 50, KindOIDCPending)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 2 {
+				t.Fatalf("%d events for two keys emitted %d times at once, want 2", len(events), n)
+			}
+		})
 	}
 }
 
@@ -424,6 +438,7 @@ func TestBridgeJobEnded(t *testing.T) {
 			t.Errorf("no %s titled %q in %v", kind, title, titles)
 		}
 	}
+	s.Flush()
 	events, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
 	var parked catalog.ServerEvent
 	for _, ev := range events {
@@ -445,6 +460,7 @@ func TestBridgeJobEnded(t *testing.T) {
 	s.BridgeJobEnded(ctx, BridgeJob{ID: 10, Kind: "sidecars.generate", State: "failed", Library: "Fiction", LibraryID: 1,
 		Path: "Author/Stale", Code: "budget_exceeded", Error: "gave up"})
 	dest.wait(t, 4)
+	s.Flush()
 	events, _, _ = cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
 	for _, ev := range events {
 		if ev.Data["path"] != "Author/Stale" {
@@ -501,6 +517,7 @@ func TestBridgeParkReasonsMatchConsole(t *testing.T) {
 func TestSignedInDeviceIsOneLine(t *testing.T) {
 	s, cat, ctx := newService(t)
 	s.SignedIn(ctx, "sam", "Phone\n@everyone\x00"+strings.Repeat("x", 200), "", true)
+	s.Flush()
 	events, _, _ := cat.ListServerEvents(ctx, 0, 10, "")
 	if len(events) != 2 || events[0].Kind != KindInviteRedeemed || events[1].Kind != KindNewDevice {
 		t.Fatalf("events = %+v", events)
@@ -539,6 +556,7 @@ func TestScanFailureDetailStaysHome(t *testing.T) {
 	if strings.Contains(string(got.raw), "/mnt/private") {
 		t.Fatalf("the detail left the server: %s", got.raw)
 	}
+	s.Flush()
 	events, _, _ := cat.ListServerEvents(ctx, 0, 1, "")
 	if events[0].Data["detail"] != "open /mnt/private/fiction: permission denied" {
 		t.Fatalf("the feed lost the detail: %v", events[0].Data)
@@ -700,6 +718,7 @@ func TestBridgeReadalongJobWording(t *testing.T) {
 		Path: "Nordon/Loyalists", Title: "Loyalists", Coverage: &cov})
 	s.BridgeJobEnded(ctx, BridgeJob{ID: 2, Kind: "readalong.align", State: "failed", Library: "Fiction", LibraryID: 1,
 		Path: "Nordon/Loyalists", Title: "Loyalists", Coverage: &cov, Error: "the ebook and the narration don't match: 31% lined up"})
+	s.Flush()
 	done, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFinished)
 	if len(done) != 1 || done[0].Data["coverage"] != 0.996 {
 		t.Fatalf("finished events = %+v", done)
@@ -708,6 +727,7 @@ func TestBridgeReadalongJobWording(t *testing.T) {
 		m.Text != "It is saved with the book. Open the book in a compatible AudioSilo player to follow the text with the narration." {
 		t.Errorf("finished = %+v", m)
 	}
+	s.Flush()
 	failed, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
 	if len(failed) != 1 || failed[0].Data["coverage"] != nil {
 		t.Fatalf("failed events = %+v", failed)
@@ -741,6 +761,7 @@ func TestBridgeLibrivoxJobWording(t *testing.T) {
 	}
 	s.BridgeJobEnded(ctx, BridgeJob{ID: 9, Kind: bridge.KindLibrivoxFetch, State: bridge.StateFailed,
 		Library: "Classics", LibraryID: 1, Title: "Johnny Crow's Garden", LibrivoxMatch: catalog.LibrivoxUnmatched})
+	s.Flush()
 	done, _, err := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFinished)
 	if err != nil || len(done) != 4 {
 		t.Fatalf("finished events = %+v, %v", done, err)
@@ -762,6 +783,7 @@ func TestBridgeLibrivoxJobWording(t *testing.T) {
 			t.Errorf("%v: color %v tags %v, want a warning %v", ev.Data["librivox_match"], m.Color, m.Tags, warn)
 		}
 	}
+	s.Flush()
 	failed, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
 	if len(failed) != 1 || failed[0].Data["librivox_match"] != nil {
 		t.Fatalf("failed events = %+v", failed)
@@ -781,6 +803,7 @@ func TestBooksReleased(t *testing.T) {
 	s.BooksReleased(ctx, 7, titles, "released:abc")
 	s.BooksReleased(ctx, 7, titles, "released:abc") // the same run's releases: said once
 	s.BooksReleased(ctx, 0, nil, "released:none")   // nothing new: no event
+	s.Flush()
 	events, _, err := cat.ListServerEvents(ctx, 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
@@ -810,6 +833,8 @@ func TestBackupFailedNamesTheOwnerProblem(t *testing.T) {
 	detail := "the server can't write to /backups: permission denied. The server runs as user 1000:1000 and the folder belongs to 1026:100. Set PUID=1026 and PGID=100 (the folder's owner) on the container, or give user 1000:1000 read and write access to the folder."
 	s.BackupFailed(ctx, "scheduled", "permission_denied", detail)
 	s.BackupFailed(ctx, "manual", "disk_full", "")
+	// No Flush: BackupFailed returns once its event is recorded (the console
+	// reads the feed as soon as it sees the backup's run end).
 	events, _, err := cat.ListServerEvents(ctx, 0, 10, "")
 	if err != nil || len(events) != 2 {
 		t.Fatalf("events = %v, %v", events, err)
@@ -841,6 +866,7 @@ func TestPodcastNoticeWording(t *testing.T) {
 		t.Helper()
 		kind, data, dedup := PodcastEvent(n)
 		s.Emit(ctx, Event{Kind: kind, Data: data, Dedup: dedup})
+		s.Flush()
 		events, _, err := cat.ListServerEvents(ctx, 0, 1, "")
 		if err != nil || len(events) == 0 {
 			t.Fatalf("no event: %v", err)
@@ -882,6 +908,7 @@ func TestPodcastNoticeWording(t *testing.T) {
 			t.Fatalf("failing %s = %+v", c.code, m)
 		}
 	}
+	s.Flush()
 	events, _, _ := cat.ListServerEvents(ctx, 0, 1, KindPodcastFeedFailing)
 	if len(events) != 1 || events[0].Data["code"] != "failed" {
 		t.Fatalf("an unknown code is carried as %+v", events)
@@ -952,6 +979,7 @@ func TestPodcastScanRaisesNoBookAdded(t *testing.T) {
 			Counts: catalog.ScanCounts{Added: 3}, AddedTitles: []string{"Ep"},
 		})
 	}
+	s.Flush()
 	events, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBookAdded)
 	if len(events) != 1 || events[0].Data["library"] != catalog.KindBooks {
 		t.Fatalf("book_added = %+v, want the books library's only", events)
@@ -1012,6 +1040,7 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	s.Flush()
 	events, _, err := cat.ListServerEvents(ctx, 0, 10, "")
 	if err != nil || len(events) != 3 {
 		t.Fatalf("events = %+v, %v; want failing, recovered, new episodes", events, err)
@@ -1063,6 +1092,7 @@ func TestOIDCPending(t *testing.T) {
 	s.OIDCPending(ctx, 7, "10.0.0.1", "Keycloak", "Bob Smith", "bob", "unverified_email") // the same row again: said once
 	s.OIDCPending(ctx, 9, "10.0.0.1", "Keycloak", "", "carol@example.org", "made_up")     // an email as the username
 	s.OIDCPending(ctx, 0, "10.0.0.1", "Keycloak", "Dan", "dan", "no_match")               // no row: nothing
+	s.Flush()
 	events, _, err := cat.ListServerEvents(ctx, 0, 10, KindOIDCPending)
 	if err != nil || len(events) != 2 {
 		t.Fatalf("events = %+v, %v; want one per row", events, err)
@@ -1107,6 +1137,7 @@ func TestOIDCPending(t *testing.T) {
 	// An "@" past the 100 kept is seen all the same: the name is left out
 	// whole, not cut to the address's local part.
 	s.OIDCPending(ctx, 11, "10.0.0.1", "Keycloak", strings.Repeat("x", 99)+"carolsmith@example.org", "", "no_match")
+	s.Flush()
 	events, _, err = cat.ListServerEvents(ctx, 0, 1, KindOIDCPending)
 	if err != nil || len(events) != 1 || events[0].Data["person"] != nil {
 		t.Fatalf("a long name with an address: %+v, %v", events, err)
@@ -1126,6 +1157,7 @@ func TestOIDCPendingCapped(t *testing.T) {
 	s.now = func() time.Time { return now }
 	count := func() int {
 		t.Helper()
+		s.Flush()
 		events, _, err := cat.ListServerEvents(ctx, 0, 100, KindOIDCPending)
 		if err != nil {
 			t.Fatal(err)
@@ -1175,6 +1207,7 @@ func TestBridgeAudibleImportWording(t *testing.T) {
 		Library: "Fiction", LibraryID: 1, Path: "Weir/Project Hail Mary", Title: "Project Hail Mary"})
 	s.BridgeJobEnded(ctx, BridgeJob{ID: 2, Kind: bridge.KindAudibleImport, State: bridge.StateFailed,
 		Library: "Fiction", LibraryID: 1, Title: "Artemis", Error: "disk full"})
+	s.Flush()
 	done, _, err := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFinished)
 	if err != nil || len(done) != 1 {
 		t.Fatalf("finished events = %+v, %v", done, err)
@@ -1182,6 +1215,7 @@ func TestBridgeAudibleImportWording(t *testing.T) {
 	if m := compose(done[0], s.server()); m.Title != "Backed up from Audible: Project Hail Mary" || m.Text != "It is in the library now." {
 		t.Errorf("finished = %+v", m)
 	}
+	s.Flush()
 	failed, _, err := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
 	if err != nil || len(failed) != 1 {
 		t.Fatalf("failed events = %+v, %v", failed, err)

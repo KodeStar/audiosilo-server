@@ -52,10 +52,11 @@ type rootProber struct {
 	probes map[string]*rootProbe
 	// stat is the filesystem check; a test swaps it for one that blocks.
 	stat func(root string) rootState
+	ttl  time.Duration // how long an answer serves (rootProbeTTL; tests)
 }
 
 func newRootProber() *rootProber {
-	return &rootProber{probes: map[string]*rootProbe{}, stat: statRoot}
+	return &rootProber{probes: map[string]*rootProbe{}, stat: statRoot, ttl: rootProbeTTL}
 }
 
 // statRoot opens root and reads at most one entry: enough to know it is a
@@ -87,7 +88,7 @@ func statRoot(root string) rootState {
 func (p *rootProber) check(root string) (rootState, bool) {
 	p.mu.Lock()
 	pr := p.probes[root]
-	stale := pr != nil && pr.finished() && time.Since(pr.at) > rootProbeTTL
+	stale := pr != nil && pr.finished() && time.Since(pr.at) > p.ttl
 	if pr == nil || stale {
 		pr = &rootProbe{done: make(chan struct{}), started: time.Now()}
 		p.probes[root] = pr
@@ -139,51 +140,61 @@ type Disk struct {
 	Free  uint64 `json:"free"` // free to the server (not counting space reserved for root)
 }
 
-// RootDisk reports the space on the filesystem holding lib's root, from the
-// same bounded, cached probe as RootAvailable; ok is false when the root
-// doesn't answer or the OS doesn't say.
-func (s *Scanner) RootDisk(lib catalog.Library) (Disk, bool) {
-	st, answered := s.roots.check(lib.Root)
-	if !answered || !st.hasDisk {
-		return Disk{}, false
-	}
-	return Disk{Total: st.diskTotal, Free: st.diskFree}, true
+// RootStatus is a library root as one probe found it: whether it can be read
+// right now (RootsAvailable's rule) and, when it can and the OS said, the space
+// on its filesystem.
+type RootStatus struct {
+	Available bool
+	Disk      *Disk
 }
 
-// RootsAvailable runs RootAvailable for every library in parallel, so a dead
-// network share costs the whole list at most one probe timeout. indexed maps a
+// RootStatuses checks every library's root in parallel (rootStatus), so a dead
+// network share costs the whole list at most one probe timeout. Availability
+// and space come from the same probe, so a probe cached across the TTL never
+// makes the list wait for a second one per root (server#225). indexed maps a
 // library id to its indexed book count.
-func (s *Scanner) RootsAvailable(libs []catalog.Library, indexed map[int64]int) map[int64]bool {
-	out := make(map[int64]bool, len(libs))
+func (s *Scanner) RootStatuses(libs []catalog.Library, indexed map[int64]int) map[int64]RootStatus {
+	out := make(map[int64]RootStatus, len(libs))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, l := range libs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ok := s.RootAvailable(l, indexed[l.ID])
+		wg.Go(func() {
+			st := s.rootStatus(l, indexed[l.ID])
 			mu.Lock()
-			out[l.ID] = ok
+			out[l.ID] = st
 			mu.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 	return out
 }
 
-// RootAvailable reports whether lib's root can be read right now. It is false
-// when the last scan stopped at the unavailable-root guard (nothing was pruned;
-// a rescan clears it once the root is back), when the root is missing, unreadable
-// or not responding, or when it is an empty directory while `indexed` books are
-// still indexed under it (what an unmounted network share looks like). It waits
-// at most rootProbeTimeout.
-func (s *Scanner) RootAvailable(lib catalog.Library, indexed int) bool {
+// RootsAvailable is RootStatuses' availability alone.
+func (s *Scanner) RootsAvailable(libs []catalog.Library, indexed map[int64]int) map[int64]bool {
+	out := make(map[int64]bool, len(libs))
+	for id, st := range s.RootStatuses(libs, indexed) {
+		out[id] = st.Available
+	}
+	return out
+}
+
+// rootStatus is lib's root from one bounded probe. It is unavailable when the
+// last scan stopped at the unavailable-root guard (nothing was pruned; a rescan
+// clears it once the root is back), when the root is missing, unreadable or not
+// responding, or when it is an empty directory while `indexed` books are still
+// indexed under it (what an unmounted network share looks like). It waits at
+// most rootProbeTimeout.
+func (s *Scanner) rootStatus(lib catalog.Library, indexed int) RootStatus {
 	if s.Progress(lib.ID).Unavailable {
-		return false
+		return RootStatus{}
 	}
 	st, answered := s.roots.check(lib.Root)
-	if !answered || !st.readable {
-		return false
+	if !answered || !st.readable || (st.empty && indexed > 0) {
+		return RootStatus{}
 	}
-	return !(st.empty && indexed > 0)
+	out := RootStatus{Available: true}
+	if st.hasDisk {
+		out.Disk = &Disk{Total: st.diskTotal, Free: st.diskFree}
+	}
+	return out
 }

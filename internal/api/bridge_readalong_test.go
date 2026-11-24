@@ -232,6 +232,7 @@ func TestBridgeReadalongNotified(t *testing.T) {
 	if resp, body := b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", job.ID), b.bridgeTok, result); resp.StatusCode != http.StatusOK {
 		t.Fatalf("done: %d %s", resp.StatusCode, body)
 	}
+	b.notify.Flush() // events are recorded in the background
 	events, _, err := b.cat.ListServerEvents(context.Background(), 0, 10, "bridge_job_finished")
 	if err != nil || len(events) != 1 || events[0].Data["coverage"] != 0.873 {
 		t.Fatalf("events = %+v, %v", events, err)
