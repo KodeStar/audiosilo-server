@@ -1921,12 +1921,20 @@ export const FIELD_SOURCES = ['tag', 'path', 'abs', 'edited', 'community'] as co
 /** A field's source; "" = no value. */
 export type FieldSource = (typeof FIELD_SOURCES)[number] | '';
 
+/** Where a scanned value came from: a file tag, the path or an Audiobookshelf file. */
+export type ScannedSource = Extract<FieldSource, 'tag' | 'path' | 'abs'>;
+
 /** catalog.FieldValue: one overridable field on the book page. */
 export interface FieldValue {
   value: string;
   source: FieldSource;
   /** What the scan found: the value a revert restores. */
   scanned: string;
+  /**
+   * Where `scanned` came from (a file tag, the path or an Audiobookshelf
+   * metadata.json), for the revert's hint. Absent when the scan found nothing.
+   */
+  scanned_source?: ScannedSource;
   locked: boolean;
   edited_by?: string;
   edited_at?: string;

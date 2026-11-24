@@ -88,6 +88,57 @@ func TestParseABSFileSeriesAndPeople(t *testing.T) {
 	}
 }
 
+// TestSplitABSSeries: "Name #sequence", the sequence the text after the last
+// " #" when it reads as one, the name alone when there is none.
+func TestSplitABSSeries(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		in   string
+		want ABSSeries
+	}{
+		{"The Expanse #2.5", ABSSeries{"The Expanse", "2.5"}},
+		{"  Discworld #4  ", ABSSeries{"Discworld", "4"}},
+		{"Wide  #3", ABSSeries{"Wide", "3"}},
+		{"Arc #1-3", ABSSeries{"Arc", "1-3"}},
+		{"Prequels #0.5a", ABSSeries{"Prequels", "0.5a"}},
+		{"Odd # Name #1.5", ABSSeries{"Odd # Name", "1.5"}},
+		{"Trailing #", ABSSeries{"Trailing", ""}},
+		{"No Number", ABSSeries{"No Number", ""}},
+		{"#2", ABSSeries{"#2", ""}}, // no name before the mark: all of it is the name
+		{"Glued#2", ABSSeries{"Glued#2", ""}},
+		{"Arc #1 - 3", ABSSeries{"Arc", "1 - 3"}},
+		{"Arc #1 – 3", ABSSeries{"Arc", "1 – 3"}},
+		{"Arc #1.5 - 2", ABSSeries{"Arc", "1.5 - 2"}},
+		{"Arc #1 -3", ABSSeries{"Arc", "1 -3"}},
+		{"Arc #1- 3", ABSSeries{"Arc", "1- 3"}},
+		{"Saga #2b", ABSSeries{"Saga", "2b"}},
+		// A " #" with words after it is the name's own: no position.
+		{"The #1 Ladies Detective Agency", ABSSeries{"The #1 Ladies Detective Agency", ""}},
+		{"The #1 Ladies Detective Agency #3", ABSSeries{"The #1 Ladies Detective Agency", "3"}},
+		{"Room #12 Mysteries", ABSSeries{"Room #12 Mysteries", ""}},
+		{"Arc #1 - x", ABSSeries{"Arc #1 - x", ""}},
+		// One bracketed note after a sequence is the sequence's, as revision 2 read it.
+		{"Discworld #1 (Omnibus)", ABSSeries{"Discworld", "1 (Omnibus)"}},
+		{"Saga #2.5 [Novella]", ABSSeries{"Saga", "2.5 [Novella]"}},
+		{"Arc #1-3 (Box set)", ABSSeries{"Arc", "1-3 (Box set)"}},
+		{"Arc #1 - 3 (Box set)", ABSSeries{"Arc", "1 - 3 (Box set)"}},
+		{"Saga #2b  ()", ABSSeries{"Saga", "2b  ()"}},
+		{"The #1 Ladies Detective Agency (Book 3)", ABSSeries{"The #1 Ladies Detective Agency (Book 3)", ""}},
+		{"Discworld #1 (Omnibus) (Gollancz)", ABSSeries{"Discworld #1 (Omnibus) (Gollancz)", ""}},
+		{"Discworld #1 (Omnibus) extra", ABSSeries{"Discworld #1 (Omnibus) extra", ""}},
+		{"Discworld #1 (Omni (bus))", ABSSeries{"Discworld #1 (Omni (bus))", ""}},
+		{"Discworld #1 [Omnibus)", ABSSeries{"Discworld #1 [Omnibus)", ""}},
+		// A " #" inside the note is the note's, never the sequence's mark.
+		{"Discworld #1 (Rincewind #1)", ABSSeries{"Discworld", "1 (Rincewind #1)"}},
+		{"Collected (Vol #3)", ABSSeries{"Collected (Vol #3)", ""}},
+		{"", ABSSeries{}},
+	} {
+		if got := SplitABSSeries(tc.in); got != tc.want {
+			t.Errorf("SplitABSSeries(%q) = %+v, want %+v", tc.in, got, tc.want)
+		}
+	}
+}
+
 // A name that holds a comma ("Surname, Given") is kept apart from the next by
 // "; ", so names.Split reads the credit as the people the file lists; without
 // one the credit reads as it always did, joined by ", " (server#213).

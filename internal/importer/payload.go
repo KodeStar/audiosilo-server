@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"regexp"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Payload is one ABS user's history, normalized: what an import keeps (gzipped
@@ -211,10 +211,6 @@ func buildPayload(u *absUserDetail, sessions []absSession, items *itemIndex) *Pa
 	return p
 }
 
-// seriesSeq splits a minified item's seriesName ("The Expanse #2.5", several
-// joined by ", ") into the first series and its sequence.
-var seriesSeq = regexp.MustCompile(`^(.*?)(?:\s+#([0-9]+(?:\.[0-9]+)?))?$`)
-
 // describe is the metadata's title, author(s), first series and its sequence,
 // from whichever shape it came in.
 func (m absMetadata) describe() (title, author, series, seq string) {
@@ -230,11 +226,11 @@ func (m absMetadata) describe() (title, author, series, seq string) {
 	if len(m.Series) > 0 {
 		return title, author, strings.TrimSpace(m.Series[0].Name), strings.TrimSpace(m.Series[0].Sequence)
 	}
+	// A minified item's seriesName joins several by ", " ("The Expanse #2.5,
+	// Other #4"): the first, read as the scanner reads a metadata.json's.
 	first, _, _ := strings.Cut(m.SeriesName, ", ")
-	if parts := seriesSeq.FindStringSubmatch(strings.TrimSpace(first)); parts != nil {
-		series, seq = parts[1], parts[2]
-	}
-	return title, author, series, seq
+	ref := metadata.SplitABSSeries(first)
+	return title, author, ref.Name, ref.Position
 }
 
 func firstNonEmpty(vals ...string) string {
