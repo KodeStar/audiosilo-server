@@ -290,7 +290,13 @@ function LiveCard({
       params={{ section: 'live' }}
       className="flex items-center gap-3.5 rounded-xl border bg-card p-3.5 transition-colors duration-(--dur-1) hover:border-border-strong"
     >
-      <BookCover libraryId={s.library_id} path={s.path} title={title} className="w-16 shrink-0" />
+      <BookCover
+        libraryId={s.library_id}
+        path={s.path}
+        title={title}
+        version={s.cover_version}
+        className="w-16 shrink-0"
+      />
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="flex min-w-0 items-center gap-2">
           <Monogram name={s.username} size={24} />
@@ -322,6 +328,7 @@ function RecentRow({ row, lang }: { row: ListeningRow; lang: string }) {
         libraryId={row.library_id}
         path={row.path}
         title={row.title}
+        version={row.cover_version}
         className="w-9 shrink-0 rounded-[3px]"
       />
       <div className="flex min-w-0 flex-1 flex-col">

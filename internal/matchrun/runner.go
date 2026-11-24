@@ -1003,13 +1003,15 @@ type ItemView struct {
 }
 
 // ItemBook is the book an item is for, as it is now: Duration its length in
-// seconds (omitted when unknown), for a length_differs item's wording.
+// seconds (omitted when unknown), for a length_differs item's wording, and
+// CoverVersion its Book.CoverVersion (the cover's cache buster).
 type ItemBook struct {
-	Title    string  `json:"title"`
-	Author   string  `json:"author"`
-	Duration float64 `json:"duration,omitempty"`
-	ASIN     string  `json:"asin,omitempty"`
-	ISBN     string  `json:"isbn,omitempty"`
+	Title        string  `json:"title"`
+	Author       string  `json:"author"`
+	Duration     float64 `json:"duration,omitempty"`
+	ASIN         string  `json:"asin,omitempty"`
+	ISBN         string  `json:"isbn,omitempty"`
+	CoverVersion string  `json:"cover_version,omitempty"`
 }
 
 // itemScopes is the scopes the review shows a run in mode's changes under: its
@@ -1043,7 +1045,7 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 		case err != nil:
 			return nil, 0, err
 		default:
-			v.Book = ItemBook{Title: st.Title, Author: st.Author, Duration: st.Duration}
+			v.Book = ItemBook{Title: st.Title, Author: st.Author, Duration: st.Duration, CoverVersion: st.CoverVersion}
 			if it.Outcome == catalog.OutcomeNone {
 				v.Book.ASIN, v.Book.ISBN = st.Fields[catalog.FieldASIN].Value, st.Fields[catalog.FieldISBN].Value
 			}

@@ -1151,10 +1151,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`leadIndex`, up to `indexTimeout`, its probes too) and is stored even when every request waiting on it has ended, each at its own
   deadline, so a cancelled request never throws its probes away (server#211); it ends with the server
   (`Scanner.SetBaseContext`, from the API's base context), writing nothing then, and a request still
-  waiting on it answers 503 `stopping` with `Retry-After` (`library.ErrStopping`, `indexShared`; an admin's Re-read and the Bridge's rescan too, `rescanAt`), not a 500. A scan's read of a book and the Bridge's
+  waiting on it answers 503 `stopping` with `Retry-After` (`library.ErrStopping`, `indexShared`; an admin's Re-read too, `readAt`, and the Bridge's rescan, `rescanAt`), not a 500. A scan's read of a book and the Bridge's
   `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
   index asked for during a scan's read waits for the scan's write and loads it. An admin's Re-read
-  (`rescanPath`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that
+  (`handleRescanBook`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that
   read stored may be older than the change the admin wants picked up; one that kept the book as stored because a file
   did not answer (a look given up on, or its audio's read cut short: `ReadCutShort` with an `unreadable` problem,
   recorded, `cutShort`; never a `LengthOnly` keep, a known bad part) is a look given up on too, 503
@@ -1699,8 +1699,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   falls back to, or the stored file's open once the remux refused the file) at least `API.fileWait`
   (`API.afterWait`), the remux's waits being no looks.
   The scan gives each the probe's time (`Scanner.probeTimeout`); an on-demand read (`/item`'s index, an admin's
-  Re-read and the Bridge's rescan through `rescanAt`) gives each `API.fileWait` instead (SRV-15c:
-  `library.WithLookTimeout` on its context through `API.lookCtx`, `Scanner.lookTimeout`, kept by the read `leadIndex` goes on with), well
+  Re-read and the Bridge's rescan through `rescanAt`, the Re-read with no wait cap: see Health issues) gives each
+  `API.fileWait` instead (SRV-15c: `library.WithLookTimeout` on its context through `API.lookCtx`, `Scanner.lookTimeout`, kept by the read `leadIndex` goes on with), well
   under the request timeout, so a share that stopped answering is its 503 `share_not_answering`, not the timeout's:
   `resolveBook`'s looks (the join, the stat, `dirPresent`'s lstat and listings, the folder's listing and its audio
   files' lstats, the walks of a disc set, a disc that wouldn't list among them, the metadata.json and `.audiosilo`
@@ -1727,7 +1727,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `Probing`; a request's waits, under `WithLookTimeout`, end at `API.lookCtx`'s `library.WithWaitCap`, a time,
   `API.flightWaitEnd` (`flightWaitMargin`, 5 s, before the request's deadline, or `timeoutDur` from now on a context
   detached from it, so its coded 503 with `Retry-After` is written before the request timeout's bare one whatever
-  its looks took first), in all however the read moves on, `flightWaitCap`, where a scan's has no such cap; the
+  its looks took first), in all however the read moves on, `flightWaitCap`, where a scan's has no such cap, nor
+  one under `library.WithUncappedWait` (an admin's Re-read the API answered `still_reading`); the
   request that leads the read, its own, waits up to its `WithWaitCap` and no longer, `awaitFlight`'s
   `errReadUnfinished`, the read going on to store the book; and `resolveAsked`'s looks end together at the same
   cap, not only each at its look time, `waitCapLeft`; a caller with no cap is bounded by its context alone), so a big
@@ -2627,7 +2628,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   paged on ids before the per-row columns are computed; the cursor names its ordering;
   filters in `catalog.BookFilter`, unparseable ones 400; `media.DirectPlayableSQL` is
   `DirectPlayable` in SQL) + `/admin/books/facets` (each dimension counted without its
-  own filter, the unfiltered yes/no ones in one pass);
+  own filter, the unfiltered yes/no ones in one pass; `?only=total` is `{"total"}` alone,
+  `Catalog.CountBooks`, for a number shown on its own, the Books screen's "N this week", server#225);
   `POST /admin/books/bulk` (one edit over <= 1000 books, all or nothing);
   `POST /admin/books/merge` (`{field, sources, target, library_id?}`) selects exact whole credits
   or main series spellings and edits all matching books in one writer transaction (at most
@@ -3284,7 +3286,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `suspect_parts`; rows from before 0017 are checked once with a tag read. `PATCH
   /admin/libraries/{id}` rescans only when the root or ignore rules change.
 - **Health issues (`catalog/issues.go`, `api/handlers_health.go`)**: computed from the index on
-  request (the summary is kept in the list cache until the next content write, see List cache); each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
+  request (the summary is kept in the list cache until the next content write, see List cache; a
+  category's `samples` carry their book's `cover_version`, a duplicate group's read by id, as the
+  grouping keeps no art, and so does a match run item's `book`, server#270); each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
   chapters, see The Bridge; each row of that list, not the ignored one, carries `detect_job`, the book's
@@ -3330,8 +3334,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   content and listener generation and kept for the summary and every page, `Catalog.dups`,
   server#270), `POST`/`DELETE /admin/issues/ignore` (up to 1000 references. A larger group
   sends one member and the group’s `key` as `group_key`), `POST
-  /admin/libraries/{id}/book/rescan?path=` (`IndexPath` now, on a context detached from the
-  request timeout so a slow re-read is still saved; 404 `not_indexable`), `GET
+  /admin/libraries/{id}/book/rescan?path=` (`ReindexPath` now, on a context detached from the
+  request timeout so a slow re-read is still saved; 404 `not_indexable`; a read still going at
+  `flightWaitEnd`, where a request's waits on another read of its book end, is answered 202
+  `{"still_reading": true}` and goes on, so the console says it shows when done rather than meeting
+  the timeout's bare 503: its looks keep `API.fileWait` but no wait cap, and another read of the book under way
+  (a second click racing the first, a scan's) is waited on while it moves on, `WithUncappedWait`, then this one
+  reads the book itself, so a fix made between the clicks is picked up; counted in `API.rereads`,
+  which `WaitMediaCaches` waits for, and a failure after the 202 logged as a warning, server#224), `GET
   /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`
   (queue every library: `Scanner.EnqueueAll`, also the startup scans), `GET /admin/scan-runs`
   (`?library_id=&before=&limit=`, `next_before`) and `GET /admin/scan-runs/{id}` (with the log).
@@ -3392,7 +3402,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   nothing writes nothing, answering the row as it is or 404 with none; no listening session
   recorded). An edit's `updated_at` keeps its sub-second time, and `SaveProgress` compares and
   writes in one writer transaction, so an older device save never overwrites a newer edit. Endpoints
-  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `metadata.IsGenericTitle`, which reads every script; "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
+  (admin only; a session, a person's progress row, an Overview listening row, a top book and a
+  drop-off carry the book's `cover_version`, omitted off an indexed book, as a Book's, server#270;
+  a session on a personal API key carries `api_key` (the token's kind while the token is kept:
+  `device_name` is the key's label, a script sends no app header), and the Activity page's
+  `clients` counts the keys that named no app as their own `api_key` row (`listenAcc.splitKeys`, never on `/me/stats`), server#224): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `metadata.IsGenericTitle`, which reads every script; "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
   /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
   /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
   /admin/devices/{id}` (409 `current_device` for the caller's own token), `GET
@@ -3403,7 +3417,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `YYYY-MM-DD` date is the start of that day for `started_at` and the end of it, or now if sooner, for
   `finished_at`) and `GET /admin/stats?range=7d|30d|90d|1y|<year>|year` (`year` = the current year in
   server time, labelled with it, so the browser's clock never picks the year; answers only `{"activity"}`,
-  `catalog.ActivityFor`, bucketed in server time, without the Overview's figures; 400 `invalid_range`),
+  `catalog.ActivityFor`, bucketed in server time, without the Overview's figures; 400 `invalid_range`;
+  `&parts=listening` is `catalog.ListeningActivityFor`, the period's listening alone, the funnel,
+  drop-offs, growth, storage, coverage and inactive users left out of the answer, for Year in
+  listening, server#225; any other `parts` 400),
   plus `GET /admin/listening?range=&user_id=` (`catalog.ListeningDaysFor`: the same days, of everyone
   or one person, and nothing else: the year calendar and a person's listening year). Book-page
   listeners carry `started_at`/`finished_at`. Sessions and roll-ups move
@@ -3494,7 +3511,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   per-user query spellings, served by `idx_sessions_user_last` / `idx_daily_user` / the progress key).
   `GET /me/stats?range=` → `{"stats": catalog.UserStats}` (totals/previous without
   `listeners`, `days` as `{date, listened}`, hours, top books/authors/narrators/series, `finished_books`
-  ≤ 100, playback, clients; none of the admin-only steps run). **Privacy**: the types have no field that
+  ≤ 100, playback, clients (unsplit: no `api_key` row or field, the Activity page's split is admin-only); none of the admin-only steps run). **Privacy**: the types have no field that
   can carry another user, user 0 is refused (`errNoUser`: 0 is "everyone" to the
   accumulator), and the rows naming a book pass the caller's CURRENT access (`UserScopes` +
   `ScopesAllow` / `scopesFilterSQL`): a revoked share's book leaves `top_books`/`finished_books` and the
@@ -5480,7 +5497,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `books.scanned` keeps the metadata; `''` on a row from before 0035, whose rows are
   the scan's). `books.chapters_fit` (a hash of the fit in the rows) keeps an
   unchanged fit from being written again. Chapter renames (`chapter_overrides`, by
-  file + start) work on community chapters too. `Catalog.OnBookChange` (fired to every
+  file + start) work on community chapters too. One that renames no chapter the book has now
+  (its files re-encoded with moved marks) is kept, dormant, and listed on the book page as
+  `dormant_renames` (`{file, start, title}`, the file relative to the book; omitted with none and
+  while an edited list applies, whose own notice covers it), server#224. `Catalog.OnBookChange` (fired to every
   listener after `UpsertBook`, `UpsertBooks` (once a transaction), `EditBook(s)`, `BackfillASIN`, `SetCover`/`DeleteCover` commit,
   and a library's new metadata source re-resolving its books) wakes the background pass, so a
   scan, an applied match or a typed ASIN is checked without waiting for the

@@ -252,9 +252,13 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** An app build in use, and whether a newer build of the same app on the same platform is too. */
+/**
+ * An app build in use, whether a newer build of the same app on the same platform is
+ * too, and whether it is a client that named no app (and is no personal API key).
+ */
 export interface ClientRow extends ClientCount {
   outdated: boolean;
+  unknown: boolean;
 }
 
 /**
@@ -276,6 +280,7 @@ export function clientRows(clients: readonly ClientCount[]): ClientRow[] {
         !!c.app &&
         !!c.version &&
         compareVersions(c.version, newest.get(`${c.app}|${c.platform}`)!) < 0,
+      unknown: !c.app && !c.api_key,
     }))
     .sort(
       (a, b) =>

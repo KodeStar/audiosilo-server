@@ -14,6 +14,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // A cover or stream request for a file on a share that stopped answering
@@ -451,4 +452,67 @@ func TestJoinedReadEndsBeforeTheRequestTimeout(t *testing.T) {
 	}
 	release()
 	<-first
+}
+
+// An admin's Re-read still going when its answer is due (a slow share whose
+// looks each answer within fileWait) is a 202 {"still_reading": true}, not the
+// request timeout's bare 503, and the read goes on and is saved: the folder,
+// held until after the answer, is a book once it is read (server#224). A
+// Re-read that finishes in time answers the book's page as before. Not
+// parallel: metadata.HoldOpensUntilForTests swaps the mount lookup.
+func TestRereadStillReadingIsAccepted(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, memberTok, _ := adminAndMember(t, e)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"Author/Quick/01.mp3", "Author/Slow/01.mp3"} {
+		full := filepath.Join(root, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, make([]byte, 1<<10), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Slow", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rescan := func(book string) string {
+		return "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/book/rescan?path=" + url.QueryEscape(book)
+	}
+	if resp, body := e.do(t, "POST", rescan("Author/Quick"), memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("a member's Re-read = %d %s, want 403", resp.StatusCode, body)
+	}
+	// Under the request's own time: a read that finishes is never held to a
+	// test's milliseconds (CI's runners are slow).
+	if resp, body := e.do(t, "POST", rescan("Author/Quick"), adminTok, ""); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(body, `"path":"Author/Quick"`) {
+		t.Errorf("a quick Re-read = %d %s, want the book's page", resp.StatusCode, body)
+	}
+
+	// The held read's answer is due 200 ms in (flightWaitEnd); no look is
+	// given up on.
+	e.api.timeoutDur = flightWaitMargin + 200*time.Millisecond
+	e.api.fileWait = time.Minute
+	held := make(chan struct{})
+	restore := metadata.HoldOpensUntilForTests(filepath.Join(root, "Author", "Slow"), held)
+	t.Cleanup(restore)
+	var once sync.Once
+	answer := func() { once.Do(func() { close(held) }) }
+	t.Cleanup(answer)
+	resp, body := e.do(t, "POST", rescan("Author/Slow"), adminTok, "")
+	if resp.StatusCode != http.StatusAccepted || strings.TrimSpace(body) != `{"still_reading":true}` {
+		t.Fatalf("a slow Re-read = %d %s, want 202 still_reading", resp.StatusCode, body)
+	}
+	if _, err := e.cat.GetBookByPath(t.Context(), lib.ID, "Author/Slow"); err == nil {
+		t.Fatal("the slow read was saved before its folder answered")
+	}
+	answer()
+	testwait.Eventually(t, "the slow read saved", 5*time.Second, func() bool {
+		_, err := e.cat.GetBookByPath(t.Context(), lib.ID, "Author/Slow")
+		return err == nil
+	})
 }

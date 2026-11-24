@@ -202,6 +202,8 @@ export interface ListeningRow {
   duration: number;
   finished: boolean;
   updated_at: string;
+  /** The book's cover_version (its cover's cache key); absent when the path is no indexed book. */
+  cover_version?: string;
 }
 
 /** GET /api/v1/admin/stats (handlers_stats.go handleStats). */
@@ -244,6 +246,13 @@ export interface ListeningSession {
   device_id: number;
   device_name: string;
   client: ClientInfo | null;
+  /**
+   * The device is a personal API key (while its token is kept): `device_name` is the
+   * key's label. A script sends no app header, so `client` is then null.
+   */
+  api_key?: boolean;
+  /** The book's cover_version (its cover's cache key); absent when the path is no indexed book. */
+  cover_version?: string;
   started_at: string;
   last_at: string;
   start_position: number;
@@ -333,6 +342,8 @@ export interface UserProgress {
   author: string;
   started_at: string | null;
   finished_at: string | null;
+  /** The book's cover_version (its cover's cache key); absent when the path is no indexed book. */
+  cover_version?: string;
 }
 
 /**
@@ -381,6 +392,8 @@ export interface TopBook {
   author: string;
   listened: number;
   listeners: number;
+  /** The book's cover_version (its cover's cache key); absent when the path is no indexed book. */
+  cover_version?: string;
 }
 
 /** catalog.TopPerson: an author or narrator (the whole field value). */
@@ -419,6 +432,8 @@ export interface DropOff {
   listeners: number;
   /** The book has a read problem the Health page lists (often the reason). */
   scan_error: boolean;
+  /** The book's cover_version (its cover's cache key). */
+  cover_version?: string;
 }
 
 /** catalog.PlaybackShare: listening direct or transcoded, per codec ("" = unknown). */
@@ -440,6 +455,8 @@ export interface ClientCount {
   app: string;
   version: string;
   platform: string;
+  /** Personal API keys that named no app (`app` is then ""), counted apart from the rest. */
+  api_key?: boolean;
   devices: number;
 }
 
@@ -535,6 +552,16 @@ export interface Activity {
   coverage: Coverage;
   inactive_users: InactiveUser[];
 }
+
+/**
+ * GET /admin/stats?range=&parts=listening (catalog.ListeningActivityFor): a period's
+ * listening alone, what Year in listening shows; the steps over the library and
+ * progress are left out.
+ */
+export type ListeningActivity = Omit<
+  Activity,
+  'funnel' | 'drop_offs' | 'growth' | 'storage' | 'coverage' | 'inactive_users'
+>;
 
 /** The HTTPS modes (config.TLSMode). */
 export type TLSMode = 'off' | 'selfsigned' | 'autocert';
@@ -1312,6 +1339,8 @@ export interface IssueSample {
   library_id: number;
   path: string;
   title: string;
+  /** The book's cover_version (its cover's cache key). */
+  cover_version?: string;
 }
 
 /** catalog.IssueCount: one category (for duplicates, counted in groups). */
@@ -1420,6 +1449,8 @@ export interface FsEntry {
    * (library.MarkPendingBooks, #193); never with is_book.
    */
   pending_book?: boolean;
+  /** An indexed book's cover_version (its cover's cache key); absent for any other entry. */
+  cover_version?: string;
 }
 
 /** library.Listing (internal/library/fsview.go). */
@@ -1504,6 +1535,8 @@ export interface Book {
   dedup_key?: string;
   multi_file?: boolean;
   other_locations?: BookLocation[];
+  /** The cover's cache key (catalog.CoverVersion); absent without art. */
+  cover_version?: string;
 }
 
 /** catalog.Page (internal/catalog/books.go), GET /libraries/{id}/books. */
@@ -2049,6 +2082,21 @@ export interface AdminBookDetail {
   chapter_edit?: ChapterEdit;
   /** The files as they are now, for the chapter editor to send back with a save. */
   chapter_basis: ChapterBasis;
+  /**
+   * Chapter renames that rename no chapter the book has now (its files changed): kept,
+   * each applying again if its chapter comes back. Absent when none, and while an
+   * edited list applies.
+   */
+  dormant_renames?: DormantRename[];
+}
+
+/** catalog.DormantRename: a chapter rename waiting for its chapter. */
+export interface DormantRename {
+  /** The file it is on, relative to the book ("" for a single-file book's own file). */
+  file: string;
+  /** The chapter's start in that file, in seconds. */
+  start: number;
+  title: string;
 }
 
 /** A book's recorded community match (catalog.BookMatch, book_matches). */
@@ -2641,7 +2689,15 @@ export interface MatchRunItem {
   /** A refresh found this proposal by the recorded work after its identifier lookup missed. */
   identifier_unknown?: boolean;
   /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */
-  book: { title: string; author: string; duration?: number; asin?: string; isbn?: string };
+  book: {
+    title: string;
+    author: string;
+    duration?: number;
+    asin?: string;
+    isbn?: string;
+    /** Its cover_version (its cover's cache key). */
+    cover_version?: string;
+  };
   /** Nothing is indexed at the path any more. */
   gone?: boolean;
   /**
@@ -2962,7 +3018,11 @@ export interface BridgeJob {
   /** The stored params could not be read; the server answers them as null. */
   params_unreadable?: boolean;
   state: BridgeJobState;
-  /** null when the stored progress is not JSON (a damaged row). */
+  /**
+   * The Bridge's own object, stored as sent: step, message, a newer Bridge's
+   * message_code and message_params (server#224, progressOf), done, total and a
+   * kind's own fields. null when the stored progress is not JSON (a damaged row).
+   */
   progress: Record<string, unknown> | null;
   /** null when the stored result is not JSON (a damaged row). */
   result: Record<string, unknown> | null;

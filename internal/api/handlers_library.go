@@ -515,7 +515,8 @@ func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path stri
 }
 
 // lookCtx is ctx for a read of a book a request asked for (an on-demand index,
-// an admin's Re-read, the Bridge's rescan): each look at a library file given
+// the Bridge's rescan; an admin's Re-read has no wait cap, handleRescanBook):
+// each look at a library file given
 // fileWait (library.WithLookTimeout), and the waits on another read of the
 // book ending at a.flightWaitEnd (library.WithWaitCap), so a share that
 // stopped answering is a 503 share_not_answering with Retry-After before the

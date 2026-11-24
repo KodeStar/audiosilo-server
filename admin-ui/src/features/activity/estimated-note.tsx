@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { History } from 'lucide-react';
-import type { Activity } from '@/api/types';
+import type { ListeningActivity } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { formatHours } from '@/lib/format';
 
@@ -10,7 +10,7 @@ import { formatHours } from '@/lib/format';
  * what an imported history covered), worked out from where each book was left.
  * Imported sessions themselves count like recorded ones. Nothing when there is none.
  */
-export function EstimatedNote({ a }: { a: Activity }) {
+export function EstimatedNote({ a }: { a: Pick<ListeningActivity, 'estimated'> }) {
   const { t, i18n } = useTranslation();
   if (!(a.estimated > 0)) return null;
   return (

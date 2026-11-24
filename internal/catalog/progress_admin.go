@@ -56,13 +56,18 @@ func scanUserProgress(row interface{ Scan(...any) error }, extra ...any) (UserPr
 }
 
 // ListUserProgress returns every progress row of one user (admin-scoped: no
-// share filtering), most recently saved first.
+// share filtering), most recently saved first, each with its book's cover
+// version (none for a path that is no indexed book), as GET /me/progress's rows.
 func (c *Catalog) ListUserProgress(ctx context.Context, userID int64) ([]UserProgress, error) {
 	return queryRows(ctx, c.db, func(rows *sql.Rows, p *UserProgress) error {
-		var err error
-		*p, err = scanUserProgress(rows)
+		var (
+			err      error
+			coverArt string
+		)
+		*p, err = scanUserProgress(rows, &coverArt)
+		p.CoverVersion = CoverVersion(coverArt)
 		return err
-	}, `SELECT `+userProgressColumns+` FROM progress p
+	}, `SELECT `+userProgressColumns+`, COALESCE(b.cover_art, '') FROM progress p
 	      LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
 	     WHERE p.user_id = ? ORDER BY p.updated_at DESC`, userID)
 }

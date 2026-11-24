@@ -222,6 +222,7 @@ function PersonCard({
               libraryId={current.library_id}
               path={current.path}
               title={current.title || current.path}
+              version={current.cover_version}
               className="w-[38px] shrink-0"
             />
             <div className="flex min-w-0 flex-1 flex-col gap-1">

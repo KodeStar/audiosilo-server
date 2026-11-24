@@ -10,6 +10,7 @@ import type {
   SidecarsGenerateParams,
 } from '@/api/types';
 import { refKey } from '@/lib/book-route';
+import type { Phrase } from '@/lib/phrase';
 import { relBaseName } from '@/lib/paths';
 import { spanIn } from '@/features/library/series/series-model';
 import {
@@ -601,6 +602,8 @@ export interface GenerateProgress {
   /** The engine stage, else the step. */
   stage?: string;
   message?: string;
+  /** The message by its code, which the card words in the admin's language (progressText). */
+  said?: Phrase;
   done?: number;
   total?: number;
   etaSeconds?: number;
@@ -613,7 +616,7 @@ export function generateProgress(progress: unknown): GenerateProgress {
   if (!progress || typeof progress !== 'object') return {};
   const p = progress as Record<string, unknown>;
   // The message (else the step) and the count, as any kind's progress reads.
-  const { text: said, done, total } = progressOf(p);
+  const { text: words, said, done, total } = progressOf(p);
   const step = text(p.step);
   const out: GenerateProgress = {};
   // The Bridge's own last steps (the description, saving the files, the
@@ -628,7 +631,10 @@ export function generateProgress(progress: unknown): GenerateProgress {
   // Bridge's wording of a stage this console labels (an English restatement of
   // the stage and its count, already shown in the admin's language).
   const labelled = stage !== undefined && (KNOWN_STAGES as readonly string[]).includes(stage);
-  if (said && said !== step && !labelled) out.message = said;
+  if (words && words !== step && !labelled) {
+    out.message = words;
+    if (said) out.said = said;
+  }
   if (done !== undefined && total !== undefined) {
     out.done = done;
     out.total = total;

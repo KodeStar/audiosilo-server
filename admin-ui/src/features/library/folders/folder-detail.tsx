@@ -153,7 +153,11 @@ function Detail({
   const addNow = async () => {
     setAdding(true);
     try {
-      await rescanBook(qc, { library_id: library.id, path: entry.path });
+      const fresh = await rescanBook(qc, { library_id: library.id, path: entry.path });
+      if (!fresh) {
+        toast.add({ title: t('common.stillReading', { title: entry.name }), type: 'info' });
+        return;
+      }
       // A new book, so everywhere the library's books show reads again, not just
       // these listings (the Libraries page's covers would miss it for minutes).
       invalidateLibraryBooks(qc, library.id);
@@ -198,6 +202,7 @@ function Detail({
                 path={entry.path}
                 title={entry.title || entry.name}
                 author={entry.author}
+                version={entry.cover_version}
               />
             </div>
           ) : (
