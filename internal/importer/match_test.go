@@ -186,3 +186,23 @@ func TestPathScore(t *testing.T) {
 		}
 	}
 }
+
+// TestSequenceNumber: only a plain decimal sequence is a position to match on;
+// ParseFloat's other readings and a range or lettered sequence give none.
+func TestSequenceNumber(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		in   string
+		want float64
+		ok   bool
+	}{
+		{"2", 2, true}, {"2.5", 2.5, true}, {"0", 0, true}, {".5", 0.5, true},
+		{"", 0, false}, {"NaN", 0, false}, {"nan", 0, false}, {"Inf", 0, false}, {"-Inf", 0, false},
+		{"1e3", 0, false}, {"0x1p3", 0, false}, {"1_000", 0, false}, {"-1", 0, false},
+		{"1-3", 0, false}, {"2b", 0, false}, {"1.2.3", 0, false}, {".", 0, false}, {"1000000", 0, false},
+	} {
+		if got, ok := sequenceNumber(tc.in); got != tc.want || ok != tc.ok {
+			t.Errorf("sequenceNumber(%q) = %v, %v; want %v, %v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}

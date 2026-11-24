@@ -2267,7 +2267,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, or for the title
   `metadata.PathTitle` (the path's title `TitleNotSeries` may take), else `tag`; one an ABS
   file gives is `abs`; an override is `edited` or
-  `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
+  `community`; an enrichment-attached ASIN/ISBN reads as `community`. Each field also carries
+  `scanned_source` (`FieldValue.ScannedSource`: `tag`, `path` or `abs`, omitted with no scanned
+  value), the scanned value's own source under an edit, so the console's Revert hint names the
+  layer it goes back to ("Audiobookshelf file: ...", or "Community: ..." for the `enrichment` an edit
+  hides, which a revert restores over `scanned`). Revert = delete the
   override + `refreshEffective` (restores the scanned value, the ABS file's where it gives one; no
   reindex, no disk).
   **Audiobookshelf metadata.json** (`metadata/absfile.go`, `catalog/absfile.go`, migration `0046`):
@@ -2279,7 +2283,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   tags): `bookLayers.overABS`, in `scannedFields` before `titlePosition`. `metadata.ParseABSFile` is
   lenient (a wrongly typed value costs that value; <= 4 MiB): title, subtitle, authors and
   narrators joined with ", " (strings or `{name}`; "; " when a name holds a comma, "Le Guin, Ursula
-  K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (the first is the main series
+  K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (`metadata.SplitABSSeries`, the
+  one ABS series parser, the listening import's `seriesName` too: cut at the last " #" only when
+  what follows reads as a sequence, one word or a spaced numeric range, either with one bracketed note
+  after it ("1 (Omnibus)", kept whole as the position text; a " #" inside that note is the note's), else all of it is the name,
+  "The #1 Ladies Detective Agency"; the first is the main series
   with its position, the rest `more_series`; a series without a position keeps the tag's only while
   it is the same series, by `seriesKey`), `publishedDate` else `publishedYear` as `published`, the
   HTML description as plain text, publisher, language, `abridged` (only `true` says anything: ABS
@@ -2289,7 +2297,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `/meta`, the community chapter check, a refresh run). `books.abs_file` holds those fields (JSON,
   `''` for none), `abs_sig` the file's signature (`metadata.ABSSignature`: size + mtime ns + `@` the reading's revision
   `absReadRev`, `''` for none: bump the revision and every stored file is read once more, as 2 did for
-  `joinCredit`'s "; ", server#454) and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
+  `joinCredit`'s "; ", server#454, and 3 for a series name holding " #") and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
   first so `Signatures` reads no JSON; `UpsertBook` writes all three (`absColumns`; nothing for a
   file book). Discovery records each folder's file signature from the walk itself (`audioDirs`'
   `absFiles`, the walk's own entry, no extra directory read; `IndexPath`, with no walk, stats it: `absSigAt`;

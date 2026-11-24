@@ -505,7 +505,9 @@ before → Edited).
 
 `[icon] File tag | Path | Audiobookshelf | Edited | Community` in a 20px soft pill (`--prov-*` tokens); `Unsaved` is a
 dashed pink outline. Field row = label (130px) · click-to-edit value · marker (+ "Revert" for edited
-fields, whose tooltip shows the file-tag value). Editing locks the field against rescans; the legend
+fields, whose tooltip shows the value it goes back to and its source: "File tag: ...",
+"Audiobookshelf file: ...", "Folder and file names: ...", or "Community: ..." for the Bridge's enrichment
+an edit hides). Editing locks the field against rescans; the legend
 under the Details card explains the five sources (Audiobookshelf: a
 `metadata.json` ABS keeps in the book's folder, over the tags). A label list (genres, tags) shows as
 secondary 24px chips and edits as a chip box (`LabelInput`: Enter or a comma adds, a chip's x removes,
