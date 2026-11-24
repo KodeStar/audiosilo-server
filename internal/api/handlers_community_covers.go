@@ -198,7 +198,7 @@ func (f *communityFlights) clock() time.Time {
 func (f *communityFlights) join(key, rawURL string, retryFailed bool) (c *communityCall, lead bool, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.failed != nil && !retryFailed && f.failed.Left(rawURL, f.clock()) > 0 {
+	if !retryFailed && f.failed.Left(rawURL, f.clock()) > 0 {
 		return nil, false, errCoverFailedRecently
 	}
 	if c = f.calls[key]; c != nil {

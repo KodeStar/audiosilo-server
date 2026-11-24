@@ -8,8 +8,9 @@ package ttlset
 
 import "time"
 
-// Set remembers keys for ttl each, at most max at once. The zero value is not
-// usable: New makes one.
+// Set remembers keys for ttl each, at most max at once. New makes one; a nil
+// *Set holds nothing (Left and Len read it as empty), so an owner may make its
+// set at its first Add.
 type Set[K comparable] struct {
 	ttl   time.Duration
 	max   int
@@ -44,6 +45,9 @@ func (s *Set[K]) Add(k K, now time.Time) {
 // Left is how long k is remembered for yet, 0 when it isn't (an expired key is
 // forgotten).
 func (s *Set[K]) Left(k K, now time.Time) time.Duration {
+	if s == nil {
+		return 0
+	}
 	until, ok := s.until[k]
 	if !ok {
 		return 0
@@ -57,4 +61,9 @@ func (s *Set[K]) Left(k K, now time.Time) time.Duration {
 }
 
 // Len is how many keys are held, expired ones not yet forgotten included.
-func (s *Set[K]) Len() int { return len(s.until) }
+func (s *Set[K]) Len() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.until)
+}

@@ -8,6 +8,10 @@ import (
 
 // A key is remembered for the ttl from its last Add, then forgotten.
 func TestLeft(t *testing.T) {
+	var none *Set[string]
+	if none.Left("a", time.Unix(1000, 0)) != 0 || none.Len() != 0 {
+		t.Fatal("a nil set holds something")
+	}
 	s := New[string](time.Minute, 4)
 	now := time.Unix(1000, 0)
 	if left := s.Left("a", now); left != 0 {
