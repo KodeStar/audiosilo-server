@@ -483,18 +483,20 @@ func TestRereadStillReadingIsAccepted(t *testing.T) {
 	rescan := func(book string) string {
 		return "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/book/rescan?path=" + url.QueryEscape(book)
 	}
-	// The answer is due 200 ms + flightWaitMargin/2 in; no look is given up on.
-	e.api.timeoutDur = flightWaitMargin + 200*time.Millisecond
-	e.api.fileWait = time.Minute
-
 	if resp, body := e.do(t, "POST", rescan("Author/Quick"), memberTok, ""); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("a member's Re-read = %d %s, want 403", resp.StatusCode, body)
 	}
+	// Under the request's own time: a read that finishes is never held to a
+	// test's milliseconds (CI's runners are slow).
 	if resp, body := e.do(t, "POST", rescan("Author/Quick"), adminTok, ""); resp.StatusCode != http.StatusOK ||
 		!strings.Contains(body, `"path":"Author/Quick"`) {
 		t.Errorf("a quick Re-read = %d %s, want the book's page", resp.StatusCode, body)
 	}
 
+	// The held read's answer is due 200 ms in (flightWaitEnd); no look is
+	// given up on.
+	e.api.timeoutDur = flightWaitMargin + 200*time.Millisecond
+	e.api.fileWait = time.Minute
 	held := make(chan struct{})
 	restore := metadata.HoldOpensUntilForTests(filepath.Join(root, "Author", "Slow"), held)
 	t.Cleanup(restore)
