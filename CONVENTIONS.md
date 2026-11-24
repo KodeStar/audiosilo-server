@@ -1717,7 +1717,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `Probing`; a request's waits, under `WithLookTimeout`, end at `API.lookCtx`'s `library.WithWaitCap`, a time,
   `API.flightWaitEnd` (`flightWaitMargin`, 5 s, before the request's deadline, or `timeoutDur` from now on a context
   detached from it, so its coded 503 with `Retry-After` is written before the request timeout's bare one whatever
-  its looks took first), in all however the read moves on, `flightWaitCap`, where a scan's has no such cap; the
+  its looks took first), in all however the read moves on, `flightWaitCap`, where a scan's has no such cap, nor
+  one under `library.WithUncappedWait` (an admin's Re-read the API answered `still_reading`); the
   request that leads the read, its own, waits up to its `WithWaitCap` and no longer, `awaitFlight`'s
   `errReadUnfinished`, the read going on to store the book; and `resolveAsked`'s looks end together at the same
   cap, not only each at its look time, `waitCapLeft`; a caller with no cap is bounded by its context alone), so a big
@@ -3327,7 +3328,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   request timeout so a slow re-read is still saved; 404 `not_indexable`; a read still going at
   `flightWaitEnd`, where a request's waits on another read of its book end, is answered 202
   `{"still_reading": true}` and goes on, so the console says it shows when done rather than meeting
-  the timeout's bare 503: its looks keep `API.fileWait` but no wait cap; counted in `API.rereads`,
+  the timeout's bare 503: its looks keep `API.fileWait` but no wait cap, and another read of the book under way
+  (a second click racing the first, a scan's) is waited on while it moves on, `WithUncappedWait`, then this one
+  reads the book itself, so a fix made between the clicks is picked up; counted in `API.rereads`,
   which `WaitMediaCaches` waits for, and a failure after the 202 logged as a warning, server#224), `GET
   /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`
   (queue every library: `Scanner.EnqueueAll`, also the startup scans), `GET /admin/scan-runs`

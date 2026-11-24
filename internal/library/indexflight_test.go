@@ -648,6 +648,51 @@ func TestWaitFlightCapsARequestsWait(t *testing.T) {
 	}
 }
 
+// TestWaitFlightUncappedWaitsWhileTheReadMovesOn: a read given a look time
+// whose waits are uncapped (WithUncappedWait, an admin's Re-read the API
+// answered still_reading) waits on another read of its book that keeps moving
+// on past the probe's time, until it ends, so ReindexPath then reads the book
+// itself (TestReindexPathReadsAfresh) rather than giving up on the change made
+// since that read began (server#224). One that stops moving on is still given
+// up on after a look's time.
+func TestWaitFlightUncappedWaitsWhileTheReadMovesOn(t *testing.T) {
+	t.Parallel()
+	s := &Scanner{probeTimeout: 250 * time.Millisecond}
+	// A look's time well past the read's progress tick, so a loaded test
+	// machine's late tick is still progress within it.
+	uncapped := WithUncappedWait(WithLookTimeout(t.Context(), 200*time.Millisecond))
+	if _, ok := s.flightWaitCap(uncapped); ok {
+		t.Error("an uncapped wait is capped")
+	}
+	f := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() { // the read: progress every 20 ms, for four times the probe's time
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for end := time.After(4 * s.probeTimeout); ; {
+			select {
+			case <-tick.C:
+				f.progress.Note()
+			case <-end:
+				close(f.done)
+				return
+			case <-stop:
+				return
+			}
+		}
+	}()
+	began := time.Now()
+	if err := s.waitFlight(uncapped, f); err != nil || time.Since(began) < 3*s.probeTimeout {
+		t.Errorf("an uncapped wait on a read moving on: %v after %v, want it waited for until it ended", err, time.Since(began))
+	}
+
+	stalled := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	if err := s.waitFlight(uncapped, stalled); !errors.Is(err, errReadLeft) {
+		t.Errorf("an uncapped wait on a read that stopped moving on: %v, want errReadLeft", err)
+	}
+}
+
 // TestWaitFlightEndsAtTheRequestsWaitCap: a request whose waits are capped
 // ahead of its own timeout (WithWaitCap, the API's flightWaitEnd) gives up on
 // a read that trickles on, or one running ffprobe past the cap, at the cap,

@@ -248,7 +248,12 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 		// No wait cap (lookCtx's): the read is not given up on at the request's
 		// time, the answer is (flightWaitEnd). A look that gets no answer in
 		// fileWait still ends it, as a 503 share_not_answering when in time.
-		_, err := readAt(a, library.WithLookTimeout(a.baseCtx, a.fileWait), func(ctx context.Context) (*catalog.Book, error) {
+		// Another read of the book under way (a second click's racing the
+		// first, a scan's) is waited on for as long as it moves on, then this
+		// one reads the book itself, so a fix made since that read began is
+		// picked up (WithUncappedWait).
+		look := library.WithUncappedWait(library.WithLookTimeout(a.baseCtx, a.fileWait))
+		_, err := readAt(a, look, func(ctx context.Context) (*catalog.Book, error) {
 			return a.scanner.ReindexPath(ctx, *lib, p)
 		})
 		done <- err
