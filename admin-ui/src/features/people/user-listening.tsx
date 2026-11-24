@@ -190,7 +190,13 @@ function ProgressCard({
                   className="w-11 shrink-0"
                   aria-label={bookTitle}
                 >
-                  <BookCover libraryId={r.library_id} path={r.path} title={bookTitle} size={160} />
+                  <BookCover
+                    libraryId={r.library_id}
+                    path={r.path}
+                    title={bookTitle}
+                    size={160}
+                    version={r.cover_version}
+                  />
                 </Link>
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <Link

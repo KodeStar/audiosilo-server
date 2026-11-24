@@ -268,6 +268,22 @@ describe('library health', () => {
     expect(await screen.findByText('Took too long to read as audio')).toBeInTheDocument();
   });
 
+  it('says a Read again still going goes on (server#224)', async () => {
+    mockFetch(
+      routes({
+        'POST /admin/libraries/1/book/rescan': { status: 202, body: { still_reading: true } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=scan_error');
+    await user.click(await screen.findByRole('button', { name: 'Read again' }));
+    expect(
+      await screen.findByText(
+        'Still reading “Guards! Guards!”. The server goes on, and the book shows the result once its files are read.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('reads an unreadable book again and says whether that fixed it', async () => {
     const calls = mockFetch(
       routes({

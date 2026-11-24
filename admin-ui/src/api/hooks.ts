@@ -132,6 +132,7 @@ export const keys = {
   bookLists: ['admin', 'books', 'list'] as const,
   bookList: (params: BookListParams) => ['admin', 'books', 'list', params] as const,
   bookFacets: (filter: BookFilter) => ['admin', 'books', 'facets', filter] as const,
+  bookCount: (filter: BookFilter) => ['admin', 'books', 'count', filter] as const,
   people: (field: PersonField, libraryId?: number) =>
     ['admin', 'books', 'people', field, libraryId ?? 0] as const,
   series: (libraryId?: number) => ['admin', 'books', 'series', libraryId ?? 0] as const,
@@ -173,6 +174,7 @@ export const keys = {
   /** Every Activity period and listening-days query (a prefix). */
   activityAll: ['admin', 'activity'] as const,
   activity: (range: string) => ['admin', 'activity', range] as const,
+  listeningActivity: (range: string) => ['admin', 'activity', 'listening', range] as const,
   /** Every period of one person's listening days (a prefix; 0 is everyone). */
   listeningDaysOf: (userId: number) => ['admin', 'activity', 'days', userId] as const,
   listeningDays: (range: string, userId: number) =>
@@ -890,6 +892,15 @@ export function useBookFacets(filter: BookFilter) {
   });
 }
 
+/** How many books match a filter, when only the number shows (no facet is counted). */
+export function useBookCount(filter: BookFilter) {
+  return useQuery({
+    queryKey: keys.bookCount(filter),
+    queryFn: () => api.bookCount(filter),
+    placeholderData: keepPreviousData,
+  });
+}
+
 /** A deleted library can still be selected from a cached library list. Refresh
  * that list before surfacing the error, so its screens can switch to All. */
 async function libraryAggregate<T>(qc: QueryClient, id: number | undefined, read: Promise<T>) {
@@ -993,17 +1004,20 @@ export function invalidateMatches(qc: QueryClient) {
  * Reads a book's files again now (POST .../book/rescan) and writes the fresh page
  * everywhere it shows and its cover, then refetches the Health issues (a book the
  * re-read fixed leaves its issue lists) unless `refreshIssues` is false (a batch
- * refreshes once at the end). Returns the page.
+ * refreshes once at the end). Returns the page, or null when the server was still
+ * reading at its answer (the read goes on and is saved: the book's next look shows it).
  */
 export async function rescanBook(
   qc: QueryClient,
   ref: BookRef,
   refreshIssues = true,
-): Promise<AdminBookDetail> {
+): Promise<AdminBookDetail | null> {
   try {
     const fresh = await api.rescanBook(ref.library_id, ref.path);
-    settleBookEdit(qc, fresh);
-    invalidateCover(qc, ref.library_id, ref.path);
+    if (fresh) {
+      settleBookEdit(qc, fresh);
+      invalidateCover(qc, ref.library_id, ref.path);
+    }
     return fresh;
   } finally {
     // A failed re-read can record a read problem in Health.
@@ -1312,6 +1326,15 @@ export function useActivity(range: string, keepPrevious = false) {
     queryFn: () => api.activity(range),
     staleTime: 60_000,
     placeholderData: keepPrevious ? keepPreviousData : undefined,
+  });
+}
+
+/** A period's listening alone (Year in listening): Activity without its library and progress steps. */
+export function useListeningActivity(range: string) {
+  return useQuery({
+    queryKey: keys.listeningActivity(range),
+    queryFn: () => api.listeningActivity(range),
+    staleTime: 60_000,
   });
 }
 

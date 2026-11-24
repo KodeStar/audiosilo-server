@@ -60,6 +60,7 @@ func TestAdminCatalogEndpointsRequireAdmin(t *testing.T) {
 	}{
 		{"GET", "/api/v1/admin/books", "", 200},
 		{"GET", "/api/v1/admin/books/facets", "", 200},
+		{"GET", "/api/v1/admin/books/facets?only=total", "", 200},
 		{"POST", "/api/v1/admin/books/bulk", bulk, 200},
 		{"POST", "/api/v1/admin/books/merge", `{"field":"author","sources":["Weir, Andy"],"target":"Andy Weir"}`, 200},
 		{"POST", "/api/v1/admin/books/merge/undo", `{"field":"author","target":"Andy Weir","books":[{"library_id":` +
@@ -146,6 +147,15 @@ func TestAdminListBooksAPI(t *testing.T) {
 	if resp, body := e.do(t, "GET", "/api/v1/admin/books/facets?format=mp3", adminTok, ""); resp.StatusCode != 200 ||
 		!strings.Contains(body, `"total":1`) || !strings.Contains(body, `{"value":"m4b","count":1}`) {
 		t.Fatalf("facets = %d %s", resp.StatusCode, body)
+	}
+	// ?only=total is the total alone, the same number, with no facet counted
+	// (server#225); anything else in only is refused.
+	if resp, body := e.do(t, "GET", "/api/v1/admin/books/facets?format=mp3&only=total", adminTok, ""); resp.StatusCode != 200 ||
+		body != "{\"total\":1}\n" {
+		t.Fatalf("facets only=total = %d %q, want {\"total\":1}", resp.StatusCode, body)
+	}
+	if resp, body := e.do(t, "GET", "/api/v1/admin/books/facets?only=formats", adminTok, ""); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("facets only=formats = %d %s, want 400", resp.StatusCode, body)
 	}
 }
 

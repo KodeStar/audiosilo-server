@@ -391,6 +391,9 @@ type ListeningRow struct {
 	Duration  float64 `json:"duration"`
 	Finished  bool    `json:"finished"`
 	UpdatedAt string  `json:"updated_at"`
+	// CoverVersion is the book's Book.CoverVersion (the cover's cache buster);
+	// omitted when the path is no indexed book (any more).
+	CoverVersion string `json:"cover_version,omitempty"`
 }
 
 // ListeningOverview returns every user's playback progress joined to book
@@ -404,7 +407,7 @@ func (c *Catalog) ListeningOverview(ctx context.Context, limit int) ([]Listening
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT p.user_id, u.username, p.library_id, p.rel_path,
 		        COALESCE(b.title, ''), COALESCE(b.author, ''),
-		        p.position, p.duration, p.finished, p.updated_at
+		        p.position, p.duration, p.finished, p.updated_at, COALESCE(b.cover_art, '')
 		   FROM progress p
 		   JOIN users u ON u.id = p.user_id
 		   LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
@@ -416,11 +419,15 @@ func (c *Catalog) ListeningOverview(ctx context.Context, limit int) ([]Listening
 	defer rows.Close()
 	out := []ListeningRow{} // an empty list, never null: a fresh server has no listening yet
 	for rows.Next() {
-		var r ListeningRow
+		var (
+			r        ListeningRow
+			coverArt string
+		)
 		if err := rows.Scan(&r.UserID, &r.Username, &r.LibraryID, &r.Path,
-			&r.Title, &r.Author, &r.Position, &r.Duration, &r.Finished, &r.UpdatedAt); err != nil {
+			&r.Title, &r.Author, &r.Position, &r.Duration, &r.Finished, &r.UpdatedAt, &coverArt); err != nil {
 			return nil, err
 		}
+		r.CoverVersion = CoverVersion(coverArt)
 		out = append(out, r)
 	}
 	return out, rows.Err()

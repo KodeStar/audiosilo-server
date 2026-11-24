@@ -2890,6 +2890,19 @@ func WithWaitCap(ctx context.Context, at time.Time) context.Context {
 	return context.WithValue(ctx, waitCapKey{}, at)
 }
 
+type uncappedWaitKey struct{}
+
+// WithUncappedWait is ctx (a read given a look time: WithLookTimeout) whose
+// waits on another's read of its book last for as long as that read moves on,
+// as a scan's do (flightWaitCap), rather than the probe's time in all: a read
+// nobody waits on an answer from (an admin's Re-read the API answered
+// still_reading) then reads the book itself once a read under way ends, so a
+// change made since that read began is picked up (server#224). A read that
+// stops moving on is still given up on (waitFlight).
+func WithUncappedWait(ctx context.Context) context.Context {
+	return context.WithValue(ctx, uncappedWaitKey{}, true)
+}
+
 // lookTimeout is the time each look at a library file gets under ctx: its
 // WithLookTimeout when shorter, else the probe's.
 func (s *Scanner) lookTimeout(ctx context.Context) time.Duration {
@@ -3072,9 +3085,13 @@ func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
 // shorter (none once it has passed), else the probe's time. A read moving on
 // slowly is then waited on for longer than a look's time, and a running
 // ffprobe for its own up to the cap, but a request is never held for as long
-// as a read may take (indexTimeout), nor past its own timeout.
+// as a read may take (indexTimeout), nor past its own timeout. A read under
+// WithUncappedWait is not capped either.
 func (s *Scanner) flightWaitCap(ctx context.Context) (time.Duration, bool) {
 	if _, asked := ctx.Value(lookTimeoutKey{}).(time.Duration); !asked {
+		return 0, false
+	}
+	if uncapped, _ := ctx.Value(uncappedWaitKey{}).(bool); uncapped {
 		return 0, false
 	}
 	if left, ok := waitCapLeft(ctx); ok {

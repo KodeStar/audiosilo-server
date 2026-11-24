@@ -375,8 +375,12 @@ function MoreMenu({
   // Reads the book's files again now (tags, chapters, cover, read problems).
   const rescan = async () => {
     try {
-      await rescanBook(qc, b);
-      toast.add({ title: t('book.more.rescanned'), type: 'success' });
+      const fresh = await rescanBook(qc, b);
+      toast.add(
+        fresh
+          ? { title: t('book.more.rescanned'), type: 'success' }
+          : { title: t('common.stillReading', { title: b.title || b.path }), type: 'info' },
+      );
     } catch (err) {
       toastError(t('book.more.rescanFailed'), err);
     }

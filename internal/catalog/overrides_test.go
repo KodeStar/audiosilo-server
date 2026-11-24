@@ -981,8 +981,23 @@ func TestChapterRenameFollowsTheChapter(t *testing.T) {
 	if page, _ := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Edited: &yes}}); len(page.Books) != 0 {
 		t.Fatalf("a dormant chapter rename marked the book edited: %+v", page.Books)
 	}
+	// The book page says the rename is waiting, where it was made (server#224).
+	dormant := func() []DormantRename {
+		t.Helper()
+		d, err := c.AdminBookDetail(ctx, lib.ID, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.DormantRenames
+	}
+	if got, want := dormant(), []DormantRename{{File: "a.m4b", Start: 1800, Title: "The Storm"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("dormant renames = %+v, want %+v", got, want)
+	}
 	upsert(intro, one, two)
 	if got := titles(); got[2] != "The Storm" {
 		t.Fatalf("the rename did not come back with its chapter: %v", got)
+	}
+	if got := dormant(); len(got) != 0 {
+		t.Fatalf("an applied rename listed as dormant: %+v", got)
 	}
 }

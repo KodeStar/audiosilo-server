@@ -29,8 +29,9 @@ function bookRoutes(list: AdminBook[] = books, over: Record<string, MockRoute> =
       return { body: { books: list } };
     },
     'GET /admin/books/facets': (req) =>
-      req.query.get('added_after') && req.query.size === 1
-        ? { body: facets({ total: 2 }) }
+      // The shelf's "N this week" asks for the count alone (server#225).
+      req.query.get('only') === 'total' && req.query.get('added_after') && req.query.size === 2
+        ? { body: { total: 2 } }
         : { body: facets({ total: list.length }) },
     'GET /admin/shares': { body: { shares: [kidsShare, fictionGrant] } },
     ...over,

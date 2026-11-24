@@ -280,6 +280,7 @@ function TopBooks({ a }: { a: Activity }) {
                 path={b.path}
                 title={b.title || b.path}
                 size={160}
+                version={b.cover_version}
                 className="w-11 shrink-0"
               />
               <span className="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -435,6 +436,7 @@ function FunnelCard({ a }: { a: Activity }) {
                   path={d.path}
                   title={d.title || d.path}
                   size={160}
+                  version={d.cover_version}
                   className="w-9 shrink-0"
                 />
                 <p className="min-w-0 text-[12.5px] text-muted-foreground">
@@ -524,7 +526,7 @@ function AppsCard({ a }: { a: Activity }) {
   const rows = clientRows(a.clients);
   const max = rows[0]?.devices || 1;
   const outdated = rows.filter((r) => r.outdated).reduce((s, r) => s + r.devices, 0);
-  const unknown = rows.filter((r) => !r.app).reduce((s, r) => s + r.devices, 0);
+  const unknown = rows.filter((r) => r.unknown).reduce((s, r) => s + r.devices, 0);
   return (
     <Card aria-labelledby="apps-title">
       <CardHeader
@@ -536,22 +538,25 @@ function AppsCard({ a }: { a: Activity }) {
         <p className="px-5 py-6 text-center text-muted-foreground">{t('activity.apps.none')}</p>
       ) : (
         <div className="flex flex-col gap-2.5 p-5">
-          {rows.map((r) => (
-            <div
-              key={`${r.app}|${r.version}|${r.platform}`}
-              className="flex items-center gap-2.5 text-[13px]"
-            >
-              <span className="w-[42%] min-w-0 truncate" title={name(r)}>
-                {name(r)}
-              </span>
-              <ShareBar
-                fraction={r.devices / max}
-                color={r.outdated || !r.app ? 'var(--chart-4)' : 'var(--chart-2)'}
-                className="flex-1"
-              />
-              <b className="w-7 text-right tabular-nums">{formatNumber(r.devices, lang)}</b>
-            </div>
-          ))}
+          {rows.map((r) => {
+            const label = name(r, r.api_key);
+            return (
+              <div
+                key={`${r.app}|${r.version}|${r.platform}|${r.api_key ? 'key' : ''}`}
+                className="flex items-center gap-2.5 text-[13px]"
+              >
+                <span className="w-[42%] min-w-0 truncate" title={label}>
+                  {label}
+                </span>
+                <ShareBar
+                  fraction={r.devices / max}
+                  color={r.outdated || r.unknown ? 'var(--chart-4)' : 'var(--chart-2)'}
+                  className="flex-1"
+                />
+                <b className="w-7 text-right tabular-nums">{formatNumber(r.devices, lang)}</b>
+              </div>
+            );
+          })}
           {outdated || unknown ? (
             <span className="text-[12px] text-muted-foreground">
               {[

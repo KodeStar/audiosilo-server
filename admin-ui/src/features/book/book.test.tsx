@@ -79,6 +79,25 @@ describe('book page', () => {
     );
   });
 
+  it('says a re-read still going goes on, and leaves the page as it is (server#224)', async () => {
+    mockFetch(
+      routes(bookDetail(), {
+        'POST /admin/libraries/1/book/rescan': { status: 202, body: { still_reading: true } },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'More book actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Read the files again' }));
+    expect(
+      await screen.findByText(
+        'Still reading “The Way of Kings”. The server goes on, and the book shows the result once its files are read.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Read the book's files again")).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'The Way of Kings' })).toBeInTheDocument();
+  });
+
   it('leaves a credit naming nobody out of the byline', async () => {
     const detail = bookDetail();
     detail.book = { ...detail.book, narrator: ',', narrators: [] };
