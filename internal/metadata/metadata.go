@@ -26,6 +26,7 @@ import (
 	"github.com/dhowden/tag"
 
 	"github.com/kodestar/audiosilo-server/internal/mounts"
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -633,7 +634,7 @@ func ffprobeForced(ffprobePath string) bool {
 
 func applyTags(m *Metadata, md tag.Metadata) {
 	m.setTitle(md.Album(), md.Title())
-	if a := firstNonEmpty(md.AlbumArtist(), md.Artist()); a != "" {
+	if a := textclean.FirstNonEmpty(md.AlbumArtist(), md.Artist()); a != "" {
 		m.Author = a
 	}
 	if c := strings.TrimSpace(md.Composer()); c != "" {
@@ -771,7 +772,7 @@ func (m *Metadata) setTitle(album, title string) {
 func bookTitle(album, title string) string {
 	a, t := strings.TrimSpace(album), strings.TrimSpace(title)
 	if a == "" || t == "" {
-		return firstNonEmpty(a, t)
+		return textclean.FirstNonEmpty(a, t)
 	}
 	if tail := albumTail(a, t); tail != "" && !trackTailName(tail) {
 		return t
@@ -1093,15 +1094,6 @@ func firstReleaseDate(vals ...string) string {
 // bytes (NULs) in front of it, and a writer may end the text with one.
 func tagText(v string) string {
 	return strings.TrimSpace(strings.ReplaceAll(v, "\x00", ""))
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
 }
 
 // DeriveFromPath infers title/series/author/index from a book's relative path.

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/xml"
 	"errors"
+
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // MaxExportBytes bounds a rendered export.
@@ -19,8 +21,8 @@ type Entry struct {
 	URL   string
 }
 
-// MaxTitleRunes bounds an exported title.
-const MaxTitleRunes = 500
+// MaxTitleBytes bounds an exported title (cleaned by textclean.Line).
+const MaxTitleBytes = 1000
 
 // Render writes the export in the fixed form the shared golden pins: an XML
 // declaration, OPML 2.0, LF line ends and two-space indents, the head's fixed
@@ -31,7 +33,7 @@ func Render(entries []Entry) ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<opml version=\"2.0\">\n  <head><title>AudioSilo subscriptions</title></head>\n  <body>\n")
 	for _, e := range entries {
-		title := CleanText(e.Title, MaxTitleRunes)
+		title := textclean.Line(e.Title, MaxTitleBytes)
 		if title == "" {
 			title = "Podcast"
 		}

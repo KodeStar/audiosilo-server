@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/relpath"
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // Bridge Phase 4a: Audible. The Bridge holds the Audible sign-ins (its vault)
@@ -136,11 +137,6 @@ func CancelAudibleImports(ctx context.Context, tx *sql.Tx, account, reason strin
 var openAudibleImportsSQL = `SELECT j.dedupe_key FROM libraries l CROSS JOIN bridge_jobs j INDEXED BY idx_bridge_jobs_open
 	WHERE j.state IN ` + OpenStatesSQL + ` AND j.dedupe_key >= (?1 || l.id || ?2) AND j.dedupe_key < (?1 || l.id || ?3)
 	  AND ` + ParamSQL("j.params", "$.account") + ` = ?4`
-
-// CleanText is v as printable bounded text on one line (cleanText): what the
-// Bridge reports from the outside world (an Audible title, its authors) is
-// cleaned rather than refused, so one odd title never fails a whole poll.
-func CleanText(v string, max int) string { return strings.TrimSpace(cleanText(v, max, false)) }
 
 // Bridge Phase 4b: backing up an Audible title.
 
@@ -447,7 +443,7 @@ func failureCode(j Job, codes []string) string {
 		Code string `json:"code"`
 	}
 	if json.Unmarshal(j.Result, &r) == nil && r.Code != "" {
-		return cleanText(r.Code, maxShortText, false)
+		return textclean.Clean(r.Code, maxShortText, false)
 	}
 	for _, c := range codes {
 		if j.Error == c || strings.HasPrefix(j.Error, c+":") {

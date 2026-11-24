@@ -9,9 +9,6 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 )
 
 // The import's bounds, over the whole document (ignored head and extension
@@ -62,24 +59,6 @@ type Document struct {
 	Version    string
 	Outlines   int
 	Candidates []Candidate
-}
-
-// CleanText is a title or name as plain text: control characters removed,
-// spaces trimmed, at most max runes (invalid UTF-8 already replaced by the
-// decoder that produced s, or here).
-func CleanText(s string, maxRunes int) string {
-	s = strings.ToValidUTF8(s, "�")
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, s)
-	s = strings.TrimSpace(s)
-	if utf8.RuneCountInString(s) > maxRunes {
-		s = strings.TrimSpace(string([]rune(s)[:maxRunes]))
-	}
-	return s
 }
 
 var bom = []byte{0xEF, 0xBB, 0xBF}

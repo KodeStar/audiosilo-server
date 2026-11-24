@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"regexp"
 	"slices"
+
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // Setup is the Bridge's onboarding checklist (BRIDGE-PLAN.md Phase 2b,
@@ -133,7 +135,7 @@ func (s *Setup) validate() *Setup {
 			slices.ContainsFunc(items, func(o SetupItem) bool { return o.ID == it.ID }) {
 			continue
 		}
-		it.Detail = cleanText(it.Detail, maxSetupDetail, false)
+		it.Detail = textclean.Clean(it.Detail, maxSetupDetail, false)
 		// Told apart by a set, and stopped at the bound: the list is as long
 		// as the heartbeat's body allows, and a scan of the ids kept for each
 		// would cost a second of CPU for one item (server#445).

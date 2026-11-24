@@ -3717,7 +3717,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   leniently, `readStoredStatus`, so a row a newer server wrote survives a rollback), and only the mappings of libraries the
   server has are stored, and of a setup item's `library_ids` only theirs (`Status.KeepLibraries`, the row written without HTML escaping; a beat whose library list can't be read is saved as sent, Validate-bounded, and answered with the fault, so a catalog read fault never shows the Bridge offline), so the row a
   heartbeat rewrites stays the size of the server's own libraries; free text is cleaned to printable bounded text,
-  `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside
+  `textclean.Clean` (the server's one cleaner for free text it keeps or shows: Bridge reports, Audible titles, podcast directory and OPML titles), never refused, as is a job report's `error` (line breaks kept): it is partly the outside
   world's, and a refused report is retried for ever while its job is re-run; one row, never a history)
   answers `{server_time,
   libraries[{id, name, root}], accepts}` (`accepts: ["setup"]`, `bridge.HeartbeatAccepts`: the optional

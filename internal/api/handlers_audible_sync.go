@@ -9,6 +9,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 // Bridge Phase 4c: an Audible account's places, both ways
@@ -220,8 +221,8 @@ func (a *API) audibleSyncClaim(ctx context.Context, account string) (json.RawMes
 	params, bad, dropped := bridge.AudibleSyncClaim(account, titles)
 	if len(bad) > 0 {
 		a.log.Warn("audible: an account's sync leaves out titles it can't name (the first is given)", "account", account,
-			"left_out", len(bad), "asin", bridge.CleanText(bad[0].ASIN, 64), "library_id", bad[0].LibraryID,
-			"path", bridge.CleanText(bad[0].Path, 256), "runtime_s", bad[0].RuntimeS)
+			"left_out", len(bad), "asin", textclean.Line(bad[0].ASIN, 64), "library_id", bad[0].LibraryID,
+			"path", textclean.Line(bad[0].Path, 256), "runtime_s", bad[0].RuntimeS)
 	}
 	if dropped > 0 {
 		a.log.Warn("audible: an account's sync leaves out titles past the params' bound", "account", account,
