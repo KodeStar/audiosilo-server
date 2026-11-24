@@ -109,7 +109,9 @@ func FollowError(err error) (RowError, string) {
 // ctx ending stops the rows not yet acted on (they are not reported). A feed
 // whose last request by the caller failed within RecentFailureWindow is an
 // error row (recently_failed, request_id the failed request) and is not queued
-// again, so a few dead feeds can't take every wave's slots.
+// again, so a few dead feeds can't take every wave's slots. A row never echoes
+// the document; its outline's title goes only into a public feed's new request
+// (FollowURL.Title), the row the follower's list shows until the show is added.
 func (f *Follower) Import(ctx context.Context, caller catalog.Caller, lib int64, doc *opml.Document) ImportResult {
 	out := ImportResult{LibraryID: lib, Rows: []ImportRow{}}
 	first := map[string]int{}
@@ -138,7 +140,7 @@ func (f *Follower) Import(ctx context.Context, caller catalog.Caller, lib int64,
 			continue
 		}
 		first[norm] = c.Index
-		res, err := f.Follow(ctx, FollowURL{Caller: caller, LibraryID: lib, FeedURL: norm, AdoptOnly: created >= ImportNewRequests, SkipRecentFailure: true})
+		res, err := f.Follow(ctx, FollowURL{Caller: caller, LibraryID: lib, FeedURL: norm, Title: c.Title, AdoptOnly: created >= ImportNewRequests, SkipRecentFailure: true})
 		if err != nil {
 			if res != nil {
 				// A matched private show's privacy, on a refused row too.

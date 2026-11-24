@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
+	"github.com/kodestar/audiosilo-server/internal/textclean"
 )
 
 const (
@@ -95,7 +96,16 @@ type SubscribeParams struct {
 	FeedHost      string `json:"feed_host"`
 	Private       bool   `json:"private"`
 	ShowPath      string `json:"show_path"`
+	// Title is the show's name as the follower's list or directory gave it
+	// (textclean.Line, at most MaxSubscribeTitleBytes): the request row's
+	// label until the show is added. Never for a private feed. Additive: a
+	// Bridge reads the params leniently and ignores it.
+	Title string `json:"title,omitempty"`
 }
+
+// MaxSubscribeTitleBytes bounds a subscribe request's Title.
+const MaxSubscribeTitleBytes = 500
+
 type PollParams struct {
 	ShowID       string `json:"show_id,omitempty"`
 	ETag         string `json:"etag,omitempty"`
@@ -174,7 +184,8 @@ func PodcastOutcomeOf(j Job) (PodcastOutcome, error) {
 
 func subscribeParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p SubscribeParams
-	if decodeStrict(raw, &p) != nil || !feed.ValidHex(p.FeedURLSHA256, 64) || p.FeedHost == "" || len(p.FeedHost) > feed.MaxHostLen || p.ShowPath != "" && !feed.ShowPath(p.ShowPath) {
+	if decodeStrict(raw, &p) != nil || !feed.ValidHex(p.FeedURLSHA256, 64) || p.FeedHost == "" || len(p.FeedHost) > feed.MaxHostLen || p.ShowPath != "" && !feed.ShowPath(p.ShowPath) ||
+		p.Title != textclean.Line(p.Title, MaxSubscribeTitleBytes) || p.Private && p.Title != "" {
 		return nil, invalid("invalid subscribe params")
 	}
 	if p.Private {
@@ -229,6 +240,9 @@ type SubscribeRequest struct {
 	FeedURL   string // normalized (feed.NormalizeFeedURL)
 	Private   bool
 	ShowPath  string // a known show this repairs, "" for a new one
+	// Title labels a new request (SubscribeParams.Title): cleaned here, and
+	// dropped for a private feed. An adopted request keeps its own.
+	Title string
 	// AdoptOnly answers the open request for this feed and user (created
 	// false), or ErrNoNewRequest: nothing new is queued.
 	AdoptOnly bool
@@ -251,6 +265,9 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 		return nil, false, feed.ErrInvalidFeedURL
 	}
 	p := SubscribeParams{FeedURL: norm, FeedURLSHA256: feed.FeedURLHash(norm), FeedHost: u.Hostname(), Private: private, ShowPath: show}
+	if !private {
+		p.Title = textclean.Line(r.Title, MaxSubscribeTitleBytes)
+	}
 	if show != "" {
 		// A show pruned since the caller found it has no identity left to bind:
 		// the repair proceeds like a new subscription instead of failing.
@@ -779,6 +796,35 @@ func (s *Service) SubscribeRequests(ctx context.Context, user int64) ([]Job, err
 		out = append(out, RedactedJob(*j))
 	}
 	return out, rows.Err()
+}
+
+// ErrRequestNotDismissable is a follow request DismissSubscribe may not
+// remove yet: still open, ended done (its row opens the show), or ended but
+// not folded yet (the fold still reads it).
+var ErrRequestNotDismissable = errors.New("the follow request has not failed or been cancelled")
+
+// DismissSubscribe removes user's own follow request id once it failed or was
+// cancelled and its outcome is folded (fe#126: a listener clears a failed row
+// from Shows being added). One statement, so a request that changes state
+// meanwhile is never removed open. ErrNotFound for no such request of user's;
+// ErrRequestNotDismissable for one that may not go (yet). A following import
+// may queue the feed again: the listener let the failure go.
+func (s *Service) DismissSubscribe(ctx context.Context, user, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM bridge_jobs WHERE id=? AND kind='`+KindPodcastSubscribe+`' AND requested_by=? AND state IN ('`+StateFailed+`','`+StateCancelled+`') AND EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=bridge_jobs.id)`, id, user)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n > 0 {
+		return err
+	}
+	var mine bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE id=? AND kind='`+KindPodcastSubscribe+`' AND requested_by=?)`, id, user).Scan(&mine); err != nil {
+		return err
+	}
+	if !mine {
+		return ErrNotFound
+	}
+	return ErrRequestNotDismissable
 }
 
 // checkLibraryKind refuses a job of a kind for one kind of library

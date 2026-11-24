@@ -52,6 +52,10 @@ type Candidate struct {
 	Index int
 	// URL is the xmlUrl as written (entities decoded); "" when missing or blank.
 	URL string
+	// Title is the outline's title, else its text, cleaned to one line of at
+	// most MaxTitleBytes (textclean.Line); "" when it has neither. A label
+	// only: the list's own words, shown back to the person who sent it.
+	Title string
 }
 
 // Document is a parsed subscription list.

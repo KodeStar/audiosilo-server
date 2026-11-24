@@ -80,15 +80,36 @@ func TestParseDuplicatesSample(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Candidate{
-		{2, "https://feeds.example.org/one.xml"},
-		{3, "HTTPS://Feeds.Example.org:443/one.xml#ignored"},
-		{4, "https://feeds.example.org/old-one.xml"},
-		{5, "https://feeds.example.org/private.xml?token=OPML_PRIVATE_CANARY_2C3&x=1"},
-		{6, "file:///etc/hosts"},
-		{7, ""},
+		{2, "https://feeds.example.org/one.xml", "Fixture One"},
+		{3, "HTTPS://Feeds.Example.org:443/one.xml#ignored", "Same URL"},
+		{4, "https://feeds.example.org/old-one.xml", "Old URL"},
+		{5, "https://feeds.example.org/private.xml?token=OPML_PRIVATE_CANARY_2C3&x=1", "Private"},
+		{6, "file:///etc/hosts", "Invalid"},
+		{7, "", "Missing URL"},
 	}
 	if fmt.Sprint(doc.Candidates) != fmt.Sprint(want) || doc.Outlines != 8 || doc.Version != "2.0" {
 		t.Fatalf("= %+v", doc)
+	}
+}
+
+// An outline's title is its title attribute, else its text, cleaned to one
+// line and cut to MaxTitleBytes; neither is "".
+func TestParseOutlineTitles(t *testing.T) {
+	long := strings.Repeat("é", MaxTitleBytes)
+	doc, err := Parse([]byte(wrap(`<outline title=" Title&#10;Two " text="Text" xmlUrl="https://a.example/1"/>` +
+		`<outline title=" " text="Only text" xmlUrl="https://a.example/2"/>` +
+		`<outline xmlUrl="https://a.example/3"/>` +
+		`<outline text="` + long + `" xmlUrl="https://a.example/4"/>`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range doc.Candidates {
+		got = append(got, c.Title)
+	}
+	want := []string{"Title Two", "Only text", "", strings.Repeat("é", MaxTitleBytes/2)}
+	if fmt.Sprintf("%q", got) != fmt.Sprintf("%q", want) {
+		t.Fatalf("titles %q, want %q", got, want)
 	}
 }
 

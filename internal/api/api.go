@@ -617,6 +617,9 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/libraries/{id}/podcasts/fetch", a.requireAuth(compressJSON(a.handlePodcastFetch)))
 	mux.Handle("POST /api/v1/libraries/{id}/podcasts/fetch", a.requireAuth(notDemo(http.HandlerFunc(a.handlePodcastFetch))))
 	mux.Handle("GET /api/v1/me/podcasts", a.requireAuth(compressJSON(a.handleMyPodcasts)))
+	// Not the module's: clearing a failed request is housekeeping, and the
+	// list it clears (/me/podcasts) is core.
+	mux.Handle("DELETE /api/v1/podcasts/requests/{id}", a.requireAuth(notDemo(http.HandlerFunc(a.handlePodcastRequestDismiss))))
 	pr := moduleRoutes{a: a, mux: mux, id: bridge.ModulePodcasts}
 	pr.User("POST /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastFollow))
 	pr.User("DELETE /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastUnfollow))

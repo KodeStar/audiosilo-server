@@ -923,3 +923,97 @@ func TestSubscribeClaimUnreadableParamsFailed(t *testing.T) {
 		t.Fatalf("last subscribe = %+v, %v; want it failed", stored, err)
 	}
 }
+
+// A subscribe request keeps the title its follower gave, cleaned to one line,
+// never for a private feed; the params check refuses a title that isn't so.
+func TestSubscribeTitle(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	j, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/titled.xml", Title: "  The\nShow  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p SubscribeParams
+	if err := json.Unmarshal(j.Params, &p); err != nil || p.Title != "The Show" {
+		t.Fatalf("title %q %v", p.Title, err)
+	}
+	priv, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/private?auth=SECRET123", Private: true, Title: "Members"})
+	if err != nil || strings.Contains(string(priv.Params), "Members") {
+		t.Fatalf("private %s %v", priv.Params, err)
+	}
+	base := `"feed_url_sha256":"` + strings.Repeat("a", 64) + `","feed_host":"example.com"`
+	for _, raw := range []string{`{` + base + `,"private":true,"title":"x"}`, `{` + base + `,"private":true,"title":" padded "}`} {
+		if _, err := subscribeParams(json.RawMessage(raw)); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("%s = %v", raw, err)
+		}
+	}
+}
+
+// DismissSubscribe removes only the caller's own request, and only once it
+// failed or was cancelled and its outcome was folded: never an open or done
+// one, never another user's.
+func TestDismissSubscribe(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	other := q.admin + 1000
+	if _, err := q.db.ExecContext(ctx, `INSERT INTO users(id, username, password_hash, role, created_at, updated_at) VALUES(?, 'bob', '', 'user', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, other); err != nil {
+		t.Fatal(err)
+	}
+	end := func(url, state string) *Job {
+		t.Helper()
+		j, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, url, false, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state == "" {
+			return j
+		}
+		claimed, err := q.ClaimFor(ctx, q.token, nil, 0)
+		if err != nil || claimed == nil || claimed.ID != j.ID {
+			t.Fatalf("claim %+v %v", claimed, err)
+		}
+		if _, err := q.UpdateHeld(ctx, j.ID, Update{Attempt: claimed.Attempts, State: &state, Result: json.RawMessage(`{"code":"not_a_feed","message":"no"}`)}); err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	fold := func(id int64) {
+		t.Helper()
+		if _, err := q.db.ExecContext(ctx, `INSERT INTO podcast_folded(job_id,at) VALUES(?,'2026-10-15T12:00:00Z')`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open := end("https://example.com/open.xml", "")
+	if err := q.DismissSubscribe(ctx, q.admin, open.ID); !errors.Is(err, ErrRequestNotDismissable) {
+		t.Fatalf("open = %v", err)
+	}
+	if _, err := q.Cancel(ctx, open.ID); err != nil {
+		t.Fatal(err)
+	}
+	failed := end("https://example.com/failed.xml", StateFailed)
+	if err := q.DismissSubscribe(ctx, q.admin, failed.ID); !errors.Is(err, ErrRequestNotDismissable) {
+		t.Fatalf("unfolded = %v", err)
+	}
+	fold(failed.ID)
+	fold(open.ID)
+	if err := q.DismissSubscribe(ctx, other, failed.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another user's = %v", err)
+	}
+	for _, id := range []int64{failed.ID, open.ID} {
+		if err := q.DismissSubscribe(ctx, q.admin, id); err != nil {
+			t.Fatalf("dismiss %d = %v", id, err)
+		}
+		if err := q.DismissSubscribe(ctx, q.admin, id); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("again %d = %v", id, err)
+		}
+	}
+	done := end("https://example.com/done.xml", StateDone)
+	fold(done.ID)
+	if err := q.DismissSubscribe(ctx, q.admin, done.ID); !errors.Is(err, ErrRequestNotDismissable) {
+		t.Fatalf("done = %v", err)
+	}
+	reqs, err := q.SubscribeRequests(ctx, q.admin)
+	if err != nil || len(reqs) != 1 || reqs[0].ID != done.ID {
+		t.Fatalf("left %+v %v", reqs, err)
+	}
+}
