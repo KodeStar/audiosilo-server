@@ -390,7 +390,12 @@ func readFile(ctx context.Context, m *Metadata, root, path string, ff ffRules, c
 	var md tag.Metadata
 	terr := errTagsUnread
 	narrator := ""
-	why := b.bounded(rctx, func() { md, terr = tag.ReadFrom(&blockReader{b: b}) })
+	// A count is the probe of an MP3 with ffprobe's rules unknown (below).
+	counting := count && m.Format == "mp3" && frameCountWanted(ctx)
+	// A picture dhowden reads whole is kept for the probe's read of the tag
+	// around it (blockFile.big) only when a probe follows.
+	tags := &blockReader{b: b, keep: ff != ffNone || counting}
+	why := b.bounded(rctx, func() { md, terr = tag.ReadFrom(tags) })
 	// The iTunes narrator item, which neither dhowden nor ffprobe reads. Asked
 	// of an MP4 (or a file named as one dhowden could not read: its walk is
 	// bounded and a stranger simply has no moov).
@@ -413,7 +418,7 @@ func readFile(ctx context.Context, m *Metadata, root, path string, ff ffRules, c
 		m.Narrator, m.narratorExplicit = narrator, true
 	}
 	if ff == ffNone {
-		if count && m.Format == "mp3" && frameCountWanted(ctx) {
+		if counting {
 			b.ff = noFFprobeRules
 			p, why, uncounted := fastProbe(ctx, b, m.Format, timeout)
 			if why == "" && p.Counted {

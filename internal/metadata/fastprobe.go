@@ -323,11 +323,12 @@ type blockFile struct {
 	err    error
 	ff     ffRules // the rules the probe reads it by
 
-	// big is dhowden's last read of more than four blocks (blockReader), a
-	// copy, from bigOff: an ID3v2 tag's picture is read whole by dhowden, then
-	// again inside the whole tag the probe reads, and a cover of MiBs is not
-	// read from the file twice. The probe's own large reads are not kept
-	// (nothing reads them again), and big is let go once a read has used it.
+	// big is dhowden's last read of more than four blocks (a blockReader that
+	// keeps: a probe follows), a copy, from bigOff: an ID3v2 tag's picture is
+	// read whole by dhowden, then again inside the whole tag the probe reads,
+	// and a cover of MiBs is not read from the file twice. The probe's own
+	// large reads are not kept (nothing reads them again), nor a read of the
+	// tags alone, and big is let go once a read has used it.
 	big    []byte
 	bigOff int64
 
@@ -511,7 +512,7 @@ func (b *blockFile) block(i int64) []byte {
 func (b *blockFile) ReadAt(p []byte, off int64) (int, error) { return b.readAt(p, off, false) }
 
 // readAt is ReadAt; keep makes a large read the one kept (big): dhowden's,
-// through blockReader.
+// through a blockReader whose probe follows.
 func (b *blockFile) readAt(p []byte, off int64, keep bool) (int, error) {
 	b.tick()
 	if off < 0 {
@@ -586,17 +587,20 @@ func (b *blockFile) bytesAt(off int64, n int) ([]byte, bool) {
 	return buf, m == n
 }
 
-// blockReader is a ReadSeeker over a blockFile, for dhowden.
+// blockReader is a ReadSeeker over a blockFile, for dhowden. keep makes its
+// large reads the one the blockFile keeps (big): only when a probe follows
+// that reads them again, never for a read of the tags alone.
 type blockReader struct {
-	b   *blockFile
-	pos int64
+	b    *blockFile
+	pos  int64
+	keep bool
 }
 
 func (r *blockReader) Read(p []byte) (int, error) {
 	if r.pos >= r.b.size {
 		return 0, io.EOF
 	}
-	n, err := r.b.readAt(p, r.pos, true)
+	n, err := r.b.readAt(p, r.pos, r.keep)
 	r.pos += int64(n)
 	if n > 0 && errors.Is(err, io.EOF) {
 		err = nil

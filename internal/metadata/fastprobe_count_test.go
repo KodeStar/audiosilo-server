@@ -743,7 +743,7 @@ func TestBlockFileKeepsTheLastLargeRead(t *testing.T) {
 	b := newBlockFile(r, int64(len(data)))
 	pic := make([]byte, 1<<20) // the picture, inside the tag, read by dhowden
 	const picAt = 100 << 10
-	if n, err := (&blockReader{b: b, pos: picAt}).Read(pic); n != len(pic) || err != nil {
+	if n, err := (&blockReader{b: b, pos: picAt, keep: true}).Read(pic); n != len(pic) || err != nil {
 		t.Fatalf("picture read %d, %v", n, err)
 	}
 	before := r.n.Load()
@@ -765,6 +765,10 @@ func TestBlockFileKeepsTheLastLargeRead(t *testing.T) {
 	}
 	if n, err := b.ReadAt(make([]byte, 1<<20), 2<<20); n != 1<<20 || err != nil || b.big != nil {
 		t.Fatalf("the probe's own large read = %d, %v, kept %d bytes; want it read and not kept", n, err, len(b.big))
+	}
+	// Nor is a tag read's with no probe to follow (ExtractTags).
+	if n, err := (&blockReader{b: b, pos: picAt}).Read(pic); n != len(pic) || err != nil || b.big != nil {
+		t.Fatalf("a tags-only read = %d, %v, kept %d bytes; want it read and not kept", n, err, len(b.big))
 	}
 
 	// One past the file's end is short, as before.
