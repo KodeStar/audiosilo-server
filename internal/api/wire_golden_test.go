@@ -78,12 +78,13 @@ func TestWireGolden(t *testing.T) {
 	t.Parallel()
 	cases := wireCases(t)
 	seen := map[string]bool{}
+	shapes := map[string]any{} // by case name, for the coverage guard
 	for _, c := range cases {
 		if seen[c.name] {
 			t.Fatalf("two cases named %q", c.name)
 		}
 		seen[c.name] = true
-		t.Run(c.name, func(t *testing.T) { checkWireGolden(t, c) })
+		t.Run(c.name, func(t *testing.T) { shapes[c.name] = checkWireGolden(t, c) })
 	}
 	// A golden with no case is a stale file: the player would keep checking a
 	// shape nothing produces any more.
@@ -109,7 +110,7 @@ func TestWireGolden(t *testing.T) {
 		}
 	}
 	if !t.Failed() {
-		t.Run("coverage", func(t *testing.T) { checkWireCoverage(t, cases) })
+		t.Run("coverage", func(t *testing.T) { checkWireCoverage(t, cases, shapes) })
 	}
 }
 
@@ -119,7 +120,9 @@ type wireGolden struct {
 	Shape any    `json:"shape"`
 }
 
-func checkWireGolden(t *testing.T, c wireCase) {
+// checkWireGolden holds the case's body to its committed golden (or writes it,
+// under -update) and returns the body's shape.
+func checkWireGolden(t *testing.T, c wireCase) any {
 	t.Helper()
 	body := c.body(t)
 	var v any
@@ -143,7 +146,7 @@ func checkWireGolden(t *testing.T, c wireCase) {
 		if err := os.WriteFile(file, wireGoldenBytes(t, got), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		return
+		return got.Shape
 	}
 	raw, err := os.ReadFile(file)
 	if err != nil {
@@ -169,6 +172,7 @@ func checkWireGolden(t *testing.T, c wireCase) {
 			"(audiosilo-frontend: npm run wire:sync) and mirror it in src/api/types.ts.",
 			c.route, file, strings.Join(diff, "\n  "))
 	}
+	return got.Shape
 }
 
 // wireGoldenBytes is a golden file's content, the one form of it: what -update
@@ -412,10 +416,7 @@ func TestShapeOf(t *testing.T) {
 func wireCases(t *testing.T) []wireCase {
 	t.Helper()
 	m, h, u := newWireMainEnv(t), newWireHouseEnv(t), newUpcomingEnv(t)
-	call := func(e *testEnv, method, path, tok, body string) func(*testing.T) string {
-		return func(t *testing.T) string { return wireOK(t, e, method, path, tok, body) }
-	}
-	get := func(path, tok string) func(*testing.T) string { return call(m.testEnv, "GET", path, tok, "") }
+	get := func(path, tok string) func(*testing.T) string { return wireCall(m.testEnv, "GET", path, tok, "") }
 	lib := func(endpoint, path string) func(*testing.T) string {
 		return get(bookURL(m.lib.ID, endpoint, path), m.samTok)
 	}
@@ -424,14 +425,14 @@ func wireCases(t *testing.T) []wireCase {
 	cases := []wireCase{
 		{name: "server", route: "GET /api/v1/server (signed in)", body: get("/api/v1/server", m.adminTok),
 			keys:  wireServerKeys,
-			types: map[string]reflect.Type{"$.bridge": reflect.TypeFor[bridgeInfo]()},
+			types: wireAt[bridgeInfo]("$.bridge"),
 		},
 		{name: "server-anonymous", route: "GET /api/v1/server", body: get("/api/v1/server", ""),
 			keys: wireServerKeys,
 		},
-		{name: "auth-redeem", route: "POST /api/v1/auth/redeem", body: call(m.testEnv, "POST", "/api/v1/auth/redeem", "",
+		{name: "auth-redeem", route: "POST /api/v1/auth/redeem", body: wireCall(m.testEnv, "POST", "/api/v1/auth/redeem", "",
 			`{"code":"`+m.authCode+`"}`),
-			types: map[string]reflect.Type{"$": reflect.TypeFor[PairingPayload]()},
+			types: wireAt[PairingPayload]("$"),
 		},
 		{name: "auth-exchange", route: "POST /api/v1/auth/exchange (a household member's pairing)", body: func(t *testing.T) string {
 			_, pairing, err := m.auth.MemberPairing(context.Background(), m.adminID, m.member, m.credentialID(t, m.adminTok), time.Minute)
@@ -469,29 +470,29 @@ func wireCases(t *testing.T) []wireCase {
 			types: wireSessionTypes,
 		},
 		{name: "me", route: "GET /api/v1/me (a household member)", body: get("/api/v1/me", m.memberTok),
-			types: map[string]reflect.Type{"$": reflect.TypeFor[meUser]()},
+			types: wireAt[meUser]("$"),
 		},
 		{name: "libraries", route: "GET /api/v1/libraries (an admin: with root)", body: get("/api/v1/libraries", m.adminTok),
 			keys:  []string{"handleListLibraries"},
-			types: map[string]reflect.Type{"$.libraries[]": reflect.TypeFor[catalog.Library]()},
+			types: wireAt[catalog.Library]("$.libraries[]"),
 		},
 		{name: "fs", route: "GET /api/v1/libraries/{id}/fs?path=Will Wight", body: lib("fs", "Will Wight"),
-			types: map[string]reflect.Type{"$": reflect.TypeFor[library.Listing]()},
+			types: wireAt[library.Listing]("$"),
 		},
 		{name: "books", route: "GET /api/v1/libraries/{id}/books", body: get(libRoute+"/books", m.samTok),
-			types: map[string]reflect.Type{"$": reflect.TypeFor[catalog.Page]()},
+			types: wireAt[catalog.Page]("$"),
 		},
 		{name: "authors", route: "GET /api/v1/libraries/{id}/authors", body: get(libRoute+"/authors", m.samTok),
 			keys:  []string{"handleBrowsePeople"},
-			types: map[string]reflect.Type{"$.authors[]": reflect.TypeFor[catalog.PersonCount]()},
+			types: wireAt[catalog.PersonCount]("$.authors[]"),
 		},
 		{name: "series", route: "GET /api/v1/libraries/{id}/series", body: get(libRoute+"/series", m.samTok),
 			keys:  []string{"handleBrowseSeries"},
-			types: map[string]reflect.Type{"$.series[]": reflect.TypeFor[catalog.SeriesCount]()},
+			types: wireAt[catalog.SeriesCount]("$.series[]"),
 		},
 		{name: "search", route: "GET /api/v1/search?q=cradle", body: get("/api/v1/search?q=cradle", m.samTok),
 			keys:  []string{"handleSearch"},
-			types: map[string]reflect.Type{"$.books[]": reflect.TypeFor[catalog.Book]()},
+			types: wireAt[catalog.Book]("$.books[]"),
 		},
 		{name: "item", route: "GET /api/v1/libraries/{id}/item?path=<a two-file book>", body: lib("item", cradleBook),
 			types: wireBookTypes,
@@ -502,35 +503,35 @@ func wireCases(t *testing.T) []wireCase {
 		},
 		{name: "progress", route: "GET /api/v1/libraries/{id}/progress?path=<a book>", body: lib("progress", cradleBook),
 			keys:  []string{"handleGetProgress"},
-			types: map[string]reflect.Type{"$.progress": reflect.TypeFor[catalog.Progress]()},
+			types: wireAt[catalog.Progress]("$.progress"),
 		},
 		{name: "me-progress", route: "GET /api/v1/me/progress", body: get("/api/v1/me/progress", m.samTok),
 			keys:  []string{"handleListProgress"},
-			types: map[string]reflect.Type{"$.progress[]": reflect.TypeFor[catalog.Progress]()},
+			types: wireAt[catalog.Progress]("$.progress[]"),
 		},
 		{name: "favourites", route: "GET /api/v1/me/favourites (a book and a navigation folder)",
 			body:  get("/api/v1/me/favourites", m.samTok),
 			keys:  []string{"handleListFavourites"},
-			types: map[string]reflect.Type{"$.favourites[]": reflect.TypeFor[catalog.Favourite]()},
+			types: wireAt[catalog.Favourite]("$.favourites[]"),
 		},
-		{name: "listening-sync", route: "POST /api/v1/me/listening/sync", body: call(m.testEnv, "POST", syncURL, m.samTok,
+		{name: "listening-sync", route: "POST /api/v1/me/listening/sync", body: wireCall(m.testEnv, "POST", syncURL, m.samTok,
 			syncBody("wire-device", listenJSON("wire-1", m.lib.ID, syncMistborn, 0, 60, ""))),
-			types: map[string]reflect.Type{"$": reflect.TypeFor[catalog.SyncAnswer]()},
+			types: wireAt[catalog.SyncAnswer]("$"),
 		},
 		{name: "bookmarks", route: "GET /api/v1/libraries/{id}/bookmarks?path=<a book>", body: lib("bookmarks", cradleBook),
 			keys:  []string{"handleListBookmarks"},
-			types: map[string]reflect.Type{"$.bookmarks[]": reflect.TypeFor[catalog.Bookmark]()},
+			types: wireAt[catalog.Bookmark]("$.bookmarks[]"),
 		},
 		{name: "meta", route: "GET /api/v1/libraries/{id}/meta?path=<a matched book>",
 			body:  get(bookURL(m.metaLib, "meta", metaBook), m.adminTok),
-			types: map[string]reflect.Type{"$": reflect.TypeFor[meta.Enrichment]()},
+			types: wireAt[meta.Enrichment]("$"),
 		},
-		{name: "upcoming", route: "GET /api/v1/me/upcoming", body: call(u.testEnv, "GET", upcomingPath, adminSession(t, u.testEnv), ""),
-			types: map[string]reflect.Type{"$": reflect.TypeFor[upcoming.Answer]()},
+		{name: "upcoming", route: "GET /api/v1/me/upcoming", body: wireCall(u.testEnv, "GET", upcomingPath, adminSession(t, u.testEnv), ""),
+			types: wireAt[upcoming.Answer]("$"),
 		},
 		{name: "household-listening", route: "GET /api/v1/household/listening (sharing, two other people listening, one to a book no longer indexed)",
-			body:  call(h.testEnv, "GET", "/api/v1/household/listening", h.patTok, ""),
-			types: map[string]reflect.Type{"$": reflect.TypeFor[houseListening]()},
+			body:  wireCall(h.testEnv, "GET", "/api/v1/household/listening", h.patTok, ""),
+			types: wireAt[houseListening]("$"),
 		},
 		// Last, and on an account of its own: the change signs that account's
 		// other device out, which no case before it may see.
@@ -563,9 +564,19 @@ func wireCases(t *testing.T) []wireCase {
 var (
 	wireServerKeys    = []string{"handleServerInfo", "coreCapabilities", "authMethods"}
 	wireSessionTypes  = map[string]reflect.Type{"$.user": reflect.TypeFor[meUser](), "$.addresses": reflect.TypeFor[Addresses]()}
-	wireBookTypes     = map[string]reflect.Type{"$": reflect.TypeFor[catalog.Book]()}
+	wireBookTypes     = wireAt[catalog.Book]("$")
 	wireChaptersTypes = map[string]reflect.Type{"$.files[]": reflect.TypeFor[catalog.BookFile](), "$.chapters[]": reflect.TypeFor[metadata.Chapter]()}
 )
+
+// wireCall is a case's body: the request's answer, through wireOK.
+func wireCall(e *testEnv, method, path, tok, body string) func(*testing.T) string {
+	return func(t *testing.T) string { return wireOK(t, e, method, path, tok, body) }
+}
+
+// wireAt is a case's types for one Go type, encoded at path.
+func wireAt[T any](path string) map[string]reflect.Type {
+	return map[string]reflect.Type{path: reflect.TypeFor[T]()}
+}
 
 // wireOK sends a request and returns its body, failing on anything but a 2xx.
 func wireOK(t *testing.T, e *testEnv, method, path, tok, body string) string {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"slices"
 	"strconv"
 	"testing"
@@ -39,21 +38,19 @@ func wireVariantCases(t *testing.T, m *wireMainEnv) []wireCase {
 	libRoute := "/api/v1/libraries/" + strconv.FormatInt(m.lib.ID, 10)
 	return []wireCase{
 		{name: "me-owner", route: "GET /api/v1/me (an account of its own, no household member)",
-			body: func(t *testing.T) string { return wireOK(t, m.testEnv, "GET", "/api/v1/me", m.samTok, "") },
+			body: wireCall(m.testEnv, "GET", "/api/v1/me", m.samTok, ""),
 			// The member fields are null here by design: the me golden guards them.
 			empty: []string{"$.managed_by", "$.member_kind"},
-			types: map[string]reflect.Type{"$": reflect.TypeFor[meUser]()}},
+			types: wireAt[meUser]("$")},
 		{name: "libraries-listener", route: "GET /api/v1/libraries (a listener: no root)",
-			body:  func(t *testing.T) string { return wireOK(t, m.testEnv, "GET", "/api/v1/libraries", m.samTok, "") },
+			body:  wireCall(m.testEnv, "GET", "/api/v1/libraries", m.samTok, ""),
 			keys:  []string{"handleListLibraries"},
-			types: map[string]reflect.Type{"$.libraries[]": reflect.TypeFor[listenerLibrary]()}},
+			types: wireAt[listenerLibrary]("$.libraries[]")},
 		{name: "books-page", route: "GET /api/v1/libraries/{id}/books?limit=1 (a page with more after it)",
-			body:  func(t *testing.T) string { return wireOK(t, m.testEnv, "GET", libRoute+"/books?limit=1", m.samTok, "") },
-			types: map[string]reflect.Type{"$": reflect.TypeFor[catalog.Page]()}},
+			body:  wireCall(m.testEnv, "GET", libRoute+"/books?limit=1", m.samTok, ""),
+			types: wireAt[catalog.Page]("$")},
 		{name: "item-readalong-stale", route: "GET /api/v1/libraries/{id}/item?path=<a book whose read-along map is stale>",
-			body: func(t *testing.T) string {
-				return wireOK(t, m.testEnv, "GET", bookURL(m.lib.ID, "item", mistbornBook), m.samTok, "")
-			},
+			body:  wireCall(m.testEnv, "GET", bookURL(m.lib.ID, "item", mistbornBook), m.samTok, ""),
 			types: wireBookTypes},
 		{name: "error", route: "GET /api/v1/libraries/{id}/item?path=<no book> (the error envelope)",
 			body: func(t *testing.T) string {
@@ -68,14 +65,14 @@ func wireVariantCases(t *testing.T, m *wireMainEnv) []wireCase {
 			keys: []string{"writeErrorCode"}},
 
 		{name: "server-bridge", route: "GET /api/v1/server (signed in, single sign-on on, a Bridge online)",
-			body:  func(t *testing.T) string { return wireOK(t, v.testEnv, "GET", "/api/v1/server", v.userTok, "") },
+			body:  wireCall(v.testEnv, "GET", "/api/v1/server", v.userTok, ""),
 			keys:  wireServerKeys,
-			types: map[string]reflect.Type{"$.bridge": reflect.TypeFor[bridgeInfo]()}},
+			types: wireAt[bridgeInfo]("$.bridge")},
 		{name: "auth-redeem-invite", route: "POST /api/v1/auth/redeem (a listener's invite with an expiry and uses left, home and away addresses)",
 			body: func(t *testing.T) string {
 				return wireOK(t, v.testEnv, "POST", "/api/v1/auth/redeem", "", `{"code":"`+v.invite(t)+`"}`)
 			},
-			types: map[string]reflect.Type{"$": reflect.TypeFor[PairingPayload]()}},
+			types: wireAt[PairingPayload]("$")},
 		{name: "auth-exchange-invite", route: "POST /api/v1/auth/exchange (a listener's invite, home and away addresses)",
 			body: func(t *testing.T) string {
 				status, pairing, _ := v.redeemCode(t, v.invite(t))
@@ -93,24 +90,20 @@ func wireVariantCases(t *testing.T, m *wireMainEnv) []wireCase {
 			types: wireSessionTypes},
 
 		{name: "item-recordings", route: "GET /api/v1/libraries/{id}/item?path=<a matched book with other recordings, edited chapters and a cover colour>",
-			body:  func(t *testing.T) string { return wireOK(t, x.testEnv, "GET", x.url("item", "Saga/2"), x.adminTok, "") },
+			body:  wireCall(x.testEnv, "GET", x.url("item", "Saga/2"), x.adminTok, ""),
 			types: wireBookTypes},
 		{name: "chapters-edited", route: "GET /api/v1/libraries/{id}/chapters?path=<a book with edited chapters>",
-			body: func(t *testing.T) string {
-				return wireOK(t, x.testEnv, "GET", x.url("chapters", "Saga/2"), x.adminTok, "")
-			},
+			body:  wireCall(x.testEnv, "GET", x.url("chapters", "Saga/2"), x.adminTok, ""),
 			keys:  []string{"handleChapters"},
 			types: wireChaptersTypes},
 
 		{name: "fs-pending", route: "GET /api/v1/libraries/{id}/fs?path=Author X&offset=1&limit=2 (a folder override, a book not indexed yet, more after the page)",
-			body: func(t *testing.T) string {
-				return wireOK(t, f.testEnv, "GET", bookURL(f.lib.ID, "fs", "Author X")+"&offset=1&limit=2", f.samTok, "")
-			},
-			types: map[string]reflect.Type{"$": reflect.TypeFor[library.Listing]()}},
+			body:  wireCall(f.testEnv, "GET", bookURL(f.lib.ID, "fs", "Author X")+"&offset=1&limit=2", f.samTok, ""),
+			types: wireAt[library.Listing]("$")},
 		{name: "search-copies", route: "GET /api/v1/search?q=hobbit (a book in two libraries: one row, the other copy under other_locations)",
-			body:  func(t *testing.T) string { return wireOK(t, c.env, "GET", "/api/v1/search?q=hobbit", c.tok, "") },
+			body:  wireCall(c.env, "GET", c.url, c.tok, ""),
 			keys:  []string{"handleSearch"},
-			types: map[string]reflect.Type{"$.books[]": reflect.TypeFor[catalog.Book]()}},
+			types: wireAt[catalog.Book]("$.books[]")},
 		{name: "item-episode", route: "GET /api/v1/libraries/{id}/item?path=<a podcast episode> (X-AudioSilo-Client: a current player)",
 			body: func(t *testing.T) string {
 				resp, b := p.doHeaders(t, "GET", bookURL(p.lib.ID, "item", p.episode), p.userTok, "", podcastHeaders())
@@ -125,24 +118,22 @@ func wireVariantCases(t *testing.T, m *wireMainEnv) []wireCase {
 			empty: []string{"$.episode.fetch.bytes_total", "$.episode.fetch.request_id"},
 			types: wireBookTypes},
 		{name: "listening-sync-diverged", route: "POST /api/v1/me/listening/sync (a span from behind another device's place, and one refused)",
-			body: func(t *testing.T) string {
-				return wireOK(t, s.testEnv, "POST", syncURL, s.watchTok, syncBody("watch",
-					listenJSON("w1", s.lib.ID, syncUnsouled, 14400, 16800, s.version),
-					listenJSON("w2", 9999, syncUnsouled, 0, 60, "")))
-			},
-			types: map[string]reflect.Type{"$": reflect.TypeFor[catalog.SyncAnswer]()}},
+			body: wireCall(s.testEnv, "POST", syncURL, s.watchTok, syncBody("watch",
+				listenJSON("w1", s.lib.ID, syncUnsouled, 14400, 16800, s.version),
+				listenJSON("w2", 9999, syncUnsouled, 0, 60, ""))),
+			types: wireAt[catalog.SyncAnswer]("$")},
 		{name: "me-progress-diverged", route: "GET /api/v1/me/progress (a place another device diverged from, a finished book)",
-			body:  func(t *testing.T) string { return wireOK(t, s.testEnv, "GET", "/api/v1/me/progress", s.phoneTok, "") },
+			body:  wireCall(s.testEnv, "GET", "/api/v1/me/progress", s.phoneTok, ""),
 			keys:  []string{"handleListProgress"},
-			types: map[string]reflect.Type{"$.progress[]": reflect.TypeFor[catalog.Progress]()}},
+			types: wireAt[catalog.Progress]("$.progress[]")},
 		{name: "meta-unmatched", route: "GET /api/v1/libraries/{id}/meta?path=<a book with no community match and generated content>",
-			body: func(t *testing.T) string { return wireOK(t, u.env, "GET", u.url, u.tok, "") },
+			body: wireCall(u.env, "GET", u.url, u.tok, ""),
 			// A generated work has no authors of its own (a title alone): meta guards them.
 			empty: []string{"$.work.authors"},
-			types: map[string]reflect.Type{"$": reflect.TypeFor[meta.Unmatched]()}},
+			types: wireAt[meta.Unmatched]("$")},
 		{name: "meta-bundle", route: "GET /api/v1/libraries/{id}/meta?path=<a matched book two of a series>&include=previous",
-			body:  func(t *testing.T) string { return wireOK(t, b.env, "GET", b.url+"&include=previous", b.tok, "") },
-			types: map[string]reflect.Type{"$": reflect.TypeFor[meta.Enrichment]()}},
+			body:  wireCall(b.env, "GET", b.url+"&include=previous", b.tok, ""),
+			types: wireAt[meta.Enrichment]("$")},
 	}
 }
 
@@ -255,14 +246,15 @@ func newWireFoldersEnv(t *testing.T) *wireFoldersEnv {
 	return &wireFoldersEnv{testEnv: e, lib: lib, samTok: samTok}
 }
 
-// wireTokEnv is an env and the token a case reads it with.
-type wireTokEnv struct {
+// wireTarget is an env, the URL a case reads and the token it reads it with.
+type wireTarget struct {
 	env *testEnv
+	url string
 	tok string
 }
 
 // newWireCopiesEnv: The Hobbit in two libraries (TestSearchDedupWire).
-func newWireCopiesEnv(t *testing.T) wireTokEnv {
+func newWireCopiesEnv(t *testing.T) wireTarget {
 	t.Helper()
 	ctx := context.Background()
 	e := newTestEnv(t)
@@ -286,7 +278,7 @@ func newWireCopiesEnv(t *testing.T) wireTokEnv {
 	if err := e.cat.ReorderLibraries(ctx, ids); err != nil {
 		t.Fatal(err)
 	}
-	return wireTokEnv{env: e, tok: adminSession(t, e)}
+	return wireTarget{env: e, url: "/api/v1/search?q=hobbit", tok: adminSession(t, e)}
 }
 
 // wireEpisodeEnv: the podcast fixture show (podcastEnv) and one of its episodes.
@@ -333,21 +325,14 @@ func newWireDivergedEnv(t *testing.T) *wireDivergedEnv {
 	return &wireDivergedEnv{syncEnv: s, phoneTok: phone, watchTok: watch, version: version}
 }
 
-// wireMetaEnv is an env, the /meta URL a case reads and its token.
-type wireMetaEnv struct {
-	env *testEnv
-	url string
-	tok string
-}
-
 // newWireUnmatchedEnv: a book with no identifiers (so no community match) and
 // generated characters and recaps.
-func newWireUnmatchedEnv(t *testing.T) wireMetaEnv {
+func newWireUnmatchedEnv(t *testing.T) wireTarget {
 	t.Helper()
 	e := generatedMetaEnv(t, `{}`)
 	lib := seedChapteredBook(t, e, "A/Local", "")
 	setGenerated(t, e, lib.ID, "A/Local")
-	return wireMetaEnv{env: e, url: bookURL(lib.ID, "meta", "A/Local"), tok: adminSession(t, e)}
+	return wireTarget{env: e, url: bookURL(lib.ID, "meta", "A/Local"), tok: adminSession(t, e)}
 }
 
 // newWireBundleEnv: book two of series S (and of its chronological ordering)
@@ -355,7 +340,7 @@ func newWireUnmatchedEnv(t *testing.T) wireMetaEnv {
 // subtitle, an abridged LibriVox recording, an aliased character, a position
 // scale, its own generated description; book one before it (a community
 // description) held twice in the library; book three to come.
-func newWireBundleEnv(t *testing.T) wireMetaEnv {
+func newWireBundleEnv(t *testing.T) wireTarget {
 	t.Helper()
 	works := map[string]string{
 		"book-one": `{"id":"book-one","title":"One","authors":[{"id":"a","name":"A"}],"language":"en","series":[{"id":"s","name":"S","position":"1"}],` +
@@ -419,5 +404,5 @@ func newWireBundleEnv(t *testing.T) wireMetaEnv {
 		}
 		anchorMatch(t, e, lib.ID, p, "book-one", "")
 	}
-	return wireMetaEnv{env: e, url: bookURL(lib.ID, "meta", "A/Two"), tok: adminSession(t, e)}
+	return wireTarget{env: e, url: bookURL(lib.ID, "meta", "A/Two"), tok: adminSession(t, e)}
 }

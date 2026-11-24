@@ -7,7 +7,6 @@ import (
 	"go/parser"
 	"go/token"
 	"maps"
-	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -45,13 +44,10 @@ var wireUnseen = map[string]string{
 	"library.Listing.folder":    "the console's: an admin's ?detail=1 only",
 }
 
-// checkWireCoverage runs the guard over the cases' committed goldens.
-func checkWireCoverage(t *testing.T, cases []wireCase) {
+// checkWireCoverage runs the guard over the cases' goldens' shapes (by case
+// name), which the shape checks have just held to the committed files.
+func checkWireCoverage(t *testing.T, cases []wireCase, shapes map[string]any) {
 	t.Helper()
-	shapes := map[string]any{}
-	for _, c := range cases {
-		shapes[c.name] = readWireGolden(t, c.name).Shape
-	}
 	keysOf := func(fn string) []string { return mapKeysOf(t, fn) }
 	for _, gap := range wireGaps(cases, shapes, wireUnseen, keysOf) {
 		t.Error(gap)
@@ -62,77 +58,62 @@ func checkWireCoverage(t *testing.T, cases []wireCase) {
 // golden (shapes, by case name) carries and unseen does not excuse, and each
 // entry of unseen that is stale. keysOf lists a function's map keys.
 func wireGaps(cases []wireCase, shapes map[string]any, unseen map[string]string, keysOf func(string) []string) []string {
-	cov := wireCoverage{reached: map[string]bool{}, seen: map[string]bool{}}
+	cov := wireCoverage{}
 	keyed := map[string]map[string]bool{} // function -> the field names its cases' goldens hold
 	for _, c := range cases {
 		paths := map[string]string{}
 		flattenShape(shapes[c.name], "$", paths)
-		for _, at := range slices.Sorted(maps.Keys(c.types)) {
+		for at, typ := range c.types {
 			// The type itself counts as a field: an optional block no golden
 			// holds is one gap, not one per field of it.
-			id := c.types[at].String()
-			cov.reached[id] = true
-			if _, ok := paths[at]; ok {
-				cov.seen[id] = true
-				cov.walk(c.types[at], at, paths, map[string]bool{})
+			if cov.mark(typ.String(), paths, at) {
+				cov.walk(typ, at, paths)
+			}
+		}
+		if len(c.keys) == 0 {
+			continue
+		}
+		names := map[string]bool{}
+		for p := range paths {
+			for _, seg := range pathFields(p) {
+				names[seg] = true
 			}
 		}
 		for _, fn := range c.keys {
 			if keyed[fn] == nil {
 				keyed[fn] = map[string]bool{}
 			}
-			for p := range paths {
-				for _, seg := range pathFields(p) {
-					keyed[fn][seg] = true
-				}
-			}
+			maps.Copy(keyed[fn], names)
 		}
 	}
 	// A key counts as carried when some golden of a case naming its function
 	// holds a field of that name at any depth: the literal's place in the
 	// envelope (a nested map, a map another function returns) is not tracked.
-	for _, fn := range slices.Sorted(maps.Keys(keyed)) {
+	for fn, names := range keyed {
 		for _, k := range keysOf(fn) {
 			id := fn + "[" + k + "]"
-			cov.reached[id] = true
-			if keyed[fn][k] {
-				cov.seen[id] = true
-			}
+			cov[id] = cov[id] || names[k]
 		}
 	}
 	var gaps []string
-	for _, id := range slices.Sorted(maps.Keys(cov.reached)) {
+	for _, id := range slices.Sorted(maps.Keys(cov)) {
 		_, listed := unseen[id]
 		switch {
-		case !cov.seen[id] && !listed:
+		case !cov[id] && !listed:
 			gaps = append(gaps, id+" is on the wire but in no golden, so nothing guards it (CROSS-REPO.md §15): "+
 				"seed it in a wireCase (a new case for a variant the others must not change shape for), "+
 				"then run go test ./internal/api -run TestWireGolden -update; "+
 				"or list it in wireUnseen with why no golden can carry it")
-		case cov.seen[id] && listed:
+		case cov[id] && listed:
 			gaps = append(gaps, "wireUnseen lists "+id+", which a golden now carries: remove the entry")
 		}
 	}
 	for _, id := range slices.Sorted(maps.Keys(unseen)) {
-		if !cov.reached[id] {
+		if _, reached := cov[id]; !reached {
 			gaps = append(gaps, "wireUnseen lists "+id+", which no case's types or keys reach: remove the entry")
 		}
 	}
 	return gaps
-}
-
-// readWireGolden reads a case's committed golden.
-func readWireGolden(t *testing.T, name string) wireGolden {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(wireDir, name+".json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var g wireGolden
-	if err := json.Unmarshal(raw, &g); err != nil {
-		t.Fatalf("%s: %v", name, err)
-	}
-	return g
 }
 
 // pathFields are the field names along a flattened shape path ("$.a[].b" is a, b).
@@ -146,10 +127,16 @@ func pathFields(p string) []string {
 	return out
 }
 
-// wireCoverage records, per "<type>.<field>" (and per "<function>[<key>]"),
-// whether a case's types reach it and whether a golden carries it.
-type wireCoverage struct {
-	reached, seen map[string]bool
+// wireCoverage holds, per "<type>.<field>" (and per "<function>[<key>]") a
+// case's types reach, whether a golden carries it.
+type wireCoverage map[string]bool
+
+// mark records id reached, and seen when the golden holds path; it reports
+// whether it does.
+func (c wireCoverage) mark(id string, paths map[string]string, path string) bool {
+	_, ok := paths[path]
+	c[id] = c[id] || ok
+	return ok
 }
 
 var (
@@ -160,30 +147,22 @@ var (
 // walk follows typ, encoded at path, through the golden's paths: each field of
 // a struct is reached, seen when the golden holds it, and followed into its
 // own type there. A type that encodes itself (time.Time, json.RawMessage) and
-// an interface are leaves.
-func (c *wireCoverage) walk(typ reflect.Type, path string, paths map[string]string, onPath map[string]bool) {
+// an interface are leaves. Each step follows a longer path the golden holds,
+// so a recursive type ends with the golden.
+func (c wireCoverage) walk(typ reflect.Type, path string, paths map[string]string) {
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
-	if typ.Implements(jsonMarshaler) || reflect.PointerTo(typ).Implements(jsonMarshaler) ||
-		typ.Implements(textMarshaler) || reflect.PointerTo(typ).Implements(textMarshaler) {
+	// A pointer's method set holds the value's.
+	if pt := reflect.PointerTo(typ); pt.Implements(jsonMarshaler) || pt.Implements(textMarshaler) {
 		return
 	}
-	visit := typ.String() + " " + path
-	if onPath[visit] {
-		return
-	}
-	onPath[visit] = true
-	defer delete(onPath, visit)
 	switch typ.Kind() {
 	case reflect.Struct:
 		for _, f := range jsonFields(typ) {
-			id := f.owner.String() + "." + f.name
-			c.reached[id] = true
 			p := path + "." + f.name
-			if _, ok := paths[p]; ok {
-				c.seen[id] = true
-				c.walk(f.typ, p, paths, onPath)
+			if c.mark(f.owner.String()+"."+f.name, paths, p) {
+				c.walk(f.typ, p, paths)
 			}
 		}
 	case reflect.Slice, reflect.Array:
@@ -191,14 +170,14 @@ func (c *wireCoverage) walk(typ reflect.Type, path string, paths map[string]stri
 			return // []byte is a base64 string
 		}
 		if _, ok := paths[path+"[]"]; ok {
-			c.walk(typ.Elem(), path+"[]", paths, onPath)
+			c.walk(typ.Elem(), path+"[]", paths)
 		}
 	case reflect.Map:
 		// The keys are data: follow the value type into each key the golden holds.
 		for p := range paths {
 			rest, ok := strings.CutPrefix(p, path+".")
 			if ok && !strings.ContainsAny(rest, ".[") {
-				c.walk(typ.Elem(), p, paths, onPath)
+				c.walk(typ.Elem(), p, paths)
 			}
 		}
 	}
@@ -357,7 +336,7 @@ func TestWireGaps(t *testing.T) {
 	}
 	inner := `{"x":"string","y":"number"}`
 	full := `{"a":"string","b":"string","in":` + inner + `,"list":[` + inner + `],"when":"string","by_key":{"k1":` + inner + `}}`
-	outer := map[string]reflect.Type{"$": reflect.TypeFor[wireTestOuter]()}
+	outer := wireAt[wireTestOuter]("$")
 	noKeys := func(string) []string { return nil }
 	gaps := func(shapes map[string]string, unseen map[string]string, cases ...wireCase) []string {
 		s := map[string]any{}
@@ -381,7 +360,7 @@ func TestWireGaps(t *testing.T) {
 	// struct's field (its own type's), a type absent at its path.
 	got := gaps(map[string]string{"bare": `{"a":"string","list":[{"x":"string"}],"when":"string","by_key":{}}`, "none": `{}`}, nil,
 		wireCase{name: "bare", types: outer},
-		wireCase{name: "none", types: map[string]reflect.Type{"$.x": reflect.TypeFor[wireTestInner]()}})
+		wireCase{name: "none", types: wireAt[wireTestInner]("$.x")})
 	want := []string{"api.wireTestBase.b", "api.wireTestInner", "api.wireTestInner.y", "api.wireTestOuter.in"}
 	if ids := gapIDs(got); !slices.Equal(ids, want) {
 		t.Fatalf("gaps = %q, want %q", ids, want)
