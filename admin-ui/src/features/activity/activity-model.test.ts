@@ -238,12 +238,15 @@ describe('versions and clients', () => {
       { app: 'AudioSilo', version: '1.4.2', platform: 'ios', devices: 5 },
       { app: 'AudioSilo', version: '1.3.0', platform: 'android', devices: 2 },
       { app: '', version: '', platform: '', devices: 1 },
+      { app: '', version: '', platform: '', api_key: true, devices: 1 },
     ]);
-    expect(rows.map((r) => [r.version, r.platform, r.outdated])).toEqual([
-      ['1.4.2', 'ios', false],
-      ['1.3.0', 'android', false],
-      ['1.3.0', 'ios', true],
-      ['', '', false],
+    expect(rows.map((r) => [r.version, r.platform, r.outdated, r.unknown])).toEqual([
+      ['1.4.2', 'ios', false, false],
+      ['1.3.0', 'android', false, false],
+      ['1.3.0', 'ios', true, false],
+      ['', '', false, true],
+      // A personal API key names no app but is not an unknown client.
+      ['', '', false, false],
     ]);
   });
 

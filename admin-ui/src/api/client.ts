@@ -1000,11 +1000,11 @@ export const api = {
    * going at the server's answer (202 still_reading: it goes on and is saved).
    */
   rescanBook: async (libraryId: number, path: string): Promise<AdminBookDetail | null> => {
-    const r = await request<AdminBookDetail | { still_reading?: boolean }>(
+    const r = await request<AdminBookDetail & { still_reading?: boolean }>(
       'POST',
       `/admin/libraries/${libraryId}/book/rescan${pathQuery(path)}`,
     );
-    return r && 'still_reading' in r && r.still_reading ? null : (r as AdminBookDetail);
+    return r?.still_reading ? null : r;
   },
 
   // Health and Jobs.
