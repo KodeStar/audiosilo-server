@@ -39,8 +39,8 @@ func TestPodcastFollowRequestTitle(t *testing.T) {
 	}
 }
 
-// DELETE /podcasts/requests/{id}: the caller's own failed request goes
-// (allowed); an open one is 409, another user's or a gone one 404, a demo
+// DELETE /podcasts/requests/{id}: the caller's own failed request leaves
+// their list (allowed); an open one is 409, another user's or a gone one 404, a demo
 // account or an old client 403 (denied). It works with the module off.
 func TestPodcastRequestDismiss(t *testing.T) {
 	t.Parallel()
@@ -87,9 +87,10 @@ func TestPodcastRequestDismiss(t *testing.T) {
 	podcastsModule(t, b, false)
 	dismiss(b.userTok, h, 204, "")
 	dismiss(b.userTok, h, 404, "request_not_found")
-	var n int
-	if err := b.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM bridge_jobs WHERE id=?`, id).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("row left %d %v", n, err)
+	// The job stays in the console's history, marked cleared.
+	var dismissed int
+	if err := b.db.QueryRowContext(context.Background(), `SELECT json_extract(params,'$.dismissed') FROM bridge_jobs WHERE id=? AND state='failed'`, id).Scan(&dismissed); err != nil || dismissed != 1 {
+		t.Fatalf("job kept %d %v", dismissed, err)
 	}
 	resp, out = b.doHeaders(t, "GET", "/api/v1/me/podcasts", b.userTok, "", h)
 	if resp.StatusCode != 200 || strings.Contains(out, "broken") {

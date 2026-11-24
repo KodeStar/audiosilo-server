@@ -102,6 +102,10 @@ type SubscribeParams struct {
 	// is added. Never for a private feed. Additive: a Bridge reads the params
 	// leniently and ignores it.
 	Title string `json:"title,omitempty"`
+	// Dismissed marks a failed or cancelled request its listener cleared
+	// (DismissSubscribe): gone from their list, kept in the console's job
+	// history. Only DismissSubscribe sets it, on an ended job; never queued.
+	Dismissed bool `json:"dismissed,omitempty"`
 }
 
 // MaxSubscribeTitleBytes bounds a subscribe request's Title: the same bound
@@ -188,7 +192,7 @@ func PodcastOutcomeOf(j Job) (PodcastOutcome, error) {
 func subscribeParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p SubscribeParams
 	if decodeStrict(raw, &p) != nil || !feed.ValidHex(p.FeedURLSHA256, 64) || p.FeedHost == "" || len(p.FeedHost) > feed.MaxHostLen || p.ShowPath != "" && !feed.ShowPath(p.ShowPath) ||
-		p.Title != textclean.Line(p.Title, MaxSubscribeTitleBytes) || p.Private && p.Title != "" {
+		p.Title != textclean.Line(p.Title, MaxSubscribeTitleBytes) || p.Private && p.Title != "" || p.Dismissed {
 		return nil, invalid("invalid subscribe params")
 	}
 	if p.Private {
@@ -394,8 +398,9 @@ func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, n
 	}
 	key := DedupeKey(KindPodcastSubscribe, &lib, nil) + subscribeIdentity(feed.FeedURLHash(norm), user)
 	// The newest request for the feed that ended inside the window (the window
-	// bounds the read, the person's whole history doesn't)...
-	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='`+KindPodcastSubscribe+`' AND j.finished_at>=? AND j.dedupe_key=? ORDER BY j.id DESC LIMIT 1`, at(s.now().Add(-within)), key))
+	// bounds the read, the person's whole history doesn't), of those the
+	// listener has not cleared (DismissSubscribe)...
+	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='`+KindPodcastSubscribe+`' AND j.finished_at>=? AND j.dedupe_key=? AND NOT `+subscribeDismissedSQL+` ORDER BY j.id DESC LIMIT 1`, at(s.now().Add(-within)), key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -410,7 +415,7 @@ func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, n
 	}
 	// ...counts only while it is still the last request for it.
 	var newer bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE kind='`+KindPodcastSubscribe+`' AND requested_by=? AND id>? AND dedupe_key=?)`, user, j.ID, key).Scan(&newer); err != nil || newer {
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.kind='`+KindPodcastSubscribe+`' AND j.requested_by=? AND j.id>? AND j.dedupe_key=? AND NOT `+subscribeDismissedSQL+`)`, user, j.ID, key).Scan(&newer); err != nil || newer {
 		return nil, err
 	}
 	r := RedactedJob(*j)
@@ -788,7 +793,7 @@ func (s *Service) SubscribeRequests(ctx context.Context, user int64) ([]Job, err
 	if err := s.expireOfflineSubscribes(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='`+KindPodcastSubscribe+`' AND j.requested_by=? AND (j.state IN `+OpenStatesSQL+` OR j.finished_at>=?) ORDER BY j.id DESC`, user, at(s.now().Add(-7*24*time.Hour)))
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='`+KindPodcastSubscribe+`' AND j.requested_by=? AND (j.state IN `+OpenStatesSQL+` OR j.finished_at>=? AND NOT `+subscribeDismissedSQL+`) ORDER BY j.id DESC`, user, at(s.now().Add(-7*24*time.Hour)))
 	if err != nil {
 		return nil, err
 	}
@@ -805,22 +810,29 @@ func (s *Service) SubscribeRequests(ctx context.Context, user int64) ([]Job, err
 }
 
 // ErrRequestNotDismissable is a follow request DismissSubscribe may not
-// remove yet: still open, ended done (its row opens the show), or ended within
+// clear yet: still open, ended done (its row opens the show), or ended within
 // PollFoldWindow and not folded yet (the sweep still reads it).
 var ErrRequestNotDismissable = errors.New("the follow request has not failed or been cancelled")
 
-// DismissSubscribe removes user's own follow request id once it failed or was
-// cancelled and its outcome is folded, or its fold can no longer land (it
-// ended before PollFoldWindow, which EndedPodcasts no longer sweeps, while the
-// listener's list still shows it for a week) (fe#126: a listener clears a
-// failed row from Shows being added). One statement, so a request that
-// changes state meanwhile is never removed open. ErrNotFound for no such
-// request of user's; ErrRequestNotDismissable for one that may not go (yet).
-// A following import may queue the feed again: the listener let the failure
-// go.
+// subscribeDismissedSQL is true for a request its listener cleared
+// (SubscribeParams.Dismissed); a damaged row's params read as not cleared.
+var subscribeDismissedSQL = "coalesce(" + ParamSQL("j.params", "$.dismissed") + ",0)=1"
+
+// DismissSubscribe clears user's own follow request id from their list once it
+// failed or was cancelled and its outcome is folded, or its fold can no longer
+// land (it ended before PollFoldWindow, which EndedPodcasts no longer sweeps,
+// while the listener's list still shows it for a week) (fe#126: a listener
+// clears a failed row from Shows being added). The job is marked
+// (SubscribeParams.Dismissed), not deleted: a follow request is never pruned,
+// and the console's job history keeps the failure, its error and who asked
+// for it. One statement, so a request that changes state meanwhile is never
+// cleared open. ErrNotFound for no such request of user's, or one already
+// cleared; ErrRequestNotDismissable for one that may not go (yet). A following
+// import may queue the feed again (RecentSubscribeFailure skips a cleared
+// request): the listener let the failure go.
 func (s *Service) DismissSubscribe(ctx context.Context, user, id int64) error {
-	mine := `j.id=? AND j.kind='` + KindPodcastSubscribe + `' AND j.requested_by=?`
-	res, err := s.db.ExecContext(ctx, `DELETE FROM bridge_jobs AS j WHERE `+mine+` AND j.state IN ('`+StateFailed+`','`+StateCancelled+`') AND (NOT `+UnfoldedSQL+` OR j.finished_at<?)`, id, user, at(s.now().Add(-PollFoldWindow)))
+	mine := `j.id=? AND j.kind='` + KindPodcastSubscribe + `' AND j.requested_by=? AND NOT ` + subscribeDismissedSQL
+	res, err := s.db.ExecContext(ctx, `UPDATE bridge_jobs AS j SET params=json_set(j.params,'$.dismissed',json('true')), updated_at=? WHERE `+mine+` AND json_valid(j.params) AND j.state IN ('`+StateFailed+`','`+StateCancelled+`') AND (NOT `+UnfoldedSQL+` OR j.finished_at<?)`, at(s.now()), id, user, at(s.now().Add(-PollFoldWindow)))
 	if err != nil {
 		return err
 	}

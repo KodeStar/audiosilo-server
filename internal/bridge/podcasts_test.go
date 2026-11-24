@@ -1018,6 +1018,9 @@ func TestDismissSubscribe(t *testing.T) {
 	}
 	fold(failed.ID)
 	fold(open.ID)
+	if j, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, "https://example.com/failed.xml", time.Hour); err != nil || j == nil || j.ID != failed.ID {
+		t.Fatalf("recent failure before dismiss %+v %v", j, err)
+	}
 	if err := q.DismissSubscribe(ctx, other, failed.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another user's = %v", err)
 	}
@@ -1028,6 +1031,19 @@ func TestDismissSubscribe(t *testing.T) {
 		if err := q.DismissSubscribe(ctx, q.admin, id); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("again %d = %v", id, err)
 		}
+	}
+	// A cleared failure no longer holds the feed back from an import, and the
+	// console's job history keeps it.
+	if j, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, "https://example.com/failed.xml", time.Hour); err != nil || j != nil {
+		t.Fatalf("recent failure after dismiss %+v %v", j, err)
+	}
+	history, _, err := q.List(ctx, Filter{Kind: KindPodcastSubscribe, State: StateFailed})
+	if err != nil || len(history) != 1 || history[0].ID != failed.ID || history[0].Error == "" && string(history[0].Result) == "{}" {
+		t.Fatalf("history %+v %v", history, err)
+	}
+	var kept SubscribeParams
+	if err := json.Unmarshal(history[0].Params, &kept); err != nil || !kept.Dismissed || kept.FeedHost != "example.com" {
+		t.Fatalf("kept params %s %v", history[0].Params, err)
 	}
 	done := end("https://example.com/done.xml", StateDone)
 	fold(done.ID)

@@ -4448,13 +4448,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`SubscribeParams.Title`: any URL in it redacted as the feed's label is, then cleaned to
   `MaxSubscribeTitleBytes`, the params check refusing a title not so cleaned) for a public feed only, never a private one's, and the request row (`/me/podcasts`, the 202)
   answers it as `title` (null when none). `DELETE /podcasts/requests/{id}` (`requireAuth` + `notDemo` + the
-  client gate, not the module's; capability `podcast_request_dismiss`, always true) removes the caller's
-  own request once it failed or was cancelled AND its fold landed, or it ended before `PollFoldWindow`
-  (the sweep folds it no more; `bridge.DismissSubscribe`, one DELETE), 204; anyone else's or none is 404
+  client gate, not the module's; capability `podcast_request_dismiss`, always true) clears the caller's
+  own request from their list once it failed or was cancelled AND its fold landed, or it ended before
+  `PollFoldWindow` (the sweep folds it no more; `bridge.DismissSubscribe`, one UPDATE marking the params
+  `dismissed`, not a DELETE: follow requests are never pruned and the console's job history keeps the
+  failure and who asked), 204; anyone else's or none is 404
   `request_not_found`, an open, done or unfolded one 409 `request_open`. The same capability is the
   player's sign that the follow takes `title` (the strict decoder of an older server answers the field
   400), so it stays unconditional. Dismissing a feed's failures lets the next import queue it again
-  (`RecentSubscribeFailure` reads the newest request left, an older failure in the hour still counts).
+  (`RecentSubscribeFailure` reads the newest request not cleared, an older failure in the hour still counts).
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
   by itself (pairing a Bridge doesn't). A module is a `modules.Module` value: `ID` (its capability flag,
