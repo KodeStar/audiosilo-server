@@ -233,14 +233,15 @@ export function detectJobsKnown(server: ServerInfo | undefined): boolean {
  */
 export type GenerateAction = 'generate' | 'regenerate' | 'covered';
 
+/** The two parts a generate job writes and the community can cover. */
+const DIMENSIONS = ['characters', 'recaps'] as const;
+
 export function generateAction(has: {
   community: SidecarsCoverage;
   local: SidecarsCoverage;
 }): GenerateAction {
   if (has.community.characters && has.community.recaps) return 'covered';
-  return generatedShown(has, 'characters') || generatedShown(has, 'recaps')
-    ? 'regenerate'
-    : 'generate';
+  return DIMENSIONS.some((d) => generatedShown(has, d)) ? 'regenerate' : 'generate';
 }
 
 /**
@@ -253,7 +254,7 @@ export function generateAction(has: {
  */
 export function generatedShown(
   has: { community: SidecarsCoverage; local: SidecarsCoverage },
-  dimension: 'characters' | 'recaps',
+  dimension: (typeof DIMENSIONS)[number],
 ): boolean {
   return has.local[dimension] && !has.community[dimension];
 }
@@ -297,7 +298,7 @@ export function shareDimensions(
   has: { community: SidecarsCoverage; local: SidecarsCoverage },
   links: ContributedLinks,
 ): ShareDimension[] {
-  return (['characters', 'recaps'] as const).filter((d) => generatedShown(has, d) && !links[d]);
+  return DIMENSIONS.filter((d) => generatedShown(has, d) && !links[d]);
 }
 
 /**

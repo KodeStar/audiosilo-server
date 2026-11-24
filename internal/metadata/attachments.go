@@ -112,8 +112,10 @@ func (f AttachmentFiles) Generated() bool {
 }
 
 // AttachmentParts names a book's generated parts: which ones a reader wants
-// (catalog.BookAttachments reads only those) or which ones a book has
-// (catalog.BookAttachmentParts).
+// (catalog.BookAttachments reads only those) or which ones a book has. Two
+// readings of "has": catalog.BookAttachmentParts counts recaps only with a
+// recap list (the estimate's has.local), while Book.GeneratedParts (the
+// signature) counts any recaps.json, a summary alone included.
 type AttachmentParts struct {
 	Characters  bool
 	Recaps      bool
