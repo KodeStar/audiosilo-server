@@ -279,16 +279,24 @@ func absNames(list json.RawMessage) []string {
 	return out
 }
 
-// absSeries reads one series: ABS writes "Name #sequence" (the name alone with
-// no sequence); a {name, sequence} object is taken too.
+// SplitABSSeries reads one series as ABS writes it, "Name #sequence" (the name
+// alone with no sequence): the name before the last " #", the sequence any text
+// after it ("2.5", "1-3"). The one ABS series parser: a metadata.json's
+// (absSeries) and the listening import's seriesName.
+func SplitABSSeries(s string) ABSSeries {
+	s = strings.TrimSpace(s)
+	if i := strings.LastIndex(s, " #"); i > 0 {
+		return ABSSeries{Name: strings.TrimSpace(s[:i]), Position: strings.TrimSpace(s[i+2:])}
+	}
+	return ABSSeries{Name: s}
+}
+
+// absSeries reads one series: ABS writes "Name #sequence" (SplitABSSeries); a
+// {name, sequence} object is taken too.
 func absSeries(item json.RawMessage) (ABSSeries, bool) {
 	var s string
 	if json.Unmarshal(item, &s) == nil {
-		s = strings.TrimSpace(s)
-		ref := ABSSeries{Name: s}
-		if i := strings.LastIndex(s, " #"); i > 0 {
-			ref = ABSSeries{Name: strings.TrimSpace(s[:i]), Position: strings.TrimSpace(s[i+2:])}
-		}
+		ref := SplitABSSeries(s)
 		return ref, ref.Name != ""
 	}
 	var obj struct {

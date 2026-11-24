@@ -88,6 +88,32 @@ func TestParseABSFileSeriesAndPeople(t *testing.T) {
 	}
 }
 
+// TestSplitABSSeries: "Name #sequence", the sequence any text after the last
+// " #", the name alone when there is none.
+func TestSplitABSSeries(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		in   string
+		want ABSSeries
+	}{
+		{"The Expanse #2.5", ABSSeries{"The Expanse", "2.5"}},
+		{"  Discworld #4  ", ABSSeries{"Discworld", "4"}},
+		{"Wide  #3", ABSSeries{"Wide", "3"}},
+		{"Arc #1-3", ABSSeries{"Arc", "1-3"}},
+		{"Prequels #0.5a", ABSSeries{"Prequels", "0.5a"}},
+		{"Odd # Name #1.5", ABSSeries{"Odd # Name", "1.5"}},
+		{"Trailing #", ABSSeries{"Trailing", ""}},
+		{"No Number", ABSSeries{"No Number", ""}},
+		{"#2", ABSSeries{"#2", ""}}, // no name before the mark: all of it is the name
+		{"Glued#2", ABSSeries{"Glued#2", ""}},
+		{"", ABSSeries{}},
+	} {
+		if got := SplitABSSeries(tc.in); got != tc.want {
+			t.Errorf("SplitABSSeries(%q) = %+v, want %+v", tc.in, got, tc.want)
+		}
+	}
+}
+
 // A name that holds a comma ("Surname, Given") is kept apart from the next by
 // "; ", so names.Split reads the credit as the people the file lists; without
 // one the credit reads as it always did, joined by ", " (server#213).
