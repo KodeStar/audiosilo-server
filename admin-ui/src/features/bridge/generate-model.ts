@@ -225,10 +225,11 @@ export function detectJobsKnown(server: ServerInfo | undefined): boolean {
  * follows too): `covered` when the community has both characters and recaps
  * (no Generate; a line says so and links to the Characters and recaps card,
  * even over files generated here before, which the community's masks), else
- * Regenerate while either dimension was generated here, else Generate. Generated
- * content only ever fills a dimension the community lacks (/meta's per-dimension
- * merge), so Generate stays offered while either is missing. `community` is the
- * community's own coverage (the estimate's `has.community`), never generated.
+ * Regenerate while either dimension is generated here and shown
+ * (`generatedShown`), else Generate. Generated content only ever fills a
+ * dimension the community lacks (/meta's per-dimension merge), so Generate
+ * stays offered while either is missing. `community` is the community's own
+ * coverage (the estimate's `has.community`), never generated.
  */
 export type GenerateAction = 'generate' | 'regenerate' | 'covered';
 
@@ -237,7 +238,24 @@ export function generateAction(has: {
   local: SidecarsCoverage;
 }): GenerateAction {
   if (has.community.characters && has.community.recaps) return 'covered';
-  return has.local.characters || has.local.recaps ? 'regenerate' : 'generate';
+  return generatedShown(has, 'characters') || generatedShown(has, 'recaps')
+    ? 'regenerate'
+    : 'generate';
+}
+
+/**
+ * Whether a dimension is generated here AND shown (server#218, the one rule the
+ * player reads from /meta's `work.generated`): the book has the file and the
+ * community lacks that dimension, so /meta lays it in. `local` counts every
+ * generated file, one the community's dimension masks included (recaps only
+ * with a recap list); a masked file shows nowhere, so it is no reason for
+ * Regenerate, nor anything to share.
+ */
+export function generatedShown(
+  has: { community: SidecarsCoverage; local: SidecarsCoverage },
+  dimension: 'characters' | 'recaps',
+): boolean {
+  return has.local[dimension] && !has.community[dimension];
 }
 
 /**
@@ -279,9 +297,7 @@ export function shareDimensions(
   has: { community: SidecarsCoverage; local: SidecarsCoverage },
   links: ContributedLinks,
 ): ShareDimension[] {
-  return (['characters', 'recaps'] as const).filter(
-    (d) => has.local[d] && !has.community[d] && !links[d],
-  );
+  return (['characters', 'recaps'] as const).filter((d) => generatedShown(has, d) && !links[d]);
 }
 
 /**

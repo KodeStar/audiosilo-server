@@ -177,6 +177,27 @@ describe('generate characters and recaps', () => {
     expect(screen.queryByText(/already has characters and recaps/)).toBeNull();
   });
 
+  it('offers Generate, not Regenerate, when the only file generated here is masked by the community', async () => {
+    // The player reads /meta's work.generated, where a masked file shows nowhere: the two
+    // label the book alike (server#218).
+    mockFetch(
+      routes({
+        'GET /admin/bridge/estimate': {
+          body: estimate({
+            has: {
+              community: { characters: true, recaps: false, description: false },
+              local: { characters: true, recaps: false, description: false },
+            },
+          }),
+        },
+      }),
+    );
+    renderApp(URL);
+    await screen.findByRole('button', { name: /generate characters/i });
+    expect(screen.queryByRole('button', { name: 'Regenerate' })).toBeNull();
+    expect(screen.queryByText('Generated on this server.')).toBeNull();
+  });
+
   it('shows no covered line while the Bridge is away', async () => {
     const calls = mockFetch(routes({ 'GET /server': { body: serverInfo } }));
     renderApp(URL);
