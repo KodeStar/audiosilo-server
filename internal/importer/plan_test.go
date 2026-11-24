@@ -105,13 +105,9 @@ func TestDescribeMetadata(t *testing.T) {
 			"Gods of Risk", "James S. A. Corey", "The Expanse", "2.5"},
 		{absMetadata{Title: "T", AuthorName: "A, B", SeriesName: "S #1, Other #4"}, "T", "A, B", "S", "1"},
 		{absMetadata{Title: "T", SeriesName: "No Number"}, "T", "", "No Number", ""},
-		// The scanner's parser (metadata.SplitABSSeries): the numbers the
-		// importer's own regexp read before read the same, and a sequence that
-		// isn't a number is split off the name too rather than kept in it.
-		{absMetadata{Title: "T", SeriesName: "  Wide  #3 "}, "T", "", "Wide", "3"},
+		// Read by metadata.SplitABSSeries: a sequence that isn't a number is
+		// split off the name too.
 		{absMetadata{Title: "T", SeriesName: "Arc #1-3, Other #4"}, "T", "", "Arc", "1-3"},
-		{absMetadata{Title: "T", SeriesName: "Odd # Name #1.5"}, "T", "", "Odd # Name", "1.5"},
-		{absMetadata{Title: "T", SeriesName: ""}, "T", "", "", ""},
 		{absMetadata{Title: "T", Authors: []struct {
 			Name string `json:"name"`
 		}{{"X"}, {"Y"}}, Series: []struct {

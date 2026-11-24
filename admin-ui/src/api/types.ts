@@ -1922,7 +1922,7 @@ export const FIELD_SOURCES = ['tag', 'path', 'abs', 'edited', 'community'] as co
 export type FieldSource = (typeof FIELD_SOURCES)[number] | '';
 
 /** Where a scanned value came from: a file tag, the path or an Audiobookshelf file. */
-export type ScannedSource = 'tag' | 'path' | 'abs';
+export type ScannedSource = Extract<FieldSource, 'tag' | 'path' | 'abs'>;
 
 /** catalog.FieldValue: one overridable field on the book page. */
 export interface FieldValue {

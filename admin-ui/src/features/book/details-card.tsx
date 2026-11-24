@@ -11,7 +11,6 @@ import {
   type AdminBookDetail,
   type FieldValue,
   type OverrideField,
-  type ScannedSource,
 } from '@/api/types';
 import { InlineEdit } from '@/components/inline-edit';
 import { LabelChip, LabelInput } from '@/components/label-input';
@@ -27,13 +26,6 @@ import { displayValue, shownValue, undoRevertRequest, type Drafts } from './book
 /** How much of a value a toast quotes. */
 const QUOTE = 60;
 const quote = (s: string) => (s.length > QUOTE ? `${s.slice(0, QUOTE - 3)}...` : s);
-
-/** The revert's hint for where the scanned value came from (FieldValue.scanned_source). */
-const REVERT_HINTS: Record<ScannedSource, string> = {
-  tag: 'book.revert.tagHint',
-  path: 'book.revert.pathHint',
-  abs: 'book.revert.absHint',
-};
 
 /**
  * The Details card (STYLEGUIDE.md "Provenance marker + Field row"): one row per
@@ -279,7 +271,7 @@ function FieldRow({
             onClick={onRevert}
             title={
               value.scanned
-                ? t(REVERT_HINTS[value.scanned_source ?? 'tag'], {
+                ? t(`book.revert.${value.scanned_source ?? 'tag'}Hint`, {
                     value: quote(shownValue(t, field, value.scanned)),
                   })
                 : t('book.revert.noTag')
