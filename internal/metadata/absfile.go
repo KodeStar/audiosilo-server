@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // ABSFileName is the file Audiobookshelf keeps in a book's folder when its
@@ -113,8 +114,11 @@ func ABSSignature(info fs.FileInfo) string {
 // signature without this, is read again the same way. Revision 2 joins a
 // credit's people with "; " when a name holds a comma (joinCredit,
 // server#213), which a book read before kept as ", " until its file changed
-// (server#454).
-const absReadRev = "2"
+// (server#454). Revision 3 keeps a series name that holds " #" with no
+// sequence after it whole (SplitABSSeries: "The #1 Ladies Detective Agency"),
+// which revision 2 split into a series "The" at position "1 Ladies Detective
+// Agency".
+const absReadRev = "3"
 
 // ReadABSFile reads the ABS metadata.json at path under root (ParseABSFile): a
 // regular file only, never through a link, including one swapped in after the
@@ -280,15 +284,31 @@ func absNames(list json.RawMessage) []string {
 }
 
 // SplitABSSeries reads one series as ABS writes it, "Name #sequence" (the name
-// alone with no sequence): the name before the last " #", the sequence any text
-// after it ("2.5", "1-3"). The one ABS series parser: a metadata.json's
-// (absSeries) and the listening import's seriesName.
+// alone with no sequence): the name before the last " #", the sequence after it
+// when that reads as one (absSequence: "2.5", "1-3", "2b", "1 - 3"). Otherwise
+// the " #" is the name's own and all of it is the name: "The #1 Ladies
+// Detective Agency" has no position, "The #1 Ladies Detective Agency #3" is
+// that series' 3. The one ABS series parser: a metadata.json's (absSeries) and
+// the listening import's seriesName.
 func SplitABSSeries(s string) ABSSeries {
 	s = strings.TrimSpace(s)
 	if i := strings.LastIndex(s, " #"); i > 0 {
-		return ABSSeries{Name: strings.TrimSpace(s[:i]), Position: strings.TrimSpace(s[i+2:])}
+		if seq := strings.TrimSpace(s[i+2:]); absSequence(seq) {
+			return ABSSeries{Name: strings.TrimSpace(s[:i]), Position: seq}
+		}
 	}
 	return ABSSeries{Name: s}
+}
+
+// absSpacedRange is a numeric range written with spaces around its dash ("1 -
+// 3", "1 – 3"), the one sequence absSequence takes with whitespace in it.
+var absSpacedRange = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?\s+[-–]\s+[0-9]+(?:\.[0-9]+)?$`)
+
+// absSequence reports whether the text after a seriesName's last " #" reads as
+// its sequence: a single word ("3", "1.5", "1-3", "2b") or a spaced numeric
+// range. Words after the mark ("1 Ladies Detective Agency") are the name's.
+func absSequence(seq string) bool {
+	return !strings.ContainsFunc(seq, unicode.IsSpace) || absSpacedRange.MatchString(seq)
 }
 
 // absSeries reads one series: ABS writes "Name #sequence" (SplitABSSeries); a

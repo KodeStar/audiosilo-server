@@ -108,6 +108,11 @@ func TestDescribeMetadata(t *testing.T) {
 		// Read by metadata.SplitABSSeries: a sequence that isn't a number is
 		// split off the name too.
 		{absMetadata{Title: "T", SeriesName: "Arc #1-3, Other #4"}, "T", "", "Arc", "1-3"},
+		// A " #" with words after it is the name's: kept whole, no sequence.
+		{absMetadata{Title: "T", SeriesName: "The #1 Ladies Detective Agency"}, "T", "",
+			"The #1 Ladies Detective Agency", ""},
+		{absMetadata{Title: "T", SeriesName: "The #1 Ladies Detective Agency #3"}, "T", "",
+			"The #1 Ladies Detective Agency", "3"},
 		{absMetadata{Title: "T", Authors: []struct {
 			Name string `json:"name"`
 		}{{"X"}, {"Y"}}, Series: []struct {

@@ -88,8 +88,8 @@ func TestParseABSFileSeriesAndPeople(t *testing.T) {
 	}
 }
 
-// TestSplitABSSeries: "Name #sequence", the sequence any text after the last
-// " #", the name alone when there is none.
+// TestSplitABSSeries: "Name #sequence", the sequence the text after the last
+// " #" when it reads as one, the name alone when there is none.
 func TestSplitABSSeries(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -106,6 +106,15 @@ func TestSplitABSSeries(t *testing.T) {
 		{"No Number", ABSSeries{"No Number", ""}},
 		{"#2", ABSSeries{"#2", ""}}, // no name before the mark: all of it is the name
 		{"Glued#2", ABSSeries{"Glued#2", ""}},
+		{"Arc #1 - 3", ABSSeries{"Arc", "1 - 3"}},
+		{"Arc #1 – 3", ABSSeries{"Arc", "1 – 3"}},
+		{"Arc #1.5 - 2", ABSSeries{"Arc", "1.5 - 2"}},
+		{"Saga #2b", ABSSeries{"Saga", "2b"}},
+		// A " #" with words after it is the name's own: no position.
+		{"The #1 Ladies Detective Agency", ABSSeries{"The #1 Ladies Detective Agency", ""}},
+		{"The #1 Ladies Detective Agency #3", ABSSeries{"The #1 Ladies Detective Agency", "3"}},
+		{"Room #12 Mysteries", ABSSeries{"Room #12 Mysteries", ""}},
+		{"Arc #1 - x", ABSSeries{"Arc #1 - x", ""}},
 		{"", ABSSeries{}},
 	} {
 		if got := SplitABSSeries(tc.in); got != tc.want {
