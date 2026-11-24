@@ -242,7 +242,9 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	done := make(chan error, 1)
-	go func() {
+	// Counted (rereads), so a read that outlives its answer ends before the
+	// database closes (WaitMediaCaches; the base context ends it).
+	a.rereads.Go(func() {
 		// No wait cap (lookCtx's): the read is not given up on at the request's
 		// time, the answer is (flightWaitEnd). A look that gets no answer in
 		// fileWait still ends it, as a 503 share_not_answering when in time.
@@ -250,26 +252,39 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 			return a.scanner.ReindexPath(ctx, *lib, p)
 		})
 		done <- err
-	}()
+	})
 	wait := time.NewTimer(time.Until(a.flightWaitEnd(r.Context())))
 	defer wait.Stop()
+	var err error
 	select {
-	case err := <-done:
-		if err != nil {
-			a.writeRescanError(w, lib, p, err)
+	case err = <-done:
+	case <-wait.C:
+		select {
+		case err = <-done: // finished as the answer fell due: its own answer
+		default:
+			writeJSON(w, http.StatusAccepted, map[string]bool{"still_reading": true})
+			go a.logLateReread(lib, p, done)
 			return
 		}
-		a.writeBookDetail(w, r, lib, p)
-	case <-wait.C:
-		writeJSON(w, http.StatusAccepted, map[string]bool{"still_reading": true})
-		go func() {
-			// Answered already: a failure now is only logged (Health lists a
-			// read problem it records).
-			if err := <-done; err != nil && !errors.Is(err, library.ErrNotIndexable) {
-				a.log.Info("re-read finished after its answer with an error", "library", lib.ID, "path", p, "err", err)
-			}
-		}()
 	}
+	if err != nil {
+		a.writeRescanError(w, lib, p, err)
+		return
+	}
+	a.writeBookDetail(w, r, lib, p)
+}
+
+// logLateReread logs how a Re-read answered still_reading ended, once done
+// says: the admin was told it goes on and Health lists only the read problems
+// it records, so a failure is a warning; a stop, or a path with no book, is
+// none.
+func (a *API) logLateReread(lib *catalog.Library, p string, done <-chan error) {
+	err := <-done
+	if err == nil || errors.Is(err, library.ErrStopping) ||
+		errors.Is(err, library.ErrNotIndexable) || errors.Is(err, library.ErrOutsideRoot) {
+		return
+	}
+	a.log.Warn("re-read failed after its still_reading answer", "library", lib.ID, "path", p, "err", err)
 }
 
 // rescanAt runs read, a re-read of what is at p in lib, as readAt does under

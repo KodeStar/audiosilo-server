@@ -268,6 +268,9 @@ type API struct {
 	// coverWork counts the batch's thumbnails being made, which may outlive
 	// its answer (WaitMediaCaches waits for them).
 	coverWork sync.WaitGroup
+	// rereads counts the admins' Re-reads (handleRescanBook), which may
+	// outlive their 202 still_reading answer (WaitMediaCaches waits for them).
+	rereads sync.WaitGroup
 	// readalongRead reads a book's read-along map (library.ReadReadalongMap;
 	// a test counts the reads).
 	readalongRead func(lib catalog.Library, bookPath string, folder bool) ([]byte, fs.FileInfo, error)
@@ -446,8 +449,10 @@ func (a *API) renditionsOn() bool { return a.renditions != nil && a.ffmpeg != ""
 // to end (the launcher defers it, so once shutdown cancels the base context
 // their ffmpeg is killed and its .part removed before the process exits), and
 // for the cover thumbnails a console batch answered without (bounded reads),
-// so none records its colour after the database closed.
+// so none records its colour after the database closed, and for the Re-reads
+// answered still_reading (ended by the base context too).
 func (a *API) WaitMediaCaches() {
+	defer a.rereads.Wait()
 	defer a.coverWork.Wait()
 	for _, c := range []*media.FileCache{a.remux, a.renditions} {
 		if c != nil {

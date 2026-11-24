@@ -3327,7 +3327,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   request timeout so a slow re-read is still saved; 404 `not_indexable`; a read still going at
   `flightWaitEnd`, where a request's waits on another read of its book end, is answered 202
   `{"still_reading": true}` and goes on, so the console says it shows when done rather than meeting
-  the timeout's bare 503: its looks keep `API.fileWait` but no wait cap, server#224), `GET
+  the timeout's bare 503: its looks keep `API.fileWait` but no wait cap; counted in `API.rereads`,
+  which `WaitMediaCaches` waits for, and a failure after the 202 logged as a warning, server#224), `GET
   /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`
   (queue every library: `Scanner.EnqueueAll`, also the startup scans), `GET /admin/scan-runs`
   (`?library_id=&before=&limit=`, `next_before`) and `GET /admin/scan-runs/{id}` (with the log).

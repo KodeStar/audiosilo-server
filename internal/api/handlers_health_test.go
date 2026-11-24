@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
 // Phase 3: the Health and Jobs endpoints.
@@ -699,4 +703,32 @@ func TestDuplicateGroupKeyAction(t *testing.T) {
 	action("DELETE", member, "A", key, 403)
 	action("DELETE", admin, "A", key, 204)
 	action("DELETE", admin, "A", key, 204) // retry after the selection disappeared
+}
+
+// A Re-read answered still_reading that then fails is a warning in the log
+// (the admin was told it goes on), unless the server's stop ended it or the
+// path holds no book: those are no failure.
+func TestLogLateReread(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	a := &API{log: slog.New(slog.NewTextHandler(&logs, nil))}
+	lib := &catalog.Library{ID: 7}
+	for _, tc := range []struct {
+		err  error
+		warn bool
+	}{
+		{nil, false},
+		{errors.Join(library.ErrStopping, context.Canceled), false},
+		{library.ErrNotIndexable, false},
+		{library.ErrOutsideRoot, false},
+		{errors.New("disk I/O error"), true},
+	} {
+		logs.Reset()
+		done := make(chan error, 1)
+		done <- tc.err
+		a.logLateReread(lib, "A/Book", done)
+		if got := strings.Contains(logs.String(), "level=WARN"); got != tc.warn {
+			t.Errorf("err %v: warned = %v (%q), want %v", tc.err, got, logs.String(), tc.warn)
+		}
+	}
 }
