@@ -3,9 +3,12 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -241,36 +244,31 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	done := make(chan error, 1)
-	// Counted (rereads), so a read that outlives its answer ends before the
-	// database closes (WaitMediaCaches; the base context ends it).
-	a.rereads.Go(func() {
-		// No wait cap (lookCtx's): the read is not given up on at the request's
-		// time, the answer is (flightWaitEnd). A look that gets no answer in
-		// fileWait still ends it, as a 503 share_not_answering when in time.
-		// Another read of the book under way (a second click's racing the
-		// first, a scan's) is waited on for as long as it moves on, then this
-		// one reads the book itself, so a fix made since that read began is
-		// picked up (WithUncappedWait).
-		look := library.WithUncappedWait(library.WithLookTimeout(a.baseCtx, a.fileWait))
+	// No wait cap (lookCtx's): the read is not given up on at the request's
+	// time, the answer is (flightWaitEnd). A look that gets no answer in
+	// fileWait still ends it, as a 503 share_not_answering when in time.
+	// Another read of the book under way (a second click's racing the first,
+	// a scan's) is waited on for as long as it moves on, then this one reads
+	// the book itself, so a fix made since that read began is picked up
+	// (WithUncappedWait).
+	look := library.WithUncappedWait(library.WithLookTimeout(a.baseCtx, a.fileWait))
+	rr := a.startReread(lib, p, func() error {
 		_, err := readAt(a, look, func(ctx context.Context) (*catalog.Book, error) {
 			return a.scanner.ReindexPath(ctx, *lib, p)
 		})
-		done <- err
+		return err
 	})
 	wait := time.NewTimer(time.Until(a.flightWaitEnd(r.Context())))
 	defer wait.Stop()
 	var err error
 	select {
-	case err = <-done:
+	case err = <-rr.done:
 	case <-wait.C:
-		select {
-		case err = <-done: // finished as the answer fell due: its own answer
-		default:
+		if rr.leave() {
 			writeJSON(w, http.StatusAccepted, map[string]bool{"still_reading": true})
-			go a.logLateReread(lib, p, done)
 			return
 		}
+		err = <-rr.done // finished as the answer fell due: its own answer
 	}
 	if err != nil {
 		a.writeRescanError(w, lib, p, err)
@@ -279,12 +277,57 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 	a.writeBookDetail(w, r, lib, p)
 }
 
-// logLateReread logs how a Re-read answered still_reading ended, once done
-// says: the admin was told it goes on and Health lists only the read problems
-// it records, so a failure is a warning; a stop, or a path with no book, is
-// none.
-func (a *API) logLateReread(lib *catalog.Library, p string, done <-chan error) {
-	err := <-done
+// reread is an admin's Re-read on a goroutine of its own (startReread): done
+// gets its outcome for the request, unless the request answered
+// still_reading first (leave), when the read logs its outcome itself.
+type reread struct {
+	done  chan error
+	state atomic.Int32 // rereadRunning, rereadEnded or rereadLeft
+}
+
+const (
+	rereadRunning int32 = iota
+	rereadEnded         // its outcome is on done, for the request
+	rereadLeft          // the request answered still_reading: the read logs its outcome
+)
+
+// startReread runs read, a Re-read of what is at p in lib, counted in
+// a.rereads, so one that outlives its answer ends before the database closes
+// (WaitMediaCaches; the base context ends it), and its outcome logged on that
+// goroutine too. A panic is the read's failure, as when it ran on the
+// request's goroutine (net/http recovered it there): unrecovered off it, it
+// would end the server.
+func (a *API) startReread(lib *catalog.Library, p string, read func() error) *reread {
+	rr := &reread{done: make(chan error, 1)}
+	a.rereads.Go(func() {
+		var err error
+		defer func() {
+			if v := recover(); v != nil {
+				a.log.Error("re-read panicked", "library", lib.ID, "path", p, "panic", v, "stack", string(debug.Stack()))
+				err = fmt.Errorf("re-read panicked: %v", v)
+			}
+			if !rr.state.CompareAndSwap(rereadRunning, rereadEnded) {
+				a.logLateReread(lib, p, err)
+				return
+			}
+			rr.done <- err
+		}()
+		err = read()
+	})
+	return rr
+}
+
+// leave reports whether the read was still going as its request's answer fell
+// due: it then logs its own outcome when it ends. False when it has ended, its
+// outcome on done (sent just after it ended).
+func (rr *reread) leave() bool {
+	return rr.state.CompareAndSwap(rereadRunning, rereadLeft)
+}
+
+// logLateReread logs how a Re-read answered still_reading ended (err): the
+// admin was told it goes on and Health lists only the read problems it
+// records, so a failure is a warning; a stop, or a path with no book, is none.
+func (a *API) logLateReread(lib *catalog.Library, p string, err error) {
 	if err == nil || errors.Is(err, library.ErrStopping) ||
 		errors.Is(err, library.ErrNotIndexable) || errors.Is(err, library.ErrOutsideRoot) {
 		return
