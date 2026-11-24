@@ -2689,7 +2689,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   them by region, so without it `au` beat `uk`; the ASIN an identifier hit was found by leads its
   marketplace's, `toCandidate`, so a book the store lists under two keeps its tags' when that store
   is the preferred one), `asin_region` names the first's;
-  `meta.DefaultRecording` sets the dialog's `default_recording_id`. An identifier names
+  `meta.ProposedRecording` sets the dialog's `default_recording_id` and is what a match run
+  proposes: `meta.DefaultRecording`, then `meta.FitRecording` for an identifier hint. An identifier names
   its recording. Otherwise, recordings credited to a named reader or ensemble the book
   also credits (`ReadBy`) take precedence within 20% of the book's runtime, or when a
   length is unknown. The closest length wins within that group, with the preferred
@@ -2700,14 +2701,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   alone can identify one within the greater of 1% and two minutes, capped at 15% of the
   book's runtime (`lengthSays`). With no eligible recording the dialog offers the work
   alone and a run can report `dramatization_only`.
-  A search by tag or import hint and a match run both apply `meta.FitRecording`. A
+  A search by tag or import hint, in the dialog or a match run, applies `meta.FitRecording`
+  to the recording that hint found. A
   recording more than 10% off gives way to one within 10% when the book's named
   narrator does not read the first recording. The original recording stays eligible
   when its narrator agrees, even if that narrator reads two editions (server#325).
-  Generic credits such as "Various" and "Full Cast" cannot vouch for an edition. A
-  named ensemble such as "the Full Cast Family" can. The hint vouches for its own
+  Generic credits such as "Various" and production credits such as "Full Cast" or
+  "the Full Cast Family" (`dramatizationTextRE`) cannot vouch for an edition. A named
+  ensemble such as "The Hollywood Theater of the Ear" can. The hint vouches for its own
   recording only. The plain-book dramatization rule applies to any replacement.
-  A typed identifier, a refresh and a repick keep the recording their identifier names. **Bulk matching**
+  A typed identifier, a refresh, a repick and an `unknown_asin` run's own ASIN keep the
+  recording their identifier names. **Bulk matching**
   (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
   `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
   `POST /admin/match-runs/{id}/apply|cancel`. Mode `unknown_asin` (server#392, Health's unknown-ASIN card,
