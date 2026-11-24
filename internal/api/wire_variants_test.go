@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -65,7 +66,12 @@ func wireVariantCases(t *testing.T, m *wireMainEnv) []wireCase {
 			keys: []string{"writeErrorCode"}},
 
 		{name: "server-bridge", route: "GET /api/v1/server (signed in, single sign-on on, a Bridge online)",
-			body:  wireCall(v.testEnv, "GET", "/api/v1/server", v.userTok, ""),
+			body: func(t *testing.T) string {
+				// Online only within bridge.OnlineWindow of a heartbeat: beat now,
+				// not when the env was built before every case ran.
+				v.beat(t, bridge.KindVerify)
+				return wireOK(t, v.testEnv, "GET", "/api/v1/server", v.userTok, "")
+			},
 			keys:  wireServerKeys,
 			types: wireAt[bridgeInfo]("$.bridge")},
 		{name: "auth-redeem-invite", route: "POST /api/v1/auth/redeem (a listener's invite with an expiry and uses left, home and away addresses)",
