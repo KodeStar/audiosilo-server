@@ -38,7 +38,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   keeps their ratios (`TestBudgetStartsAfterAnotherDiscovery`, `TestRequestWaitsOutAnotherReadsProbe`).
 - **Wire goldens (`internal/api/wire_golden_test.go`, `internal/api/testdata/wire/`, audiosilo#96, server#347)**: the
   shape of each important player envelope (`/server`, the session and pairing envelopes, `/me`, the library
-  lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, `/meta`, `/me/upcoming`,
+  lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, favourites, `/meta`, `/me/upcoming`,
   `/household/listening`), produced by the real handlers against seeded envs: each field's JSON type, never a
   value, so ids and times never churn it. `TestWireGolden` fails on any change: a field removed or retyped
   breaks shipped clients (CROSS-REPO.md §15), and an addition must show in the diff. After an intended change
@@ -744,7 +744,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   have no work, a match-only book's, is resolved to none, its items dropped);
   (3) metaserve's watch feed, 50 series a request (split when full), says which series have news; (4)
   `series/{id}` is read when new, with news, or a week old (2 at a time; a 404 marks it gone, dropped after
-  a week); (5) classify; (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
+  a week); (5) classify (a local series whose items come out as stored, its series all classified
+  before, is not written again; the resolved and community series are read once a run and a work's
+  series once a run: server#279); (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
   kicked) is step (1) alone (`Options.Resolve`, `resolveOnly`: no series, feed, items, announcement or
   status; server#241, a book's `work_id` rides on the player's lists); the books whose work it found
   new or changed are pending for the next full run's series step, kept in `server_state('upcoming_pending')`
@@ -1264,7 +1266,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (see Bridge attachments) as `application/json`, gzipped for a client that accepts it
   (`spa.AcceptsGzip`; `Vary: Accept-Encoding`), `Cache-Control: private, no-cache` and a strong ETag of
   the file's size and mtime, `-gz` for the gzip answer (chosen by the request's Accept-Encoding before
-  any gzipping, so a 304 gzips nothing; server#265; 304 on a match). **Header auth only**, as
+  any gzipping, so a 304 gzips nothing; server#265; 304 on a match). A revalidation reads nothing of
+  the map when its ETag names the file as it is now and the index read that very file (its
+  `metadata.AttachmentSignature` in `books.attachments_sig`, `library.StatReadalongMap`): the indexed
+  head is then checked against the book now as below and the 304 goes (`readalongUnchanged`; a look at
+  the map or the ebook given up on is 503 `share_not_answering` there, not a second wait in the full path); else the
+  full path answers it. **Header auth only**, as
   `/ebook` (`requireAuth`; `?token=` is never read; it stays under the request timeout: a map is
   at most 16 MiB, no media route). Each request reads the map from disk (`library.ReadReadalongMap`:
   a real `.audiosilo` folder that isn't ignored, a regular file never through a link, read once
@@ -2262,7 +2269,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, or for the title
   `metadata.PathTitle` (the path's title `TitleNotSeries` may take), else `tag`; one an ABS
   file gives is `abs`; an override is `edited` or
-  `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
+  `community`; an enrichment-attached ASIN/ISBN reads as `community`. Each field also carries
+  `scanned_source` (`FieldValue.ScannedSource`: `tag`, `path` or `abs`, omitted with no scanned
+  value), the scanned value's own source under an edit, so the console's Revert hint names the
+  layer it goes back to ("Audiobookshelf file: ...", or "Community: ..." for the `enrichment` an edit
+  hides, which a revert restores over `scanned`). Revert = delete the
   override + `refreshEffective` (restores the scanned value, the ABS file's where it gives one; no
   reindex, no disk).
   **Audiobookshelf metadata.json** (`metadata/absfile.go`, `catalog/absfile.go`, migration `0046`):
@@ -2274,7 +2285,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   tags): `bookLayers.overABS`, in `scannedFields` before `titlePosition`. `metadata.ParseABSFile` is
   lenient (a wrongly typed value costs that value; <= 4 MiB): title, subtitle, authors and
   narrators joined with ", " (strings or `{name}`; "; " when a name holds a comma, "Le Guin, Ursula
-  K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (the first is the main series
+  K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (`metadata.SplitABSSeries`, the
+  one ABS series parser, the listening import's `seriesName` too: cut at the last " #" only when
+  what follows reads as a sequence, one word or a spaced numeric range, either with one bracketed note
+  after it ("1 (Omnibus)", kept whole as the position text; a " #" inside that note is the note's), else all of it is the name,
+  "The #1 Ladies Detective Agency"; the first is the main series
   with its position, the rest `more_series`; a series without a position keeps the tag's only while
   it is the same series, by `seriesKey`), `publishedDate` else `publishedYear` as `published`, the
   HTML description as plain text, publisher, language, `abridged` (only `true` says anything: ABS
@@ -2284,7 +2299,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `/meta`, the community chapter check, a refresh run). `books.abs_file` holds those fields (JSON,
   `''` for none), `abs_sig` the file's signature (`metadata.ABSSignature`: size + mtime ns + `@` the reading's revision
   `absReadRev`, `''` for none: bump the revision and every stored file is read once more, as 2 did for
-  `joinCredit`'s "; ", server#454) and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
+  `joinCredit`'s "; ", server#454, and 3 for a series name holding " #") and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
   first so `Signatures` reads no JSON; `UpsertBook` writes all three (`absColumns`; nothing for a
   file book). Discovery records each folder's file signature from the walk itself (`audioDirs`'
   `absFiles`, the walk's own entry, no extra directory read; `IndexPath`, with no walk, stats it: `absSigAt`;
@@ -3116,7 +3131,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   thumbnails as `data:` URLs in request order (`""` = no art; each with the `version`, the
   `cover_version` its admin row has once the request's colours are recorded), resolved like
   `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing), from
-  one `catalog.CoverSources` query per library for the whole batch. Admin book rows carry
+  one `catalog.CoverSources` query per library for the whole batch. The answer waits at most
+  `coverBatchWait` (2 s) for its covers: one still being read then is `"pending": true` with `data` `""`,
+  its read finishing into the thumbnail cache (`API.coverWork`, which `WaitMediaCaches` waits for; on
+  `baseCtx`, so a stop ends it, and within the request timeout, the bound the request gave it), and
+  an ask for a cover whose read is under way waits on that read (`sharedThumbnail`, `libraryThumbs`),
+  never starts a second; the console asks again for the pending ones only, up to `MAX_COVER_ASKS` times
+  in all (`cover-batch.ts`), so a cover on a slow share holds none of the others (server#225). Admin book rows carry
   `cover_version`, and the console keeps the thumbnails it got in a bounded IndexedDB cache
   keyed by library, path, version and size (`admin-ui/src/api/thumb-cache.ts`), a thumbnail kept
   under the version the answer names (never under an older row's version that asked for it),
@@ -3153,7 +3174,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   own version as `cover_art`, so `cover_version` follows a sidecar replaced in place
   and equals the thumbnail ETag's hash; `catalog.RecordCoverColors` is
   compare-and-set on the identity it was read under and bounded (250 ms, detached
-  from the request). Both are on the player `Book` JSON (`omitempty`).
+  from the request). Both are on the player `Book` JSON (`omitempty`). The player rows
+  that name a book without carrying one, `GET /me/progress` (`ListProgress` only: never
+  `GetProgress` or a save's echo, which `scanProgress` clears), `GET /me/favourites`, a
+  `/fs` book entry (`library.MarkBooks`) and a `/household/listening` row on an indexed
+  book, carry its `cover_version` too, omitted where the path is no indexed book
+  (server#215).
   Migration 0094 adds `books.cover_color_art`, the raw identity of the last art read,
   including a read that found no colour. `CoverColorsDue` pages the partial index
   of rows whose identity differs. At upgrade, `BackfillCoverColorArt` checks the
@@ -4710,8 +4736,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   "Checking now". Settings > Community
   metadata's Source card saves `metadata.mode` (restart). TLS certificates read from their
   files (`server.Certificates`; never generates or requests one), database size + schema
-  (`catalog.DatabaseInfo`), each root's availability + disk space (`Scanner.RootDisk`: statfs inside the
-  same bounded root probe, so a dead mount can't hang it), web player source, update status. The update check
+  (`catalog.DatabaseInfo`), each root's availability + disk space (`Scanner.RootStatuses`: statfs inside the
+  same bounded root probe, one probe a root for both, so a dead mount can't hang it and an expired
+  answer costs no second probe, server#225), web player source, update status. The update check
   (`internal/updates`, started by the launcher): GitHub's latest release, a minute after start then daily,
   conditional on the ETag, `User-Agent: AudioSilo/<version>`, nothing else sent, never while off;
   `GET /admin/update`, `POST /admin/update/check` (409 `update_check_off`; within a minute it answers with
@@ -4753,7 +4780,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the API shows `notify.Redact`'s address and `has_secret`), `server_events` (the bell's feed, 90 days,
   `dedup_key` announces an event once while it is in the feed, an update once per version: the check
   and the record one step under `dedupMu`, so two emits at once announce it once,
-  server#408). `notify.Service.Emit` records the event and queues each
+  server#408). `notify.Service.Emit` returns at once: one goroutine records the queued events in the
+  order emitted (`emitQueue`, 1024; a burst past it waits for room, never drops one; `Deliver`, a
+  podcast notice recorded with its write, rides the same queue; `Flush` for a caller that reads the
+  feed next: a test, and `BackupFailed`, as the console reads the feed once it sees the run end), and
+  `Service.Close`, deferred by the launcher before the database's, records what is still queued (an
+  emit after it is recorded on its caller's goroutine once the queue is drained, so the order holds), server#224. Each recorded event queues each
   enabled subscribed destination (4 workers, queue 256, left owed + logged when full); a delivery is
   retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
   worker), three attempts in all, restarts included. Every delivery is kept in the **outbox**

@@ -392,3 +392,33 @@ func TestHouseListeningPlan(t *testing.T) {
 		t.Errorf("plan sorts %d times; want only the result sorted:\n%s", n, joined)
 	}
 }
+
+// A row on an indexed book carries its cover_version (the Book's); one whose
+// path is no book of its own (a disc folder named by the book holding it)
+// carries none.
+func TestHouseListeningCoverVersion(t *testing.T) {
+	t.Parallel()
+	f := newSessionFixture(t)
+	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib, RelPath: "Joined/Book", IsFolder: true,
+		Title: "The Joined Book", Duration: 7200,
+		Files: []BookFile{{RelPath: "Joined/Book/CD1/01.mp3"}, {RelPath: "Joined/Book/CD2/01.mp3", Seq: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	user := func(name string) int64 { return f.addUser(t, name, "2025-01-01T00:00:00Z", false) }
+	me, sam, kim := user("me"), user("sam"), user("kim")
+	f.setShare(t, true, me, sam, kim)
+	f.clock = f.clock.Add(time.Minute)
+	f.houseSession(t, sam, f.book.Path, 30*time.Second, 100)
+	f.houseSession(t, kim, "Joined/Book/CD1", 40*time.Second, 100)
+	b, err := f.c.GetBookByPath(f.ctx, f.lib, f.book.Path)
+	if err != nil || b.CoverVersion == "" {
+		t.Fatalf("book = %+v (%v), want a cover_version", b, err)
+	}
+	got := map[string]string{}
+	for _, r := range f.house(t, me, []Scope{{LibraryID: f.lib, AllowAll: true}}) {
+		got[r.Path] = r.CoverVersion
+	}
+	if len(got) != 2 || got[f.book.Path] != b.CoverVersion || got["Joined/Book/CD1"] != "" {
+		t.Fatalf("house cover versions = %v, want %q on %s and none on the disc path", got, b.CoverVersion, f.book.Path)
+	}
+}

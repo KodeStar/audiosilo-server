@@ -375,10 +375,10 @@ func TestBookDetailProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]FieldValue{
-		FieldTitle:       {Value: "Edited", Source: SourceEdited, Scanned: "Original Name", Locked: true, EditedBy: "u"},
-		FieldAuthor:      {Value: "Tag Author", Source: SourceTag, Scanned: "Tag Author"},
-		FieldSeries:      {Value: "Series", Source: SourcePath, Scanned: "Series"},
-		FieldSeriesIndex: {Value: "1", Source: SourcePath, Scanned: "1"},
+		FieldTitle:       {Value: "Edited", Source: SourceEdited, Scanned: "Original Name", ScannedSource: SourceTag, Locked: true, EditedBy: "u"},
+		FieldAuthor:      {Value: "Tag Author", Source: SourceTag, Scanned: "Tag Author", ScannedSource: SourceTag},
+		FieldSeries:      {Value: "Series", Source: SourcePath, Scanned: "Series", ScannedSource: SourcePath},
+		FieldSeriesIndex: {Value: "1", Source: SourcePath, Scanned: "1", ScannedSource: SourcePath},
 		FieldDescription: {Value: "From the community.", Source: SourceCommunity, Locked: true},
 		FieldASIN:        {Value: "B000000001", Source: SourceCommunity},
 		FieldISBN:        {},

@@ -250,6 +250,10 @@ func Run(ctx context.Context, opts Options) (err error) {
 	// the API's live settings have it (a is set before Run starts sending).
 	var a *api.API
 	ntf := notify.New(cat, api.Version, func() notify.Server { return a.NotifyIdentity() }, log)
+	// The events still queued to be recorded are recorded before the database
+	// closes (deferred after its Close, so it runs first, and after every
+	// later-deferred stop, whose work may still emit one).
+	defer ntf.Close()
 
 	// The private folders an earlier run's ffprobe and ffmpeg inputs left in
 	// the temporary folder (a server killed while one ran), off the start's

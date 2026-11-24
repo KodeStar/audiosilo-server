@@ -18,6 +18,13 @@
 // the next start: a webhook's "id" tells the two apart). A failing one is tried
 // maxAttempts times in all, restarts included.
 //
+// Emit records nothing on its caller's goroutine (a sign-in, a Bridge job's
+// end): the event goes on a bounded queue that one goroutine records in order
+// (recordQueued), so events are recorded in the order they were emitted. A burst
+// past emitQueue waits for room rather than dropping one. Close, before the
+// database closes, records what is still queued; an event emitted after it is
+// recorded on its caller's goroutine, as before, once the queue is drained.
+//
 // One destination's notices go one at a time, in the order their events were
 // recorded (drain): a later one waits while an earlier one is still owed, its
 // retries included, so a destination never hears that a feed recovered before
@@ -110,6 +117,7 @@ type Server struct {
 const (
 	sendTimeout = 10 * time.Second
 	queueSize   = 256
+	emitQueue   = 1024 // events waiting to be recorded (Emit)
 	workers     = 4
 	maxBody     = 64 << 10 // read at most this much of an answer (then drop it)
 )
@@ -159,6 +167,16 @@ type Service struct {
 	// swept counts the reads of the outbox redeliver has finished (the start's
 	// first): a test waits on it rather than for a time.
 	swept atomic.Int64
+
+	// emits: the events waiting to be recorded, recorded one at a time by
+	// recordQueued (started by the first emission), so in the order emitted.
+	// emitMu guards closed (Close): a send holds it shared, so emits is
+	// never sent to once closed; recording counts the record goroutine.
+	emits     chan emission
+	emitMu    sync.RWMutex
+	closed    bool
+	startRec  sync.Once
+	recording sync.WaitGroup
 }
 
 // oidcPendingTaken is one oidc_pending notification raised: when, and the
@@ -184,6 +202,7 @@ func New(cat *catalog.Catalog, version string, server func() Server, log *slog.L
 		},
 		log: log, version: version, server: server,
 		queue:  make(chan int64, queueSize),
+		emits:  make(chan emission, emitQueue),
 		delays: retryDelays,
 		sweep:  sweepEvery,
 		now:    time.Now,
@@ -212,9 +231,22 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
+// emission is one item of the record queue: an event to record (e, through
+// allow), an event already recorded to deliver (recorded), or a Flush's
+// marker (flushed, closed once every item before it is handled).
+type emission struct {
+	ctx      context.Context
+	e        Event
+	allow    func() bool
+	recorded *catalog.ServerEvent
+	flushed  chan struct{}
+}
+
 // Emit records an event in the feed and queues it for every enabled destination
-// subscribed to its kind. It never blocks on sending; a full queue leaves the
-// delivery owed until the next sweep (logged).
+// subscribed to its kind. It returns at once (unless emitQueue events are
+// already waiting: then once there is room): the event is recorded in the
+// background, in the order emitted (recordQueued), and never blocks on sending; a
+// full delivery queue leaves the delivery owed until the next sweep (logged).
 func (s *Service) Emit(ctx context.Context, e Event) {
 	s.emit(ctx, e, nil)
 }
@@ -225,24 +257,97 @@ func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 	if s == nil {
 		return
 	}
-	ctx = context.WithoutCancel(ctx) // the request that caused it may be ending
-	ev, ok := s.recordEvent(ctx, e, allow)
-	if !ok {
-		return
-	}
-	s.Deliver(ctx, ev)
+	// The request that caused it may be ending.
+	s.enqueue(emission{ctx: context.WithoutCancel(ctx), e: e, allow: allow})
 }
 
 // Deliver queues an event already in the feed for the destinations its outbox
-// rows name (Emit's second half, and for an event recorded in the transaction
-// of the write that raised it: catalog.SetPodcastNotice). It never blocks on
-// sending: a full queue leaves the row owed until the next sweep. A
-// destination still owed an earlier event is sent that one first (drain).
+// rows name (an event recorded in the transaction of the write that raised
+// it: catalog.SetPodcastNotice), in turn with the events emitted before it,
+// and returns at once. It never blocks on sending: a full queue leaves the
+// row owed until the next sweep. A destination still owed an earlier event is
+// sent that one first (drain).
 func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
 	if s == nil {
 		return
 	}
-	ctx = context.WithoutCancel(ctx)
+	s.enqueue(emission{ctx: context.WithoutCancel(ctx), recorded: &ev})
+}
+
+// Flush returns once every event emitted or delivered before it is recorded
+// and its deliveries queued (for a caller that reads the feed next: a test,
+// BackupFailed).
+func (s *Service) Flush() {
+	if s == nil {
+		return
+	}
+	done := make(chan struct{})
+	s.enqueue(emission{flushed: done})
+	<-done
+}
+
+// Close records the events still queued and stops the record goroutine; an
+// event emitted later is recorded on its caller's goroutine. The launcher
+// calls it before the database closes, so no emitted event is lost to a stop.
+func (s *Service) Close() {
+	if s == nil {
+		return
+	}
+	s.emitMu.Lock()
+	if !s.closed {
+		s.closed = true
+		close(s.emits)
+	}
+	s.emitMu.Unlock()
+	s.recording.Wait()
+}
+
+// enqueue puts m on the record queue (waiting for room when it is full), or
+// handles it here once Close has run: after the events still queued then, so
+// they stay in the order emitted and a Flush still means every earlier one is
+// recorded.
+func (s *Service) enqueue(m emission) {
+	s.emitMu.RLock()
+	if s.closed {
+		s.emitMu.RUnlock()
+		s.recording.Wait()
+		s.handle(m)
+		return
+	}
+	s.startRec.Do(func() {
+		s.recording.Add(1)
+		go s.recordQueued()
+	})
+	s.emits <- m
+	s.emitMu.RUnlock()
+}
+
+// recordQueued handles the queued emissions in order until Close.
+func (s *Service) recordQueued() {
+	defer s.recording.Done()
+	for m := range s.emits {
+		s.handle(m)
+	}
+}
+
+// handle is one emission: the event recorded (unless its dedup key was seen or
+// its gate refuses it) and its deliveries queued, or a Flush released.
+func (s *Service) handle(m emission) {
+	switch {
+	case m.flushed != nil:
+		close(m.flushed)
+	case m.recorded != nil:
+		s.queueDeliveries(m.ctx, *m.recorded)
+	default:
+		if ev, ok := s.recordEvent(m.ctx, m.e, m.allow); ok {
+			s.queueDeliveries(m.ctx, ev)
+		}
+	}
+}
+
+// queueDeliveries queues ev, an event in the feed, for the destinations its
+// outbox rows name (Deliver).
+func (s *Service) queueDeliveries(ctx context.Context, ev catalog.ServerEvent) {
 	owed, err := s.cat.PendingDeliveries(ctx, ev.ID)
 	if err != nil {
 		s.log.Warn("loading an event's deliveries failed", "kind", ev.Kind, "err", err)
@@ -1231,6 +1336,9 @@ func (s *Service) UpdateFound(ctx context.Context, version, name, url string) {
 // BackupFailed reports a backup that failed (trigger: scheduled or manual; reason
 // is backup.Result's short code, detail its Detail: the folder, the server's user,
 // the folder's owner and the fix when the folder refused the server, else "").
+// It returns once the event is recorded (Flush): the backup's run is marked over
+// after it, and the console reads the feed again as soon as it sees that
+// (useBackups), so the failure is in the feed by then.
 func (s *Service) BackupFailed(ctx context.Context, trigger, reason, detail string) {
 	if s == nil {
 		return
@@ -1240,6 +1348,7 @@ func (s *Service) BackupFailed(ctx context.Context, trigger, reason, detail stri
 		data["detail"] = detail
 	}
 	s.Emit(ctx, Event{Kind: KindBackupFailed, Data: data})
+	s.Flush()
 }
 
 // BridgeJob is a Bridge job that just finished, failed or parked, for

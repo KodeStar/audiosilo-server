@@ -118,6 +118,9 @@ type ReadalongIndexed struct {
 	Head        *metadata.ReadalongHead
 	EbookSHA256 string
 	HashedSig   string
+	// AttachmentsSig is the book's attachments signature (attachments_sig):
+	// Head was read from the map whose metadata.AttachmentSignature it lists.
+	AttachmentsSig string
 }
 
 // BookReadalongAt is the read-along map the index holds for the book at
@@ -126,9 +129,9 @@ func (c *Catalog) BookReadalongAt(ctx context.Context, libraryID int64, bookPath
 	var raw string
 	var out ReadalongIndexed
 	err := c.db.QueryRowContext(ctx,
-		`SELECT COALESCE(a.readalong, ''), b.ebook_sha256, b.ebook_hashed_sig
+		`SELECT COALESCE(a.readalong, ''), b.ebook_sha256, b.ebook_hashed_sig, b.attachments_sig
 		   FROM books b LEFT JOIN book_attachments a ON a.book_id = b.id
-		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, bookPath).Scan(&raw, &out.EbookSHA256, &out.HashedSig)
+		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, bookPath).Scan(&raw, &out.EbookSHA256, &out.HashedSig, &out.AttachmentsSig)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ReadalongIndexed{}, ErrNotFound
 	}

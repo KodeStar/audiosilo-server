@@ -361,7 +361,53 @@ describe('book page', () => {
     expect(patches(calls)[0].body).toEqual({ set: { abridged: 'false', tags: '["Favourite"]' } });
   });
 
-  it('reverts a locked field to the file, with an undo', async () => {
+  it("names the revert's source: an Audiobookshelf file, the path, else a tag", async () => {
+    const detail = bookDetail();
+    detail.fields.title = {
+      value: 'Kings',
+      source: 'edited',
+      scanned: 'The Way of Kings',
+      scanned_source: 'abs',
+      locked: true,
+    };
+    detail.fields.author = {
+      value: 'B. Sanderson',
+      source: 'edited',
+      scanned: 'Brandon Sanderson',
+      scanned_source: 'path',
+      locked: true,
+    };
+    detail.fields.narrator = {
+      value: 'Someone',
+      source: 'edited',
+      scanned: 'Michael Kramer',
+      locked: true,
+    };
+    // An edit over the Bridge's enrichment goes back to it, not the scan.
+    detail.fields.asin = {
+      value: 'B000000002',
+      source: 'edited',
+      scanned: '',
+      enrichment: 'B000000001',
+      locked: true,
+    };
+    mockFetch(routes(detail));
+    renderApp(URL);
+    expect(await screen.findByRole('button', { name: 'Revert Title' })).toHaveAccessibleDescription(
+      'Audiobookshelf file: The Way of Kings',
+    );
+    expect(screen.getByRole('button', { name: 'Revert Author' })).toHaveAccessibleDescription(
+      'Folder and file names: Brandon Sanderson',
+    );
+    expect(screen.getByRole('button', { name: 'Revert Narrator' })).toHaveAccessibleDescription(
+      'File tag: Michael Kramer',
+    );
+    expect(screen.getByRole('button', { name: 'Revert ASIN' })).toHaveAccessibleDescription(
+      'Community: B000000001',
+    );
+  });
+
+  it('reverts a locked field to the scanned value, with an undo', async () => {
     const detail = bookDetail();
     detail.fields.title = {
       value: 'Kings',
@@ -385,10 +431,13 @@ describe('book page', () => {
     );
     renderApp(URL);
     const user = userEvent.setup();
-    const revert = await screen.findByRole('button', { name: 'Revert Title to the file' });
-    expect(revert).toHaveAttribute('title', 'File tag: The Way of Kings');
+    const revert = await screen.findByRole('button', { name: 'Revert Title' });
+    expect(revert).toHaveAccessibleDescription('File tag: The Way of Kings');
     await user.click(revert);
-    expect(await screen.findByText('Title reverted to the file')).toBeInTheDocument();
+    expect(await screen.findByText('Title reverted')).toBeInTheDocument();
+    expect(
+      screen.getByText('Now “The Way of Kings”, no longer locked against rescans.'),
+    ).toBeInTheDocument();
     await waitFor(() => expect(within(row('Title')).getByText('File tag')).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: 'Undo' }));
     expect(await screen.findByText('Title restored')).toBeInTheDocument();

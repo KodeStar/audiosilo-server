@@ -4,6 +4,7 @@
     "entries": [
       {
         "author": "string",
+        "cover_version": "string",
         "duration": "number",
         "is_audio": "boolean",
         "is_book": "boolean",

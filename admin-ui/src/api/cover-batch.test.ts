@@ -1,6 +1,6 @@
 import { mockFetch } from '@/test/fetch-mock';
 import type { BookRef } from './types';
-import { MAX_COVER_BATCH, loadThumb } from './cover-batch';
+import { MAX_COVER_ASKS, MAX_COVER_BATCH, loadThumb } from './cover-batch';
 import { clearThumbCache, thumbCache } from './thumb-cache';
 
 // Covers requested together go out as one POST /admin/covers per 60 books (and
@@ -174,5 +174,48 @@ describe('loadThumb', () => {
       'p3',
       'p4',
     ]);
+  });
+
+  it('shows the ready covers of a batch at once, and asks again for a pending one', async () => {
+    // "slow" is still being made for its first two answers (a share slow to read).
+    let slowAsks = 0;
+    const calls = mockFetch({
+      'POST /admin/covers': (req: { body: unknown }) => ({
+        body: {
+          covers: (req.body as { books: BookRef[] }).books.map((b) =>
+            b.path === 'slow' && ++slowAsks < 3
+              ? { ...b, data: '', pending: true }
+              : { ...b, data: `data:image/jpeg;base64,${b.path}`, version: 'v1' },
+          ),
+        },
+      }),
+    });
+    const quick = loadThumb({ library_id: 1, path: 'quick' }, 320, undefined, 'v1');
+    const slow = loadThumb({ library_id: 1, path: 'slow' }, 320, undefined, 'v1');
+    expect(await quick).toBe('data:image/jpeg;base64,quick');
+    expect(await slow).toBe('data:image/jpeg;base64,slow');
+    expect(calls.map((c) => (c.body as { books: BookRef[] }).books.map((b) => b.path))).toEqual([
+      ['quick', 'slow'],
+      ['slow'],
+      ['slow'],
+    ]);
+  });
+
+  it('gives up on a cover still pending after a few asks', async () => {
+    const calls = mockFetch({
+      'POST /admin/covers': (req: { body: unknown }) => ({
+        body: {
+          covers: (req.body as { books: BookRef[] }).books.map((b) => ({
+            ...b,
+            data: '',
+            pending: true,
+          })),
+        },
+      }),
+    });
+    expect(await loadThumb({ library_id: 1, path: 'stuck' }, 320, undefined, 'v1')).toBeNull();
+    await settle();
+    expect(calls).toHaveLength(MAX_COVER_ASKS);
+    expect((await thumbCache().size()).entries).toBe(0);
   });
 });

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // SafeJoin is the single security primitive gating every filesystem access
@@ -390,5 +392,22 @@ func TestResolveBelowIsResolveExisting(t *testing.T) {
 		if _, err := SafeJoin(root, rel); (err == nil) != allowed {
 			t.Errorf("SafeJoin(%q) err = %v, want allowed %v", rel, err, allowed)
 		}
+	}
+}
+
+// MarkBooks gives a book entry its indexed book's fields, cover_version among
+// them (the cover URL's cache buster, as on a Book), and leaves an entry that is
+// no indexed book without any.
+func TestMarkBooksCoverVersion(t *testing.T) {
+	t.Parallel()
+	entries := []Entry{{Name: "Book", Path: "A/Book", IsDir: true}, {Name: "Other", Path: "A/Other", IsDir: true}}
+	MarkBooks(entries, map[string]catalog.Book{
+		"A/Book": {Title: "Book", Author: "Ann", CoverVersion: "0123456789"},
+	})
+	if e := entries[0]; !e.IsBook || e.Title != "Book" || e.CoverVersion != "0123456789" {
+		t.Fatalf("book entry = %+v, want its book's title and cover_version", e)
+	}
+	if e := entries[1]; e.IsBook || e.CoverVersion != "" {
+		t.Fatalf("folder entry = %+v, want no book fields", e)
 	}
 }

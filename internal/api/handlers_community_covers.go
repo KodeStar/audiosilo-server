@@ -94,32 +94,9 @@ func (a *API) handleCommunityCovers(w http.ResponseWriter, r *http.Request) {
 // share one fetch (communityFlights).
 func (a *API) communityThumbnail(ctx context.Context, rawURL string, size int, retryFailed bool) ([]byte, error) {
 	key := "r\x00" + rawURL + "\x00" + strconv.Itoa(size)
-	for {
-		if jpg, ok := a.thumbs.Get(key); ok {
-			return jpg, nil
-		}
-		c, lead, err := a.community.join(key, rawURL, retryFailed)
-		if err != nil {
-			return nil, err
-		}
-		if lead {
-			c.jpg, c.err = a.fetchCommunityThumbnail(ctx, key, rawURL, size)
-			a.community.finish(key, rawURL, c, ctx.Err() != nil)
-			return c.jpg, c.err
-		}
-		select {
-		case <-c.done:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-		if c.err == nil || !c.abandoned {
-			return c.jpg, c.err
-		}
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		// The request that led gave up before its fetch did: ask again under ours.
-	}
+	return a.community.do(ctx, key, rawURL, retryFailed, a.thumbs.Get, func() ([]byte, error) {
+		return a.fetchCommunityThumbnail(ctx, key, rawURL, size)
+	})
 }
 
 // fetchCommunityThumbnail fetches and decodes one community cover for
@@ -214,17 +191,52 @@ func (f *communityFlights) join(key, rawURL string, retryFailed bool) (c *commun
 }
 
 // finish ends the leader's call c for key, remembering rawURL as failed when the
-// fetch itself failed (not when its request gave up first), and releases the
+// fetch itself failed (not when its request gave up first; never for an empty
+// rawURL, the library's own covers: API.libraryThumbs), and releases the
 // waiters.
 func (f *communityFlights) finish(key, rawURL string, c *communityCall, abandoned bool) {
 	f.mu.Lock()
 	c.abandoned = abandoned
-	if c.err != nil && !abandoned {
+	if c.err != nil && !abandoned && rawURL != "" {
 		f.rememberFailure(rawURL)
 	}
 	delete(f.calls, key)
 	f.mu.Unlock()
 	close(c.done)
+}
+
+// do is the thumbnail cached under key (cached), else fill's, the asks for key
+// at once sharing one fill: the first leads it, the others wait on it, and one
+// whose leader's request ended first asks again under its own. rawURL and
+// retryFailed are join's.
+func (f *communityFlights) do(ctx context.Context, key, rawURL string, retryFailed bool,
+	cached func(string) ([]byte, bool), fill func() ([]byte, error)) ([]byte, error) {
+	for {
+		if jpg, ok := cached(key); ok {
+			return jpg, nil
+		}
+		c, lead, err := f.join(key, rawURL, retryFailed)
+		if err != nil {
+			return nil, err
+		}
+		if lead {
+			c.jpg, c.err = fill()
+			f.finish(key, rawURL, c, ctx.Err() != nil)
+			return c.jpg, c.err
+		}
+		select {
+		case <-c.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if c.err == nil || !c.abandoned {
+			return c.jpg, c.err
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// The request that led gave up before its fill did: ask again under ours.
+	}
 }
 
 // rememberFailure records rawURL as failed until communityRetryAfter from now;

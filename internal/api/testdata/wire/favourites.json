@@ -1,0 +1,20 @@
+{
+  "route": "GET /api/v1/me/favourites (a book and a navigation folder)",
+  "shape": {
+    "favourites": [
+      {
+        "author": "string",
+        "cover_version": "string",
+        "created_at": "string",
+        "duration": "number",
+        "is_book": "boolean",
+        "library_id": "number",
+        "path": "string",
+        "series": "string",
+        "series_index": "number",
+        "series_index_end": "number",
+        "title": "string"
+      }
+    ]
+  }
+}

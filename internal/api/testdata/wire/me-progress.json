@@ -3,6 +3,7 @@
   "shape": {
     "progress": [
       {
+        "cover_version": "string",
         "device_id": "string",
         "device_name": "string",
         "duration": "number",

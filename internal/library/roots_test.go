@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,20 +75,20 @@ func TestRootAvailable(t *testing.T) {
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	scanner := NewScanner(cat, "", slog.Default())
 
-	if !scanner.RootAvailable(*lib, 0) {
+	if !scanner.rootStatus(*lib, 0).Available {
 		t.Fatal("a readable root reported unavailable")
 	}
 	empty := *lib
 	empty.Root = t.TempDir()
-	if !scanner.RootAvailable(empty, 0) {
+	if !scanner.rootStatus(empty, 0).Available {
 		t.Error("an empty root with nothing indexed is just a new library: available")
 	}
-	if scanner.RootAvailable(empty, 3) {
+	if scanner.rootStatus(empty, 3).Available {
 		t.Error("an empty root with books indexed looks like an unmounted share: unavailable")
 	}
 	missing := *lib
 	missing.Root = filepath.Join(t.TempDir(), "gone")
-	if scanner.RootAvailable(missing, 0) {
+	if scanner.rootStatus(missing, 0).Available {
 		t.Error("a missing root reported available")
 	}
 
@@ -99,13 +100,13 @@ func TestRootAvailable(t *testing.T) {
 	if !scanner.Progress(lib.ID).Unavailable {
 		t.Fatal("scan progress doesn't record the unavailable root")
 	}
-	if scanner.RootAvailable(*lib, 0) {
+	if scanner.rootStatus(*lib, 0).Available {
 		t.Error("the library reads as available right after its scan hit the guard")
 	}
 	if _, err := scanner.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	if scanner.Progress(lib.ID).Unavailable || !scanner.RootAvailable(*lib, 2) {
+	if scanner.Progress(lib.ID).Unavailable || !scanner.rootStatus(*lib, 2).Available {
 		t.Error("a successful rescan didn't clear the unavailable state")
 	}
 }
@@ -192,18 +193,30 @@ func TestRootsAvailableInParallel(t *testing.T) {
 }
 
 // The root probe also reads the space on the root's filesystem, so Health >
-// System shows it without another (unbounded) filesystem call.
+// System shows it without another (unbounded) filesystem call: one probe per
+// root a request, even when every answer has expired by the time it is read
+// (server#225: the space used to be a second, serial check per root).
 func TestRootDisk(t *testing.T) {
 	t.Parallel()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	scanner := NewScanner(cat, "", slog.Default())
-
-	d, ok := scanner.RootDisk(catalog.Library{ID: 1, Root: t.TempDir()})
-	if !ok || d.Total == 0 || d.Free > d.Total {
-		t.Fatalf("RootDisk = %+v, %v", d, ok)
+	scanner.roots.ttl = 0 // every answer is stale as soon as it is read
+	var probes atomic.Int32
+	scanner.roots.stat = func(root string) rootState {
+		probes.Add(1)
+		return statRoot(root)
 	}
-	if _, ok := scanner.RootDisk(catalog.Library{ID: 2, Root: filepath.Join(t.TempDir(), "gone")}); ok {
-		t.Fatal("a missing root has no disk to report")
+
+	libs := []catalog.Library{{ID: 1, Root: t.TempDir()}, {ID: 2, Root: filepath.Join(t.TempDir(), "gone")}}
+	got := scanner.RootStatuses(libs, nil)
+	if d := got[1].Disk; !got[1].Available || d == nil || d.Total == 0 || d.Free > d.Total {
+		t.Fatalf("readable root = %+v", got[1])
+	}
+	if got[2].Available || got[2].Disk != nil {
+		t.Fatalf("a missing root has no disk to report: %+v", got[2])
+	}
+	if n := probes.Load(); n != 2 {
+		t.Fatalf("one request over two roots made %d filesystem probes, want 2", n)
 	}
 }

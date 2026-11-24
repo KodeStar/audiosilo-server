@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 func testImage(t *testing.T, w, h int, asPNG bool) []byte {
@@ -274,5 +275,57 @@ func TestAdminCoversOversizedSidecarCached(t *testing.T) {
 		"\x00" + fmt.Sprintf("s%d-%d", fi.Size(), fi.ModTime().UnixNano())
 	if v, ok := e.api.thumbs.Get(key); !ok || v != nil {
 		t.Fatalf("oversized sidecar cache entry = %d bytes, %v; want a cached no-art entry", len(v), ok)
+	}
+}
+
+// A cover slow to read doesn't hold the batch (server#225): the answer goes
+// after coverBatchWait with the covers made and that one pending, and asking
+// for it again while its read is still going waits on that read rather than
+// starting a second one, then answers it.
+func TestAdminCoversSlowCoverPending(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	libID, _ := seedCovers(t, e)
+	e.api.coverBatchWait = testwait.Scaled(300 * time.Millisecond)
+	// The sidecar's thumbnail made before, so the batch's quick cover is quick.
+	if got := postCovers(t, e, adminTok, coversBody(libID, 160, "Sidecar")); got[0].Data == "" {
+		t.Fatal("no sidecar thumbnail")
+	}
+	srcs, err := e.cat.CoverSources(context.Background(), libID, []string{"Custom"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := thumbKey(libID, "Custom", 160, catalog.CustomArtVersion(srcs["Custom"].CustomAt))
+	// A read of the custom cover already going, that doesn't answer yet.
+	read, lead, _ := e.api.libraryThumbs.join(key, "", true)
+	if !lead {
+		t.Fatal("the held read isn't the first")
+	}
+	start := time.Now()
+	got := postCovers(t, e, adminTok, coversBody(libID, 160, "Sidecar", "Custom", "Bare"))
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the batch waited %v for its slow cover", took)
+	}
+	if got[0].Data == "" || got[0].Pending || got[1].Data != "" || !got[1].Pending || got[2].Pending {
+		t.Fatalf("covers = %+v, want the sidecar made, the custom cover pending, no art not pending", got)
+	}
+	waiters := func() int {
+		e.api.libraryThumbs.mu.Lock()
+		defer e.api.libraryThumbs.mu.Unlock()
+		return read.waiters
+	}
+	// Asked again while the read is still going: pending again, waiting on
+	// that read (its second waiter) rather than reading the cover itself.
+	if again := postCovers(t, e, adminTok, coversBody(libID, 160, "Custom")); again[0].Data != "" || !again[0].Pending {
+		t.Fatalf("asked again = %+v, want pending", again[0])
+	}
+	testwait.Eventually(t, "the second ask to wait on the read", 5*time.Second, func() bool { return waiters() == 2 })
+	// The read answers: the next ask has it.
+	read.jpg = testImage(t, 160, 80, false)
+	e.api.thumbs.Put(key, read.jpg)
+	e.api.libraryThumbs.finish(key, "", read, false)
+	if third := postCovers(t, e, adminTok, coversBody(libID, 160, "Custom")); third[0].Data != jpegDataURL(read.jpg) || third[0].Pending {
+		t.Fatalf("asked once the read answered = %+v, want its thumbnail", third[0])
 	}
 }

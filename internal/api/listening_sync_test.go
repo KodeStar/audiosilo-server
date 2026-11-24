@@ -349,14 +349,16 @@ func TestListeningSyncStay(t *testing.T) {
 
 // An old player's PUT answers the shape it always did (plus the omitempty
 // device_name) and is logged as a "put" event; the name is the token's, never
-// the body's, and an echoed other_place is accepted and ignored.
+// the body's, and an echoed other_place or cover_version (a GET /me/progress
+// row sent back; the strict decoder must not refuse it) is accepted and ignored.
 func TestPutProgressStillLegacy(t *testing.T) {
 	t.Parallel()
 	s := newSyncEnv(t)
 	tok, _ := s.auth.IssueToken(context.Background(), s.adminID, auth.KindSession, "Old iPhone", 0)
 	prog := "/api/v1/libraries/" + strconv.FormatInt(s.lib.ID, 10) + "/progress?path=" + url.QueryEscape(syncUnsouled)
 	resp, raw := s.do(t, "PUT", prog, tok, `{"position":12.5,"duration":120,"device_id":"old","updated_at":"2026-10-25T07:00:00Z",`+
-		`"device_name":"Forged","other_place":{"position":1,"device_id":"x","device_name":"y","updated_at":"z"}}`)
+		`"device_name":"Forged","other_place":{"position":1,"device_id":"x","device_name":"y","updated_at":"z"},`+
+		`"cover_version":"0123456789"}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("put: %d %s", resp.StatusCode, raw)
 	}
