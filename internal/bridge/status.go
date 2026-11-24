@@ -405,7 +405,8 @@ func checkText(name, v string, max int) error {
 	return nil
 }
 
-// isControl is a control character (C0 or DEL), which free text never keeps.
+// isControl is a control character (C0 or DEL), which a checked field refuses
+// (checkText; free text is cleaned instead, textclean).
 func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
 
 // ErrNotPaired is a call from a Bridge that is no longer the paired one: its

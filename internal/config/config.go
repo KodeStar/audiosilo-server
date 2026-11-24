@@ -676,10 +676,11 @@ func dropDefaults(n, def *yaml.Node) {
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		k, v := n.Content[i], n.Content[i+1]
 		if d := defaults[k.Value]; d != nil {
-			if sameYAML(v, d) {
-				continue
-			}
-			if dropDefaults(v, d); v.Kind == yaml.MappingNode && len(v.Content) == 0 {
+			if v.Kind == yaml.MappingNode && d.Kind == yaml.MappingNode {
+				if dropDefaults(v, d); len(v.Content) == 0 {
+					continue
+				}
+			} else if sameYAML(v, d) {
 				continue
 			}
 		}
