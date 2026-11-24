@@ -1028,8 +1028,8 @@ func (c *Catalog) stalledBooks(ctx context.Context, idle string) ([]*stalledBook
 		if err := rows.Scan(&id, &d.LibraryID, &d.Path, &d.Title, &d.ScanError, &coverArt, &pos); err != nil {
 			return nil, err
 		}
-		d.CoverVersion = CoverVersion(coverArt)
 		if len(out) == 0 || out[len(out)-1].bookID != id {
+			d.CoverVersion = CoverVersion(coverArt) // once a book, not once a listener
 			out = append(out, &stalledBook{bookID: id, drop: d})
 		}
 		last := out[len(out)-1]
