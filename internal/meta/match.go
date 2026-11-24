@@ -408,9 +408,9 @@ func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrato
 // it, further off the length holds the book for review. It stays even when that
 // narrator reads another recording of c that fits (server#325: swapping to it gained
 // no book on the LibraForge benchmark, and swapping within NarratedRuntimeOff too lost
-// one whose hint was right). A match run and a dialog using an identifier hint call it.
-// A refresh or repick keeps the book's own identifier, which names
-// the recording the book is. rec nil (the work holds only a dramatization the book
+// one whose hint was right). ProposedRecording calls it for an identifier hint only:
+// the book's own identifier (a refresh, a repick, an unknown_asin run) names the
+// recording the book is. rec nil (the work holds only a dramatization the book
 // isn't) stays nil. The identifier vouched for rec alone, so a plain book
 // (MatchCandidate.PlainBook) gives way to a dramatization only as when nothing named
 // one (DefaultRecording's rule).
@@ -758,14 +758,21 @@ func (s *Service) hitCandidate(q MatchQuery, h matchHit, detail *upstreamWorkDet
 	return c
 }
 
-// setDefaultRecording sets c's DefaultRecording for q (by length, marketplace and
-// narrators), or marks it DramatizationOnly when it has recordings but none fits.
-func setDefaultRecording(c *MatchCandidate, q MatchQuery) {
+// ProposedRecording is the recording of c the match dialog defaults to and a match
+// run proposes for q: DefaultRecording's, or FitRecording's when an identifier hint
+// found c. The book's own identifier keeps its recording.
+func ProposedRecording(c *MatchCandidate, q MatchQuery) *MatchRecording {
 	rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators)
 	if q.BookIdentifierHint && c.IdentifierHit() {
 		rec = FitRecording(c, rec, q.Duration, q.Region, q.Narrators)
 	}
-	if rec != nil {
+	return rec
+}
+
+// setDefaultRecording sets c's DefaultRecording for q (ProposedRecording), or marks
+// it DramatizationOnly when it has recordings but none fits.
+func setDefaultRecording(c *MatchCandidate, q MatchQuery) {
+	if rec := ProposedRecording(c, q); rec != nil {
 		c.DefaultRecordingID = rec.ID
 	} else {
 		c.DramatizationOnly = len(c.Recordings) > 0

@@ -449,10 +449,10 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 
 // matchBook matches one book of a library in language (LibraryLanguage, "" for none):
 // its item (nil = nothing worth recording), and the community service's failure, if
-// that's what the item records. The recording proposed is DefaultRecording's, or the
-// one the length agrees with when that is another edition (meta.FitRecording: the
-// identifier a match sends is a hint, an Audiobookshelf import's or a tag's, or for
-// an unknown_asin run the book's own ASIN, which the community didn't know).
+// that's what the item records. The recording proposed is the match dialog's default
+// (meta.ProposedRecording: a hint, an Audiobookshelf import's or a tag's, gives way to
+// the recording the length agrees with; the book's own ASIN, an unknown_asin run's,
+// keeps its recording).
 func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book, language string) (*catalog.MatchRunItem, error) {
 	item := &catalog.MatchRunItem{LibraryID: b.LibraryID, Path: b.RelPath, Proposal: catalog.MatchProposal{Values: map[string]string{}}}
 	switch o.Mode {
@@ -486,7 +486,7 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 		// hint, and one the community knows now is never applied over
 		// (asinKnownSince), so a second ask would be spent for nothing.
 		bare := q
-		bare.BookASIN, bare.BookISBN = "", ""
+		bare.BookASIN, bare.BookISBN, bare.BookIdentifierHint = "", "", false
 		again, err := r.matcher.Candidates(ctx, bare)
 		if err != nil && ctx.Err() == nil {
 			// Not the item's failure (the hint's work stands), so said here or
@@ -530,14 +530,14 @@ type judged struct {
 }
 
 // judge is matchBook's verdict on cands, the answer to q for a book of seconds
-// in region's marketplace. The recording proposed is DefaultRecording's, or the
-// one the length agrees with when that is another edition (meta.FitRecording).
+// in region's marketplace. The recording proposed is the match dialog's default
+// (meta.ProposedRecording).
 func judge(cands []meta.MatchCandidate, q meta.MatchQuery, seconds float64, region string) judged {
 	j := judged{proposal: catalog.MatchProposal{Values: map[string]string{}}}
 	noRecording, narrated := false, false
 	if len(cands) > 0 {
-		rec := meta.DefaultRecording(&cands[0], seconds, region, q.Narrators)
-		rec = meta.FitRecording(&cands[0], rec, seconds, region, q.Narrators)
+		q.Duration, q.Region = seconds, region
+		rec := meta.ProposedRecording(&cands[0], q)
 		j.proposal = Propose(&cands[0], rec)
 		noRecording = rec == nil && len(cands[0].Recordings) > 0
 		narrated = narratorReads(&cands[0], j.proposal, q.Narrators)

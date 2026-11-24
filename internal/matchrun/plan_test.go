@@ -1019,3 +1019,31 @@ func TestPreviewRecordsOffered(t *testing.T) {
 		t.Fatal("a changed ASIN must be available to accept even without an ISBN")
 	}
 }
+
+// TestJudgeRecordingFollowsHint: a run proposes the dialog's default recording. An
+// identifier hint naming an off-length recording gives way to the one that fits; the
+// book's own identifier (an unknown_asin run's) keeps the recording it names.
+func TestJudgeRecordingFollowsHint(t *testing.T) {
+	t.Parallel()
+	c := martian
+	c.RecordingID = "abridged"
+	c.Reasons = &meta.MatchReasons{Identifier: "asin"}
+	c.Recordings = []meta.MatchRecording{{ID: "abridged", RuntimeMin: 300}, {ID: "unabridged", RuntimeMin: 634}}
+	seconds := 634.0 * 60
+	for _, tc := range []struct {
+		book catalog.Book
+		want string
+	}{
+		{catalog.Book{TagASIN: "B0TAG00001", Duration: seconds}, "unabridged"},
+		{catalog.Book{ASIN: "B0OWN00001", Duration: seconds}, "abridged"},
+	} {
+		q := QueryFor(&tc.book, "us", "")
+		cands := []meta.MatchCandidate{c}
+		if got := judge(cands, q, seconds, "us").proposal.RecordingID; got != tc.want {
+			t.Errorf("hint %v: proposed %q, want %q", q.BookIdentifierHint, got, tc.want)
+		}
+		if got := meta.ProposedRecording(&cands[0], QueryFor(&tc.book, "us", "")); got == nil || got.ID != tc.want {
+			t.Errorf("hint %v: dialog default %v, want %q", q.BookIdentifierHint, got, tc.want)
+		}
+	}
+}
