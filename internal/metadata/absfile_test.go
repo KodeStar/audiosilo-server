@@ -109,6 +109,8 @@ func TestSplitABSSeries(t *testing.T) {
 		{"Arc #1 - 3", ABSSeries{"Arc", "1 - 3"}},
 		{"Arc #1 – 3", ABSSeries{"Arc", "1 – 3"}},
 		{"Arc #1.5 - 2", ABSSeries{"Arc", "1.5 - 2"}},
+		{"Arc #1 -3", ABSSeries{"Arc", "1 -3"}},
+		{"Arc #1- 3", ABSSeries{"Arc", "1- 3"}},
 		{"Saga #2b", ABSSeries{"Saga", "2b"}},
 		// A " #" with words after it is the name's own: no position.
 		{"The #1 Ladies Detective Agency", ABSSeries{"The #1 Ladies Detective Agency", ""}},

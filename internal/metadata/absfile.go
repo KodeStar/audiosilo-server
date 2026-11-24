@@ -300,9 +300,10 @@ func SplitABSSeries(s string) ABSSeries {
 	return ABSSeries{Name: s}
 }
 
-// absSpacedRange is a numeric range written with spaces around its dash ("1 -
-// 3", "1 – 3"), the one sequence absSequence takes with whitespace in it.
-var absSpacedRange = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?\s+[-–]\s+[0-9]+(?:\.[0-9]+)?$`)
+// absSpacedRange is a numeric range written with spaces beside its dash ("1 -
+// 3", "1 – 3", "1 -3": ParseSeriesRange takes them on either side), the one
+// sequence absSequence takes with whitespace in it.
+var absSpacedRange = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?\s*[-–]\s*[0-9]+(?:\.[0-9]+)?$`)
 
 // absSequence reports whether the text after a seriesName's last " #" reads as
 // its sequence: a single word ("3", "1.5", "1-3", "2b") or a spaced numeric
