@@ -4,6 +4,7 @@ import type { BridgeJob, BridgeJobState, BridgeMapping, BridgeStatus } from '@/a
 import type { StatusTone } from '@/components/status-text';
 import type { Badge } from '@/components/ui/badge';
 import { isLoopbackUrl } from '@/features/setup/setup-model';
+import { formatNumber } from '@/lib/format';
 import { absoluteBaseName } from '@/lib/paths';
 import type { Phrase } from '@/lib/phrase';
 
@@ -347,14 +348,23 @@ export function progressOf(progress: unknown): {
 
 /**
  * A progress's sentence as the console shows it: the coded sentence in the
- * admin's language, else the Bridge's own text (an older Bridge's, or a code
- * this console doesn't know).
+ * admin's language (its numbers with the language's separators, as the count
+ * beside it), else the Bridge's own text (an older Bridge's, or a code this
+ * console doesn't know).
  */
 export function progressText(
   t: Translate,
   p: { text?: string; said?: Phrase },
+  lang: string,
 ): string | undefined {
-  return p.said ? t(p.said.key, p.said.values) : p.text;
+  if (!p.said) return p.text;
+  const values = Object.fromEntries(
+    Object.entries(p.said.values ?? {}).map(([k, v]) => [
+      k,
+      typeof v === 'number' ? formatNumber(v, lang) : v,
+    ]),
+  );
+  return t(p.said.key, values);
 }
 
 /**

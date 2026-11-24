@@ -311,7 +311,7 @@ function RecordingRow({
           })
         : '';
       const label =
-        progressText(t, progress) ?? t(`bridge.state.${state ?? r.job?.state ?? 'queued'}`);
+        progressText(t, progress, lang) ?? t(`bridge.state.${state ?? r.job?.state ?? 'queued'}`);
       // With several libraries, which one it is going into (the open job is
       // the project's in any library, so not always the one picked here).
       const into =

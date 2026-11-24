@@ -164,7 +164,7 @@ function JobRow({
   // A generate, describe or detect job words its progress and result its own way (GenerateStatus).
   const generate = isBookKind(job.kind);
   const progress: ReturnType<typeof listedProgress> = generate ? {} : listedProgress(job);
-  const step = progressText(t, progress);
+  const step = progressText(t, progress, lang);
   const summary = generate ? null : resultSummary(job.result);
   const sync = syncSummary(job);
   const asin = backupAsin(job);

@@ -194,7 +194,7 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
       </p>
       {p.message && p.message !== p.stage && !aligning ? (
         <p className="text-[12px] text-subtle-foreground [overflow-wrap:anywhere]">
-          {progressText(t, { text: p.message, said: p.said })}
+          {progressText(t, { text: p.message, said: p.said }, lang)}
         </p>
       ) : null}
       {p.total ? <ProgressBar fraction={(p.done ?? 0) / p.total} /> : null}

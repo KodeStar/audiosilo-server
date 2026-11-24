@@ -294,9 +294,22 @@ describe('progress codes (server#224)', () => {
       done: 1,
       total: 3,
     });
-    expect(progressText(t, p)).toBe(
-      'bridge.progress.downloading_section {"section":2,"sections":3}',
+    expect(progressText(t, p, 'en')).toBe(
+      'bridge.progress.downloading_section {"section":"2","sections":"3"}',
     );
+    // Its numbers read with the language's separators, as the count beside it.
+    expect(
+      progressText(
+        t,
+        {
+          said: {
+            key: 'bridge.progress.downloading_section',
+            values: { section: 1200, sections: 1500 },
+          },
+        },
+        'de',
+      ),
+    ).toBe('bridge.progress.downloading_section {"section":"1.200","sections":"1.500"}');
     // Only the params the code fills in are passed on.
     expect(
       progressOf({ message: 'Finding', message_code: 'finding_library', message_params: { x: 1 } })
@@ -306,12 +319,12 @@ describe('progress codes (server#224)', () => {
 
   it("shows the Bridge's text for an older Bridge, an unknown code or missing params", () => {
     // An older Bridge sends no code.
-    expect(progressText(t, progressOf({ step: 'stat', message: 'Comparing the files' }))).toBe(
-      'Comparing the files',
-    );
+    expect(
+      progressText(t, progressOf({ step: 'stat', message: 'Comparing the files' }), 'en'),
+    ).toBe('Comparing the files');
     // A newer Bridge's code this console doesn't know.
     expect(
-      progressText(t, progressOf({ message: 'Reticulating', message_code: 'reticulating' })),
+      progressText(t, progressOf({ message: 'Reticulating', message_code: 'reticulating' }), 'en'),
     ).toBe('Reticulating');
     // A code missing a value it fills in, or with one of the wrong type.
     for (const message_params of [undefined, { section: 2 }, { section: 2, sections: {} }]) {
@@ -329,7 +342,7 @@ describe('progress codes (server#224)', () => {
     ).toBeUndefined();
     // Not an own key of the code list.
     expect(progressOf({ message: 'x', message_code: 'toString' }).said).toBeUndefined();
-    expect(progressText(t, {})).toBeUndefined();
+    expect(progressText(t, {}, 'en')).toBeUndefined();
   });
 
   it('has an English sentence for every code, filling in exactly its params', () => {
