@@ -279,7 +279,7 @@ function FieldRow({
                 ? t(`book.revert.${revertSource}Hint`, {
                     value: quote(shownValue(t, field, revertTo)),
                   })
-                : t('book.revert.noTag')
+                : t('book.revert.emptyHint')
             }
             aria-label={t('book.revert.aria', { field: label })}
             className="inline-flex items-center gap-1 rounded-[6px] px-1.5 py-0.5 text-[11.5px] font-semibold text-muted-foreground hover:bg-accent hover:text-foreground"
