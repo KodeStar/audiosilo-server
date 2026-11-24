@@ -2279,7 +2279,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (`metadata.SplitABSSeries`, the
   one ABS series parser, the listening import's `seriesName` too: cut at the last " #" only when
   what follows reads as a sequence, one word or a spaced numeric range, either with one bracketed note
-  after it ("1 (Omnibus)", kept whole as the position text), else all of it is the name,
+  after it ("1 (Omnibus)", kept whole as the position text; a " #" inside that note is the note's), else all of it is the name,
   "The #1 Ladies Detective Agency"; the first is the main series
   with its position, the rest `more_series`; a series without a position keeps the tag's only while
   it is the same series, by `seriesKey`), `publishedDate` else `publishedYear` as `published`, the

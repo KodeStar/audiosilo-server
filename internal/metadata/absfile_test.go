@@ -128,6 +128,9 @@ func TestSplitABSSeries(t *testing.T) {
 		{"Discworld #1 (Omnibus) extra", ABSSeries{"Discworld #1 (Omnibus) extra", ""}},
 		{"Discworld #1 (Omni (bus))", ABSSeries{"Discworld #1 (Omni (bus))", ""}},
 		{"Discworld #1 [Omnibus)", ABSSeries{"Discworld #1 [Omnibus)", ""}},
+		// A " #" inside the note is the note's, never the sequence's mark.
+		{"Discworld #1 (Rincewind #1)", ABSSeries{"Discworld", "1 (Rincewind #1)"}},
+		{"Collected (Vol #3)", ABSSeries{"Collected (Vol #3)", ""}},
 		{"", ABSSeries{}},
 	} {
 		if got := SplitABSSeries(tc.in); got != tc.want {

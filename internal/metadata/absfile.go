@@ -289,11 +289,14 @@ func absNames(list json.RawMessage) []string {
 // when that reads as one (absSequence: "2.5", "1-3", "2b", "1 - 3", "1
 // (Omnibus)"). Otherwise the " #" is the name's own and all of it is the name:
 // "The #1 Ladies Detective Agency" has no position, "The #1 Ladies Detective
-// Agency #3" is that series' 3. The one ABS series parser: a metadata.json's
-// (absSeries) and the listening import's seriesName.
+// Agency #3" is that series' 3. A " #" inside a closing note is the note's:
+// "Discworld #1 (Rincewind #1)" is Discworld's "1 (Rincewind #1)". The one ABS
+// series parser: a metadata.json's (absSeries) and the listening import's
+// seriesName.
 func SplitABSSeries(s string) ABSSeries {
 	s = strings.TrimSpace(s)
-	if i := strings.LastIndex(s, " #"); i > 0 {
+	body := strings.TrimSuffix(s, absSequenceNote.FindString(s))
+	if i := strings.LastIndex(body, " #"); i > 0 {
 		if seq := strings.TrimSpace(s[i+2:]); absSequence(seq) {
 			return ABSSeries{Name: strings.TrimSpace(s[:i]), Position: seq}
 		}
