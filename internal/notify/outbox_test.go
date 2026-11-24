@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ func serviceRun(t *testing.T, cat *catalog.Catalog, delays ...time.Duration) (s 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	s = newTestService(cat)
+	t.Cleanup(s.Close) // the events still queued are recorded before the database closes
 	if len(delays) > 0 {
 		s.delays = delays
 	}
@@ -33,8 +35,13 @@ func serviceRun(t *testing.T, cat *catalog.Catalog, delays ...time.Duration) (s 
 }
 
 // stoppedService records events but never sends: the server stopped between
-// the record and the delivery.
-func stoppedService(cat *catalog.Catalog) *Service { return newTestService(cat) }
+// the record and the delivery. It is closed, so it records each one on the
+// caller's goroutine.
+func stoppedService(cat *catalog.Catalog) *Service {
+	s := newTestService(cat)
+	s.Close()
+	return s
+}
 
 // waitOwedNone waits until the outbox owes nothing: every delivery queued has
 // ended (delivered, failed or skipped), not just reached its destination.
@@ -227,7 +234,9 @@ func TestNoticeQueuedTwiceAtStartGoesOnce(t *testing.T) {
 	addTarget(t, cat, TargetWebhook, held.URL, "", KindScanFailed)
 
 	s := newTestService(cat)
+	t.Cleanup(s.Close)
 	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
+	s.Flush() // recorded (and queued by its own Deliver) before the start's read
 	runCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	s.Run(runCtx)
@@ -294,6 +303,7 @@ func scanFailed(t *testing.T, s *Service, cat *catalog.Catalog, name string) flo
 	t.Helper()
 	ctx := context.Background()
 	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: name}, Status: catalog.RunFailed})
+	s.Flush()
 	events, _, err := cat.ListServerEvents(ctx, 0, 1, KindScanFailed)
 	if err != nil || len(events) != 1 {
 		t.Fatalf("the newest event = %+v, %v", events, err)
@@ -371,5 +381,113 @@ func TestFreshNoticeWaitsForAnOlderOwedOne(t *testing.T) {
 	waitOwedNone(t, cat)
 	if n := settle(t, s, dest); n != 2 {
 		t.Fatalf("sent %d times, want 2", n)
+	}
+}
+
+// server#224: Emit returns while the database's writer is busy (the event is
+// recorded once it is free, never dropped), events are recorded in the order
+// they were emitted, and Close records what is still queued before it returns.
+func TestEmitDoesNotWaitForTheWriter(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	s := newTestService(cat)
+
+	held, release := make(chan struct{}), make(chan struct{})
+	writer := make(chan error, 1)
+	go func() {
+		writer <- db.WithTx(ctx, "hold", func(*sql.Tx) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	emitted := make(chan struct{})
+	go func() {
+		for _, name := range []string{"First", "Second", "Third"} {
+			s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: name}, Status: catalog.RunFailed})
+		}
+		close(emitted)
+	}()
+	select {
+	case <-emitted:
+	case <-time.After(testwait.Scaled(5 * time.Second)):
+		close(release)
+		t.Fatal("Emit waited for the database's writer")
+	}
+	close(release)
+	if err := <-writer; err != nil {
+		t.Fatal(err)
+	}
+	s.Close() // records what is queued, then returns
+	events, _, err := cat.ListServerEvents(ctx, 0, 10, KindScanFailed)
+	if err != nil || len(events) != 3 {
+		t.Fatalf("events after Close = %+v, %v; want all three", events, err)
+	}
+	// Newest first: recorded in the order emitted.
+	for i, want := range []string{"Third", "Second", "First"} {
+		if got := events[i].Data["library"]; got != want {
+			t.Fatalf("event %d is %v's, want %s's (recorded out of order)", i, got, want)
+		}
+	}
+	// Closed: an event emitted now is recorded before Emit returns.
+	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Late"}, Status: catalog.RunFailed})
+	if events, _, _ := cat.ListServerEvents(ctx, 0, 10, KindScanFailed); len(events) != 4 {
+		t.Fatalf("an event emitted after Close isn't recorded at once: %d events", len(events))
+	}
+}
+
+// An event emitted while Close is still recording the queue is recorded after
+// what was queued, not beside it: the order emitted holds through the stop,
+// and a Flush then still means every earlier event is in the feed.
+func TestEmitDuringCloseKeepsTheOrder(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	s := newTestService(cat)
+
+	held, gate := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(release) // before the database closes, on a test that failed holding it
+	writer := make(chan error, 1)
+	go func() {
+		writer <- db.WithTx(ctx, "hold", func(*sql.Tx) error {
+			close(held)
+			<-gate
+			return nil
+		})
+	}()
+	<-held
+	for _, name := range []string{"First", "Second"} {
+		s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: name}, Status: catalog.RunFailed})
+	}
+	closed := make(chan struct{})
+	go func() { s.Close(); close(closed) }()
+	testwait.Eventually(t, "Close to begin", 5*time.Second, func() bool {
+		s.emitMu.RLock()
+		defer s.emitMu.RUnlock()
+		return s.closed
+	})
+	late := make(chan struct{})
+	go func() {
+		s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Late"}, Status: catalog.RunFailed})
+		s.Flush()
+		close(late)
+	}()
+	release()
+	if err := <-writer; err != nil {
+		t.Fatal(err)
+	}
+	<-closed
+	<-late
+	events, _, err := cat.ListServerEvents(ctx, 0, 10, KindScanFailed)
+	if err != nil || len(events) != 3 {
+		t.Fatalf("events = %+v, %v; want three", events, err)
+	}
+	for i, want := range []string{"Late", "Second", "First"} { // newest first
+		if got := events[i].Data["library"]; got != want {
+			t.Fatalf("event %d is %v's, want %s's (recorded out of order)", i, got, want)
+		}
 	}
 }

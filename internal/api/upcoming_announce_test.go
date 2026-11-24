@@ -49,6 +49,7 @@ func (m announceMeta) WatchFeed(context.Context, []string, int) ([]meta.FeedItem
 // serverEvents is the feed's events of kind so far, oldest first.
 func serverEvents(t *testing.T, e *testEnv, kind string) []catalog.ServerEvent {
 	t.Helper()
+	e.notify.Flush() // events are recorded in the background
 	events, _, err := e.cat.ListServerEvents(context.Background(), 0, 50, kind)
 	if err != nil {
 		t.Fatal(err)

@@ -121,6 +121,7 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	// folder goes.
 	t.Cleanup(a.WaitMediaCaches)
 	ntf := notify.New(cat, "test", a.NotifyIdentity, slog.Default())
+	t.Cleanup(ntf.Close) // the events still queued are recorded before the database closes
 	a.SetRuntime(Runtime{Backups: backups, Notify: ntf})
 	a.SetBridge(bridge.New(db, time.Now))
 	if err := a.SetModules(builtin.Modules()); err != nil { // as the launcher does

@@ -315,13 +315,17 @@ func (c *Catalog) SaveMetaSeries(ctx context.Context, r MetaSeriesRecord) error 
 }
 
 // MarkMetaSeriesGone records a 404 for id (kept from the first one: gone_at
-// doesn't move), stored without members when it was never fetched.
-func (c *Catalog) MarkMetaSeriesGone(ctx context.Context, id, at string) error {
-	_, err := c.db.ExecUserState(ctx, `INSERT INTO meta_series(series_id, fetched_at, state, gone_at)
-		VALUES(?, ?, 'gone', ?)
-		ON CONFLICT(series_id) DO UPDATE SET fetched_at = excluded.fetched_at, state = 'gone',
-		  gone_at = COALESCE(meta_series.gone_at, excluded.gone_at)`, id, at, at)
-	return err
+// doesn't move), stored without members when it was never fetched. It returns
+// the gone_at kept.
+func (c *Catalog) MarkMetaSeriesGone(ctx context.Context, id, at string) (goneAt string, err error) {
+	err = c.db.WithUserStateTx(ctx, "MarkMetaSeriesGone", func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `INSERT INTO meta_series(series_id, fetched_at, state, gone_at)
+			VALUES(?, ?, 'gone', ?)
+			ON CONFLICT(series_id) DO UPDATE SET fetched_at = excluded.fetched_at, state = 'gone',
+			  gone_at = COALESCE(meta_series.gone_at, excluded.gone_at)
+			RETURNING gone_at`, id, at, at).Scan(&goneAt)
+	})
+	return goneAt, err
 }
 
 // DropMetaSeries forgets community series, the local series resolved to them
@@ -366,6 +370,32 @@ type UpcomingItem struct {
 	Authors     []MetaSeriesPerson
 	CoverURL    string
 	FirstSeenAt string
+}
+
+// UpcomingItemsAll returns every local series' items as the last run stored
+// them (FirstSeenAt left out). An item whose authors don't decode has no Kind,
+// so it never matches a fresh classification and is written again.
+func (c *Catalog) UpcomingItemsAll(ctx context.Context) ([]UpcomingItem, error) {
+	rows, err := c.db.QueryContext(ctx, `SELECT library_id, series_key, work_id, series_id, kind,
+		release_date, position, title, authors, cover_url FROM upcoming_items`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UpcomingItem
+	for rows.Next() {
+		var it UpcomingItem
+		var authors string
+		if err := rows.Scan(&it.LibraryID, &it.SeriesKey, &it.WorkID, &it.SeriesID, &it.Kind,
+			&it.ReleaseDate, &it.Position, &it.Title, &authors, &it.CoverURL); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal([]byte(authors), &it.Authors) != nil {
+			it.Kind = ""
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
 }
 
 // ReplaceUpcomingItems makes items a local series' items: a work it had keeps

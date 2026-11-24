@@ -180,7 +180,7 @@ func (a *API) handleSystem(w http.ResponseWriter, r *http.Request) {
 		wg              sync.WaitGroup
 		ffmpeg, ffprobe Tool
 		metaHealth      *meta.Health
-		avail           map[int64]bool
+		status          map[int64]library.RootStatus
 	)
 	wg.Add(4)
 	go func() { defer wg.Done(); ffmpeg = a.tool("ffmpeg", a.ffmpeg) }()
@@ -194,19 +194,14 @@ func (a *API) handleSystem(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer wg.Done()
-		avail = a.scanner.RootsAvailable(libs, counts)
+		status = a.scanner.RootStatuses(libs, counts)
 	}()
 	wg.Wait()
 
 	roots := make([]LibraryStatus, 0, len(libs))
 	for _, l := range libs {
-		ls := LibraryStatus{ID: l.ID, Name: l.Name, Root: l.Root, Available: avail[l.ID]}
-		if ls.Available {
-			if d, ok := a.scanner.RootDisk(l); ok {
-				ls.Disk = &d
-			}
-		}
-		roots = append(roots, ls)
+		st := status[l.ID]
+		roots = append(roots, LibraryStatus{ID: l.ID, Name: l.Name, Root: l.Root, Available: st.Available, Disk: st.Disk})
 	}
 
 	tlsStatus := TLSStatus{Mode: string(a.config().TLS.Mode), Hosts: append([]string{}, a.config().TLS.Hosts...),

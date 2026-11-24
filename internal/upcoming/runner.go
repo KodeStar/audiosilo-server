@@ -597,12 +597,23 @@ func (r *Runner) run(ctx context.Context, full bool, now time.Time) error {
 		clear(r.pending) // their series are looked at (a failed read is the run's, as for changed)
 		r.savePending(ctx)
 	}
-	n, err := r.fetchSeries(ctx, full, now)
+	// The resolved series and the community series, read (and their members
+	// decoded) once for the rest of the run: fetchSeries keeps stored as it
+	// writes it (server#279).
+	rows, err := r.cat.UpcomingSeriesAll(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the series: %w", err)
+	}
+	stored, err := r.cat.MetaSeriesAll(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the community series: %w", err)
+	}
+	n, err := r.fetchSeries(ctx, rows, stored, full, now)
 	if err != nil {
 		return err
 	}
 	failed += n
-	if err := r.classify(ctx, locals, works, now); err != nil {
+	if err := r.classify(ctx, locals, works, rows, stored, now); err != nil {
 		return err
 	}
 	if err := r.announce(ctx, now); err != nil {
@@ -773,6 +784,7 @@ func (r *Runner) resolveSeries(ctx context.Context, locals []*localSeries, works
 		return 0, fmt.Errorf("reading the series: %w", err)
 	}
 	have := byLocal(rows)
+	memo := map[string]workSeries{} // a work's series, read once a run
 	live := map[seriesKey]bool{}
 	failed := 0
 	for _, l := range locals {
@@ -810,7 +822,7 @@ func (r *Runner) resolveSeries(ctx context.Context, locals []*localSeries, works
 			}
 			continue
 		}
-		found, ok := r.seriesOf(ctx, l.name, ids)
+		found, ok := r.seriesOf(ctx, l.name, ids, memo)
 		if !ok {
 			failed++
 			continue
@@ -831,25 +843,36 @@ func (r *Runner) resolveSeries(ctx context.Context, locals []*localSeries, works
 	return failed, nil
 }
 
+// workSeries is a work's series as meta.WorkSeries answered (refs or err).
+type workSeries struct {
+	refs []meta.SeriesRef
+	err  error
+}
+
 // seriesOf is the community series a local series (by its spelling) is, read
 // from the series of its works: those named like it, primaries first (a variant
 // reading order only when no primary is); else those named like it give or take
 // an article or a trailing "Series". ok is false when a work's read failed and
 // none matched: what that work would have said is unknown, so the series keeps
-// what it had until a later run.
-func (r *Runner) seriesOf(ctx context.Context, name string, workIDs []string) (ids []string, ok bool) {
+// what it had until a later run. A work's series are read once a run (memo):
+// a work several local series hold (a copy in each library) is asked once.
+func (r *Runner) seriesOf(ctx context.Context, name string, workIDs []string, memo map[string]workSeries) (ids []string, ok bool) {
 	var refs []meta.SeriesRef
 	failed := false
 	for _, w := range workIDs {
-		got, err := r.meta.WorkSeries(ctx, w)
+		got, seen := memo[w]
+		if !seen {
+			got.refs, got.err = r.meta.WorkSeries(ctx, w)
+			memo[w] = got
+		}
 		switch {
-		case err == nil:
-			refs = append(refs, got...)
-		case errors.Is(err, meta.ErrNotFound):
+		case got.err == nil:
+			refs = append(refs, got.refs...)
+		case errors.Is(got.err, meta.ErrNotFound):
 		default:
 			failed = true
 			if ctx.Err() == nil {
-				r.log.Debug("upcoming: reading a work's series failed", "work", w, "err", err)
+				r.log.Debug("upcoming: reading a work's series failed", "work", w, "err", got.err)
 			}
 		}
 	}
@@ -888,17 +911,11 @@ func appendNew(s []string, v string) []string {
 
 // fetchSeries reads the community series that are due, by the watch feed's
 // news (a full run) or because they were never read (any run), and drops the
-// series no local series names any more and those gone past their grace. It
-// returns how many reads failed.
-func (r *Runner) fetchSeries(ctx context.Context, full bool, now time.Time) (int, error) {
-	rows, err := r.cat.UpcomingSeriesAll(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("reading the series: %w", err)
-	}
-	stored, err := r.cat.MetaSeriesAll(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("reading the community series: %w", err)
-	}
+// series no local series names any more and those gone past their grace. rows
+// are the resolved series and stored the community series as read before;
+// stored is kept as written (a read saved, a series dropped), so the run reads
+// neither again. It returns how many reads failed.
+func (r *Runner) fetchSeries(ctx context.Context, rows []catalog.UpcomingSeries, stored map[string]catalog.MetaSeriesRecord, full bool, now time.Time) (int, error) {
 	ids := distinct(rows, func(row catalog.UpcomingSeries) string { return row.SeriesID })
 	slices.Sort(ids)
 	var news map[string]bool
@@ -927,11 +944,18 @@ func (r *Runner) fetchSeries(ctx context.Context, full bool, now time.Time) (int
 	pool.Each(ctx, fetches, due, func() bool { return ctx.Err() == nil }, func(id *string) {
 		rec, err := r.meta.Series(ctx, *id)
 		var werr error
+		var updated catalog.MetaSeriesRecord // what the row is once written
 		switch {
 		case err == nil:
-			werr = r.cat.SaveMetaSeries(ctx, toRecord(*id, rec, now))
+			updated = toRecord(*id, rec, now)
+			werr = r.cat.SaveMetaSeries(ctx, updated)
 		case errors.Is(err, meta.ErrNotFound):
-			werr = r.cat.MarkMetaSeriesGone(ctx, *id, stamp(now))
+			// The row as MarkMetaSeriesGone leaves it: its members kept.
+			mu.Lock()
+			updated = stored[*id]
+			mu.Unlock()
+			updated.ID, updated.FetchedAt, updated.Gone = *id, stamp(now), true
+			updated.GoneAt, werr = r.cat.MarkMetaSeriesGone(ctx, *id, updated.FetchedAt)
 		default:
 			if ctx.Err() == nil {
 				r.log.Debug("upcoming: reading a series failed", "series", *id, "err", err)
@@ -941,25 +965,24 @@ func (r *Runner) fetchSeries(ctx context.Context, full bool, now time.Time) (int
 			mu.Unlock()
 			return
 		}
+		mu.Lock()
 		if werr != nil {
-			mu.Lock()
 			saveErr = cmp.Or(saveErr, werr)
-			mu.Unlock()
+		} else {
+			stored[*id] = updated
 		}
+		mu.Unlock()
 	})
 	if err := cmp.Or(ctx.Err(), saveErr); err != nil {
 		return failed, err
 	}
 	// Forget a series no local series names, and one gone past its grace.
-	stored, err = r.cat.MetaSeriesAll(ctx)
-	if err != nil {
-		return failed, err
-	}
 	var drop []string
 	for id, rec := range stored {
 		goneAt, _ := parseStamp(rec.GoneAt)
 		if _, named := slices.BinarySearch(ids, id); !named || (rec.Gone && now.Sub(goneAt) >= goneGrace) {
 			drop = append(drop, id)
+			delete(stored, id)
 		}
 	}
 	slices.Sort(drop)
@@ -1070,37 +1093,45 @@ func datePrefix(v string) string {
 	return t.Format(time.DateOnly)
 }
 
-// classify works out every local series' items from what is stored. A
-// released item is news only when a community series the local series was
-// classified against before lists its work; any other is the baseline of a
-// series read for the first time (out before the server watched it): marked,
-// never announced. The series read are marked classified.
-func (r *Runner) classify(ctx context.Context, locals []*localSeries, works map[catalog.Ref]string, now time.Time) error {
-	rows, err := r.cat.UpcomingSeriesAll(ctx)
+// classify works out every local series' items from what is stored (rows and
+// stored as fetchSeries left them). A released item is news only when a
+// community series the local series was classified against before lists its
+// work; any other is the baseline of a series read for the first time (out
+// before the server watched it): marked, never announced. The series read are
+// marked classified. A local series whose items come out as stored, every
+// series of it classified before, is not written again (server#279): its
+// baseline is then empty (each item is a member of a series it was classified
+// against), so the write would change nothing.
+func (r *Runner) classify(ctx context.Context, locals []*localSeries, works map[catalog.Ref]string,
+	rows []catalog.UpcomingSeries, stored map[string]catalog.MetaSeriesRecord, now time.Time) error {
+	all, err := r.cat.UpcomingItemsAll(ctx)
 	if err != nil {
 		return err
 	}
-	stored, err := r.cat.MetaSeriesAll(ctx)
-	if err != nil {
-		return err
+	previous := map[seriesKey][]catalog.UpcomingItem{}
+	for _, it := range all {
+		k := seriesKey{it.LibraryID, it.SeriesKey}
+		previous[k] = append(previous[k], it)
 	}
 	by := byLocal(rows)
 	window := r.opt.Window()
 	for _, l := range locals {
+		k := seriesKey{l.libraryID, l.key}
 		var series []Series
-		var read []string
+		var unclassified []string
 		watched := map[string]bool{}
-		for _, row := range by[seriesKey{l.libraryID, l.key}] {
+		for _, row := range by[k] {
 			rec, ok := stored[row.SeriesID]
 			if !ok || len(rec.Members) == 0 {
 				continue
 			}
 			series = append(series, Series{ID: row.SeriesID, Members: rec.Members})
-			read = append(read, row.SeriesID)
-			if row.Classified {
-				for _, m := range rec.Members {
-					watched[m.WorkID] = true
-				}
+			if !row.Classified {
+				unclassified = append(unclassified, row.SeriesID)
+				continue
+			}
+			for _, m := range rec.Members {
+				watched[m.WorkID] = true
 			}
 		}
 		if len(series) == 0 {
@@ -1111,17 +1142,43 @@ func (r *Runner) classify(ctx context.Context, locals []*localSeries, works map[
 			owned[i] = OwnedBook{WorkID: works[b.Ref], Matched: b.MatchWorkID != "", Position: b.Position, PositionEnd: b.PositionEnd}
 		}
 		items := Classify(series, owned, now, window)
+		if len(unclassified) == 0 && sameItems(items, previous[k]) {
+			continue
+		}
 		baseline := map[string]bool{}
 		for _, it := range items {
 			if !watched[it.WorkID] {
 				baseline[it.WorkID] = true
 			}
 		}
-		if err := r.cat.ReplaceUpcomingItems(ctx, l.libraryID, l.key, items, baseline, read, stamp(now)); err != nil {
+		// Only the series not yet classified need marking (classified_at is
+		// kept from the first time).
+		if err := r.cat.ReplaceUpcomingItems(ctx, l.libraryID, l.key, items, baseline, unclassified, stamp(now)); err != nil {
 			return fmt.Errorf("saving a series' items: %w", err)
 		}
 	}
 	return nil
+}
+
+// sameItems reports whether items, a fresh classification, are the stored
+// ones (prev) in every field ReplaceUpcomingItems writes.
+func sameItems(items, prev []catalog.UpcomingItem) bool {
+	if len(items) != len(prev) {
+		return false
+	}
+	byWork := make(map[string]catalog.UpcomingItem, len(prev))
+	for _, it := range prev {
+		byWork[it.WorkID] = it
+	}
+	for _, it := range items {
+		old, ok := byWork[it.WorkID]
+		if !ok || it.SeriesID != old.SeriesID || it.Kind != old.Kind || it.ReleaseDate != old.ReleaseDate ||
+			it.Position != old.Position || it.Title != old.Title || it.CoverURL != old.CoverURL ||
+			!slices.Equal(it.Authors, old.Authors) {
+			return false
+		}
+	}
+	return true
 }
 
 // announce tells the admin about the releases no earlier run has: one call for

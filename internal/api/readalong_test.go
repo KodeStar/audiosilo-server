@@ -9,17 +9,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -443,6 +446,11 @@ func digestCurrent(t *testing.T, cat *catalog.Catalog, libID int64, rel string) 
 func TestReadalongOnAHeldShareAnswers(t *testing.T) {
 	e := newReadalongEnv(t)
 	e.api.fileWait = 200 * time.Millisecond
+	first, _ := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, "")
+	etag := first.Header.Get("ETag")
+	if first.StatusCode != http.StatusOK || etag == "" {
+		t.Fatalf("GET readalong = %d ETag %q", first.StatusCode, etag)
+	}
 	release := metadata.HoldOpensForTests(filepath.Join(e.root, filepath.FromSlash(ebookBook)))
 	t.Cleanup(release)
 	start := time.Now()
@@ -453,11 +461,51 @@ func TestReadalongOnAHeldShareAnswers(t *testing.T) {
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("GET readalong took %v, want it answered once the read is given up on", took)
 	}
+	// A revalidation is answered from the look at the map given up on
+	// (readalongUnchanged), not by a second wait for the full answer's read.
+	start = time.Now()
+	resp, body = e.doHeaders(t, "GET", e.at("readalong", ebookBook), e.annTok, "", map[string]string{"If-None-Match": etag})
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) {
+		t.Errorf("revalidating readalong on a held share = %d %s, want 503 %s", resp.StatusCode, body, codeShareNotAnswering)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("revalidating readalong took %v, want it answered once the look is given up on", took)
+	}
 	release()
 	e.api.fileWait = 10 * time.Second
 	if resp, body := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusOK || body != string(e.maps[ebookBook]) {
 		t.Errorf("GET readalong once the share answers = %d %.80s, want the map", resp.StatusCode, body)
 	}
+}
+
+// A revalidation whose map answers but whose ebook's look is given up on is
+// 503 share_not_answering at once (readalongUnchanged), not left to the full
+// answer, which would read the map and wait on the same ebook a second time.
+// Not parallel: metadata.HoldReadsForTests swaps the mount lookup.
+func TestReadalongRevalidationEbookGivenUpIs503(t *testing.T) {
+	e := newReadalongEnv(t)
+	e.api.fileWait = 200 * time.Millisecond
+	var reads atomic.Int32
+	e.api.readalongRead = func(lib catalog.Library, bookPath string, folder bool) ([]byte, fs.FileInfo, error) {
+		reads.Add(1)
+		return library.ReadReadalongMap(lib, bookPath, folder)
+	}
+	first, _ := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, "")
+	etag := first.Header.Get("ETag")
+	if first.StatusCode != http.StatusOK || etag == "" {
+		t.Fatalf("GET readalong = %d ETag %q", first.StatusCode, etag)
+	}
+	before := reads.Load()
+	release := metadata.HoldReadsForTests(filepath.Join(e.root, filepath.FromSlash(ebookFile)))
+	t.Cleanup(release)
+	resp, body := e.doHeaders(t, "GET", e.at("readalong", ebookBook), e.annTok, "", map[string]string{"If-None-Match": etag})
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) {
+		t.Errorf("revalidating with the ebook held = %d %s, want 503 %s", resp.StatusCode, body, codeShareNotAnswering)
+	}
+	if n := reads.Load() - before; n != 0 {
+		t.Errorf("the map was read %d times after the ebook's look was given up on, want 0", n)
+	}
+	release()
 }
 
 // A map or an ebook refused for good (a permission: metadata.LastingFault) is
@@ -488,5 +536,69 @@ func TestReadalongLastingFaultIs404(t *testing.T) {
 		if resp, body := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusOK || body != string(e.maps[ebookBook]) {
 			t.Errorf("readalong with %s readable again = %d %.80s, want the map", refused, resp.StatusCode, body)
 		}
+	}
+}
+
+// Allowed: revalidating an unchanged map the index has read is a 304 that
+// reads none of it (server#265), gzip or plain. Denied the shortcut: a map
+// rewritten since the index read it is read to answer (a 304 still, from the
+// file itself), and one gone stale with its ebook is a 409, never a 304.
+func TestReadalongRevalidationReadsNothing(t *testing.T) {
+	t.Parallel()
+	e := newReadalongEnv(t)
+	var reads atomic.Int32
+	e.api.readalongRead = func(lib catalog.Library, bookPath string, folder bool) ([]byte, fs.FileInfo, error) {
+		reads.Add(1)
+		return library.ReadReadalongMap(lib, bookPath, folder)
+	}
+	get := func(enc, inm string) *http.Response {
+		t.Helper()
+		headers := map[string]string{"Accept-Encoding": enc}
+		if inm != "" {
+			headers["If-None-Match"] = inm
+		}
+		resp, _ := e.doHeaders(t, "GET", e.at("readalong", ebookBook), e.annTok, "", headers)
+		return resp
+	}
+	for _, enc := range []string{"identity", "gzip"} {
+		first := get(enc, "")
+		etag := first.Header.Get("ETag")
+		if first.StatusCode != http.StatusOK || etag == "" {
+			t.Fatalf("%s: GET = %d ETag %q", enc, first.StatusCode, etag)
+		}
+		before := reads.Load()
+		for range 3 {
+			if resp := get(enc, etag); resp.StatusCode != http.StatusNotModified || resp.Header.Get("ETag") != etag ||
+				resp.Header.Get("Cache-Control") != readalongCache {
+				t.Fatalf("%s: revalidation = %d %v, want 304", enc, resp.StatusCode, resp.Header)
+			}
+		}
+		if n := reads.Load() - before; n != 0 {
+			t.Fatalf("%s: three revalidations read the map %d times, want 0", enc, n)
+		}
+	}
+
+	// Rewritten since the scan (a longer file): its new ETag revalidates from
+	// the file, as the index hasn't read it.
+	writeMap(t, e.root, mapPaths[ebookBook], append(append([]byte{}, e.maps[ebookBook]...), '\n'))
+	fresh := get("identity", "")
+	etag := fresh.Header.Get("ETag")
+	before := reads.Load()
+	if resp := get("identity", etag); resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("revalidating a map the index hasn't read = %d, want 304", resp.StatusCode)
+	}
+	if n := reads.Load() - before; n != 1 {
+		t.Fatalf("a map the index hasn't read was read %d times to revalidate, want 1", n)
+	}
+
+	// The ebook changes under an unchanged map: stale, whatever the client holds.
+	scanFixture(t, e.testEnv, e.lib)
+	edited := append(append([]byte{}, e.epub...), 0)
+	if err := os.WriteFile(filepath.Join(e.root, filepath.FromSlash(ebookFile)), edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scanFixture(t, e.testEnv, e.lib)
+	if resp := get("identity", etag); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("revalidating a map gone stale = %d, want 409", resp.StatusCode)
 	}
 }

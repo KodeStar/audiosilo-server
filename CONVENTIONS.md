@@ -744,7 +744,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   have no work, a match-only book's, is resolved to none, its items dropped);
   (3) metaserve's watch feed, 50 series a request (split when full), says which series have news; (4)
   `series/{id}` is read when new, with news, or a week old (2 at a time; a 404 marks it gone, dropped after
-  a week); (5) classify; (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
+  a week); (5) classify (a local series whose items come out as stored, its series all classified
+  before, is not written again; the resolved and community series are read once a run and a work's
+  series once a run: server#279); (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
   kicked) is step (1) alone (`Options.Resolve`, `resolveOnly`: no series, feed, items, announcement or
   status; server#241, a book's `work_id` rides on the player's lists); the books whose work it found
   new or changed are pending for the next full run's series step, kept in `server_state('upcoming_pending')`
@@ -1264,7 +1266,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (see Bridge attachments) as `application/json`, gzipped for a client that accepts it
   (`spa.AcceptsGzip`; `Vary: Accept-Encoding`), `Cache-Control: private, no-cache` and a strong ETag of
   the file's size and mtime, `-gz` for the gzip answer (chosen by the request's Accept-Encoding before
-  any gzipping, so a 304 gzips nothing; server#265; 304 on a match). **Header auth only**, as
+  any gzipping, so a 304 gzips nothing; server#265; 304 on a match). A revalidation reads nothing of
+  the map when its ETag names the file as it is now and the index read that very file (its
+  `metadata.AttachmentSignature` in `books.attachments_sig`, `library.StatReadalongMap`): the indexed
+  head is then checked against the book now as below and the 304 goes (`readalongUnchanged`; a look at
+  the map or the ebook given up on is 503 `share_not_answering` there, not a second wait in the full path); else the
+  full path answers it. **Header auth only**, as
   `/ebook` (`requireAuth`; `?token=` is never read; it stays under the request timeout: a map is
   at most 16 MiB, no media route). Each request reads the map from disk (`library.ReadReadalongMap`:
   a real `.audiosilo` folder that isn't ignored, a regular file never through a link, read once
@@ -3122,7 +3129,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   thumbnails as `data:` URLs in request order (`""` = no art; each with the `version`, the
   `cover_version` its admin row has once the request's colours are recorded), resolved like
   `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing), from
-  one `catalog.CoverSources` query per library for the whole batch. Admin book rows carry
+  one `catalog.CoverSources` query per library for the whole batch. The answer waits at most
+  `coverBatchWait` (2 s) for its covers: one still being read then is `"pending": true` with `data` `""`,
+  its read finishing into the thumbnail cache (`API.coverWork`, which `WaitMediaCaches` waits for; on
+  `baseCtx`, so a stop ends it, and within the request timeout, the bound the request gave it), and
+  an ask for a cover whose read is under way waits on that read (`sharedThumbnail`, `libraryThumbs`),
+  never starts a second; the console asks again for the pending ones only, up to `MAX_COVER_ASKS` times
+  in all (`cover-batch.ts`), so a cover on a slow share holds none of the others (server#225). Admin book rows carry
   `cover_version`, and the console keeps the thumbnails it got in a bounded IndexedDB cache
   keyed by library, path, version and size (`admin-ui/src/api/thumb-cache.ts`), a thumbnail kept
   under the version the answer names (never under an older row's version that asked for it),
@@ -4713,8 +4726,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   "Checking now". Settings > Community
   metadata's Source card saves `metadata.mode` (restart). TLS certificates read from their
   files (`server.Certificates`; never generates or requests one), database size + schema
-  (`catalog.DatabaseInfo`), each root's availability + disk space (`Scanner.RootDisk`: statfs inside the
-  same bounded root probe, so a dead mount can't hang it), web player source, update status. The update check
+  (`catalog.DatabaseInfo`), each root's availability + disk space (`Scanner.RootStatuses`: statfs inside the
+  same bounded root probe, one probe a root for both, so a dead mount can't hang it and an expired
+  answer costs no second probe, server#225), web player source, update status. The update check
   (`internal/updates`, started by the launcher): GitHub's latest release, a minute after start then daily,
   conditional on the ETag, `User-Agent: AudioSilo/<version>`, nothing else sent, never while off;
   `GET /admin/update`, `POST /admin/update/check` (409 `update_check_off`; within a minute it answers with
@@ -4756,7 +4770,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the API shows `notify.Redact`'s address and `has_secret`), `server_events` (the bell's feed, 90 days,
   `dedup_key` announces an event once while it is in the feed, an update once per version: the check
   and the record one step under `dedupMu`, so two emits at once announce it once,
-  server#408). `notify.Service.Emit` records the event and queues each
+  server#408). `notify.Service.Emit` returns at once: one goroutine records the queued events in the
+  order emitted (`emitQueue`, 1024; a burst past it waits for room, never drops one; `Deliver`, a
+  podcast notice recorded with its write, rides the same queue; `Flush` for a caller that reads the
+  feed next: a test, and `BackupFailed`, as the console reads the feed once it sees the run end), and
+  `Service.Close`, deferred by the launcher before the database's, records what is still queued (an
+  emit after it is recorded on its caller's goroutine once the queue is drained, so the order holds), server#224. Each recorded event queues each
   enabled subscribed destination (4 workers, queue 256, left owed + logged when full); a delivery is
   retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
   worker), three attempts in all, restarts included. Every delivery is kept in the **outbox**
