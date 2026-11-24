@@ -130,6 +130,9 @@ type prepBook struct {
 	seriesTrim string // strings.TrimSpace(b.Series)
 	normSeries string // NormalizeSeries(b.Series)
 
+	residualDone bool
+	residual     string // residualTitle(b.Title, b.Series, opts), shared by toks and own
+
 	toksDone bool
 	toks     []string // titleTokens(b.Title, b.Series, opts)
 
@@ -188,10 +191,19 @@ func (x *Index) series(i int) *prepBook {
 func (x *Index) toks(i int) []string {
 	p := &x.prep[i]
 	if !p.toksDone {
-		p.toks = titleTokens(x.books[i].Title, x.books[i].Series, x.opts)
+		p.toks = tokenize(fallbackTitle(x.residual(i), x.books[i].Title, x.opts))
 		p.toksDone = true
 	}
 	return p.toks
+}
+
+func (x *Index) residual(i int) string {
+	p := &x.prep[i]
+	if !p.residualDone {
+		p.residual = residualTitle(x.books[i].Title, x.books[i].Series, x.opts)
+		p.residualDone = true
+	}
+	return p.residual
 }
 
 func (x *Index) seqRef(i int) (float64, bool) {
@@ -207,7 +219,7 @@ func (x *Index) own(i int) *prepBook {
 	p := &x.prep[i]
 	if !p.ownDone {
 		b := &x.books[i]
-		p.bare = bareTitle(b.Title, b.Series, x.opts)
+		p.bare = len(tokenize(x.residual(i))) == 0
 		if p.bare {
 			p.veto, p.vetoOK = bareSeq(b.Title, b.Series)
 		}
@@ -548,7 +560,11 @@ func CleanTitle(title, series string) string { return cleanTitle(title, series, 
 // "Mayor of Noobtown") falls back like an empty one; a residual holding a number
 // is a volume's own, so it stays.
 func cleanTitle(title, series string, o Options) string {
-	t := residualTitle(title, series, o)
+	return fallbackTitle(residualTitle(title, series, o), title, o)
+}
+
+// fallbackTitle is cleanTitle's answer from title's residual t.
+func fallbackTitle(t, title string, o Options) string {
 	if o.WordlessFallback && !strings.ContainsAny(t, "0123456789") && len(tokenize(t)) == 0 {
 		t = ""
 	}

@@ -474,10 +474,7 @@ func ReadBy(r *MatchRecording, narrators []string) bool {
 			continue
 		}
 		for _, rn := range r.Narrators {
-			if !PersonNarrator(rn.Name) {
-				continue
-			}
-			if authorSimilarity(n, rn.Name) == 1 || authorSimilarity(rn.Name, n) == 1 {
+			if (authorSimilarity(n, rn.Name) == 1 || authorSimilarity(rn.Name, n) == 1) && PersonNarrator(rn.Name) {
 				return true
 			}
 		}
