@@ -494,8 +494,13 @@ func DramatizesPlainBook(c *MatchCandidate, r *MatchRecording, narrators []strin
 }
 
 // PersonNarrator reports whether a credit can identify a particular reader or
-// ensemble. A generic cast or a placeholder can occur on unrelated recordings.
-func PersonNarrator(name string) bool { return !model.IsGenericCredit(name) }
+// ensemble: not a cast or a production (any credit dramatizationTextRE reads, "BBC
+// Full-Cast Dramatisation", "GraphicAudio [Dramatized Adaptation]") and not a
+// placeholder (model.IsGenericCredit: "Various", "Unknown"). Such a credit can occur
+// on unrelated recordings, so it says nothing about which edition a book is.
+func PersonNarrator(name string) bool {
+	return !dramatizationTextRE.MatchString(name) && !model.IsGenericCredit(name)
+}
 
 // NormalizeLanguage reads a language tag as works/match takes it: the first of
 // several ("eng;fre", "en/de") without a note ("English (US)"), a BCP-47 tag's

@@ -469,14 +469,16 @@ func TestTitleSpeaksFor(t *testing.T) {
 // stand-in for nobody in particular does not.
 func TestPersonNarrator(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"Wil Wheaton", "R. C. Bray", "Ray Porter", "Castle Freeman", "Pam Castille", "Variously Jones", "the Full Cast Family"} {
+	for _, name := range []string{"Wil Wheaton", "R. C. Bray", "Ray Porter", "Castle Freeman", "Pam Castille", "Variously Jones", "The Hollywood Theater of the Ear"} {
 		if !PersonNarrator(name) {
 			t.Errorf("%q: not a reader, want one", name)
 		}
 	}
 	for _, name := range []string{"Full Cast", "full cast", "Full-Cast", "FullCast", "Full Cast Recording", "Divers Auteurs",
 		"GraphicAudio", "GraphicAudio [Dramatized Adaptation]", "Various", "Various Narrators", "various artists",
-		"Multiple Narrators", "Multiple Readers", "Unknown", "Anonymous", "cast", "Narrator", "N/A", "", "  "} {
+		"Multiple Narrators", "Multiple Readers", "Unknown", "Anonymous", "cast", "Narrator", "N/A", "", "  ",
+		// A production credit says so in longer words too.
+		"BBC Full-Cast Dramatisation", "A Full Cast Dramatization", "GraphicAudio Full Cast", "the Full Cast Family"} {
 		if PersonNarrator(name) {
 			t.Errorf("%q: a reader, want none", name)
 		}
@@ -494,15 +496,16 @@ func TestRecordingCreditAndLength(t *testing.T) {
 		{"Ann Reader", "Ann Reader", 121, "closer"},
 		{"Various", "Various", 109, "closer"},
 		{"Full Cast", "Full Cast", 109, "closer"},
-		{"the Full Cast Family", "the Full Cast Family", 115, "credited"},
-		{"the Full Cast Family", "Full Cast", 109, "closer"},
+		{"The Hollywood Theater of the Ear", "The Hollywood Theater of the Ear", 115, "credited"},
+		{"The Hollywood Theater of the Ear", "Full Cast", 109, "closer"},
+		{"BBC Full-Cast Dramatisation", "BBC Full-Cast Dramatisation", 115, "closer"},
 	} {
 		c := MatchCandidate{Recordings: []MatchRecording{{ID: "closer", RuntimeMin: 105}, {ID: "credited", RuntimeMin: tc.minutes, Narrators: []MetaPersonRef{{Name: tc.credit}}}}}
 		if got := DefaultRecording(&c, 6000, "", []string{tc.book}); got == nil || got.ID != tc.want {
 			t.Errorf("book %q, credit %q at %d min: got %v, want %s", tc.book, tc.credit, tc.minutes, got, tc.want)
 		}
 	}
-	for _, name := range []string{"Various", "Full Cast", "Unknown Artist"} {
+	for _, name := range []string{"Various", "Full Cast", "Unknown Artist", "BBC Full-Cast Dramatisation"} {
 		c := MatchCandidate{RecordingID: "hint", Recordings: []MatchRecording{{ID: "hint", RuntimeMin: 130, Narrators: []MetaPersonRef{{Name: name}}}, {ID: "fits", RuntimeMin: 100}}}
 		if got := FitRecording(&c, &c.Recordings[0], 6000, "", []string{name}); got.ID != "fits" {
 			t.Errorf("off-length %q hint: got %s", name, got.ID)
