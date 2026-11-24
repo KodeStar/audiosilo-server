@@ -429,7 +429,7 @@ func TestWorkBooksBoundPerWork(t *testing.T) {
 		b := &Book{LibraryID: f.main.ID, RelPath: fmt.Sprintf("Many/%03d", i), Title: "Many", AddedAt: "2024-01-01T00:00:00Z"}
 		books, work[b.RelPath] = append(books, b), "w-many"
 	}
-	for i, err := range f.c.UpsertBooks(f.ctx, books, 0) {
+	for i, err := range f.c.UpsertBooks(f.ctx, books) {
 		if err != nil {
 			t.Fatalf("book %d: %v", i, err)
 		}

@@ -41,22 +41,42 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 // written under, so one that fails is rolled back alone.
 const upsertSavepoint = "upsert_book"
 
+// The bounds of one UpsertBooks transaction, owned here alone (server#269):
+// it takes at most UpsertBatch books, and another only while it has held the
+// writer for less than upsertHold, so a batch of slow writes holds back every
+// other write (a listener's progress) no longer than that, plus a book. A
+// transaction's begin and commit cost a scan about as much as a book's own
+// writes (0.6 of 1.5 ms a book on a synthetic library, 1.3 of 3.9 ms on a
+// real one: SCAN-SPIKE.md); shared by 64 books they cost a few percent of
+// that, and more books a transaction gain little while holding the writer
+// longer. A scan hands over a batch once it holds UpsertBatch books.
+const (
+	UpsertBatch = 64
+	upsertHold  = 250 * time.Millisecond
+)
+
 // UpsertBooks is UpsertBook for several books, in their order, sharing
-// transactions: a scan writes most of its books this way, and a transaction's
-// begin and commit cost about as much as a book's own writes. Each book is
-// still written on its own (under a savepoint): one that fails is rolled back
-// alone, the others written, and its error is at its index in the result (nil:
-// written). A transaction takes another book only while it has run for less
-// than budget (0: no bound), so a long batch holds the one writer no longer
-// than that, plus a book. A transaction that fails as a whole (its commit, say)
-// has its books written again one at a time (UpsertBook).
-func (c *Catalog) UpsertBooks(ctx context.Context, books []*Book, budget time.Duration) []error {
+// transactions (within UpsertBatch and upsertHold): a scan writes most of its
+// books this way, and a transaction's begin and commit cost about as much as
+// a book's own writes. Each book is still written on its own (under a
+// savepoint): one that fails is rolled back alone, the others written, and
+// its error is at its index in the result (nil: written). A transaction that
+// fails as a whole (its commit, say) has its books written again one at a
+// time (UpsertBook).
+func (c *Catalog) UpsertBooks(ctx context.Context, books []*Book) []error {
+	return c.upsertBooks(ctx, books, UpsertBatch, upsertHold)
+}
+
+// upsertBooks is UpsertBooks with its bounds: at most most books a
+// transaction, and another only while it has run for less than hold (0: no
+// bound).
+func (c *Catalog) upsertBooks(ctx context.Context, books []*Book, most int, hold time.Duration) []error {
 	errs := make([]error, len(books))
 	for start := 0; start < len(books); {
 		end := start // past the last book the transaction began
 		err := c.db.WithTx(ctx, "UpsertBooks", func(tx *sql.Tx) error {
 			began := time.Now() // once it holds the writer: the wait for it is not its run
-			for i := start; i < len(books) && (i == start || budget <= 0 || time.Since(began) < budget); i++ {
+			for i := start; i < len(books) && i < start+most && (i == start || hold <= 0 || time.Since(began) < hold); i++ {
 				end = i + 1
 				if _, err := tx.ExecContext(ctx, `SAVEPOINT `+upsertSavepoint); err != nil {
 					return err
