@@ -7,7 +7,8 @@ import (
 
 // TestRowCoverVersions: a favourite and a /me/progress row carry their book's
 // cover_version (the Book's, so a cover URL busts the same cache), follow it when
-// the cover changes, and omit it for a path that is no indexed book. A progress
+// the cover changes (a custom cover set or removed, a rescan reading the art),
+// and omit it for a path that is no indexed book. A progress
 // row read any other way (GetProgress, a save's echo) never carries one, even when
 // a PUT body echoed one back.
 func TestRowCoverVersions(t *testing.T) {
@@ -71,17 +72,35 @@ func TestRowCoverVersions(t *testing.T) {
 	if err := c.SetCover(ctx, lib.ID, book.Path, pngBytes, 0, SourceEdited); err != nil {
 		t.Fatal(err)
 	}
-	if custom := check("custom cover"); custom == file {
+	custom := check("custom cover")
+	if custom == file {
 		t.Fatalf("custom cover kept the file art's version %q", file)
+	}
+	if err := c.DeleteCover(ctx, lib.ID, book.Path); err != nil {
+		t.Fatal(err)
+	}
+	removed := check("custom cover removed")
+	if removed == custom {
+		t.Fatalf("removing the custom cover kept its version %q", custom)
+	}
+	// A rescan that reads the art file moves the book to the file's own version.
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: book.Path, IsFolder: true,
+		Title: "Book", MTime: 1, Size: 10, ArtVersion: "s20-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if rescanned := check("rescan"); rescanned == removed {
+		t.Fatalf("a rescan reading the art kept the version %q", removed)
 	}
 
 	// Only the list carries it: the single read and the save's echo don't.
 	if p, err := c.GetProgress(ctx, uid, book); err != nil || p == nil || p.CoverVersion != "" {
 		t.Fatalf("GetProgress = %+v (%v), want no cover_version", p, err)
 	}
+	// Newer than the stored row, so the save applies and its echo is the
+	// written row's (a stale save's would be the stored row's, proving nothing).
 	saved, err := c.SaveProgress(ctx, uid, Progress{Ref: book, Position: 6, Duration: 10,
 		UpdatedAt: time.Now().Add(time.Second).UTC().Format(time.RFC3339), CoverVersion: "echoed"})
-	if err != nil || saved.CoverVersion != "" {
-		t.Fatalf("save echo = %+v (%v), want no cover_version", saved, err)
+	if err != nil || saved.Position != 6 || saved.CoverVersion != "" {
+		t.Fatalf("save echo = %+v (%v), want the applied save with no cover_version", saved, err)
 	}
 }

@@ -38,7 +38,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   keeps their ratios (`TestBudgetStartsAfterAnotherDiscovery`, `TestRequestWaitsOutAnotherReadsProbe`).
 - **Wire goldens (`internal/api/wire_golden_test.go`, `internal/api/testdata/wire/`, audiosilo#96, server#347)**: the
   shape of each important player envelope (`/server`, the session and pairing envelopes, `/me`, the library
-  lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, `/meta`, `/me/upcoming`,
+  lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, favourites, `/meta`, `/me/upcoming`,
   `/household/listening`), produced by the real handlers against seeded envs: each field's JSON type, never a
   value, so ids and times never churn it. `TestWireGolden` fails on any change: a field removed or retyped
   breaks shipped clients (CROSS-REPO.md §15), and an addition must show in the diff. After an intended change
