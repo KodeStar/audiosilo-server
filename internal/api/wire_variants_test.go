@@ -118,12 +118,13 @@ func wireVariantCases(t *testing.T, m *wireMainEnv) []wireCase {
 			empty: []string{"$.episode.fetch.bytes_total", "$.episode.fetch.request_id"},
 			types: wireBookTypes},
 		{name: "listening-sync-diverged", route: "POST /api/v1/me/listening/sync (a span from behind another device's place, and one refused)",
-			body: wireCall(s.testEnv, "POST", syncURL, s.watchTok, syncBody("watch",
-				listenJSON("w1", s.lib.ID, syncUnsouled, 14400, 16800, s.version),
-				listenJSON("w2", 9999, syncUnsouled, 0, 60, ""))),
+			body:  s.watchSync,
 			types: wireAt[catalog.SyncAnswer]("$")},
 		{name: "me-progress-diverged", route: "GET /api/v1/me/progress (a place another device diverged from, a finished book)",
-			body:  wireCall(s.testEnv, "GET", "/api/v1/me/progress", s.phoneTok, ""),
+			body: func(t *testing.T) string {
+				s.watchSync(t) // the divergence, when the case before did not run (-run)
+				return wireOK(t, s.testEnv, "GET", "/api/v1/me/progress", s.phoneTok, "")
+			},
 			keys:  []string{"handleListProgress"},
 			types: wireAt[catalog.Progress]("$.progress[]")},
 		{name: "meta-unmatched", route: "GET /api/v1/libraries/{id}/meta?path=<a book with no community match and generated content>",
@@ -299,6 +300,19 @@ func newWireEpisodeEnv(t *testing.T) *wireEpisodeEnv {
 type wireDivergedEnv struct {
 	*syncEnv
 	phoneTok, watchTok, version string
+	synced                      string // the watch's sync's answer, once sent
+}
+
+// watchSync sends the watch's sync (a span from behind the phone's place, and
+// one refused) once, and returns its answer.
+func (s *wireDivergedEnv) watchSync(t *testing.T) string {
+	t.Helper()
+	if s.synced == "" {
+		s.synced = wireOK(t, s.testEnv, "POST", syncURL, s.watchTok, syncBody("watch",
+			listenJSON("w1", s.lib.ID, syncUnsouled, 14400, 16800, s.version),
+			listenJSON("w2", 9999, syncUnsouled, 0, 60, "")))
+	}
+	return s.synced
 }
 
 func newWireDivergedEnv(t *testing.T) *wireDivergedEnv {
