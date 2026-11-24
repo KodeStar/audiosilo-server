@@ -61,10 +61,12 @@ type bridgeEstimate struct {
 // couldn't be asked right now, so community is no answer (never read it as
 // "none").
 //
-// A part is generated here AND shown (the console's Regenerate, the player's
-// from /meta's work.generated: one rule, CONVENTIONS.md Bridge attachments)
-// when local has it and community doesn't: community is what /meta's fill
-// rule leaves unfilled (meta.Coverage), so /meta lays in exactly those parts.
+// Characters or recaps are generated here AND shown (the console's
+// Regenerate, the player's from /meta's work.generated: one rule,
+// CONVENTIONS.md Bridge attachments) when local has them and community
+// doesn't: for those two, community is what /meta's fill rule leaves unfilled
+// (meta.Coverage), so /meta lays in exactly those parts. Not the description:
+// community counts a core description too, which /meta's fill doesn't.
 type estimateHas struct {
 	Community        hasContent `json:"community"`
 	Local            hasContent `json:"local"`

@@ -390,7 +390,8 @@ func TestItemGenerated(t *testing.T) {
 // work.generated with that list on the work. A generated file the community
 // masks counts in neither, and a recaps.json holding only a whole-book summary
 // is no recaps in either (has.local.recaps false; /meta serves the summary with
-// no list).
+// no list). With no community match, or the community down (community_unknown,
+// and /meta answers the generated work as unmatched), every file shows in both.
 func TestGeneratedShownAgrees(t *testing.T) {
 	t.Parallel()
 	const (
@@ -402,28 +403,46 @@ func TestGeneratedShownAgrees(t *testing.T) {
 			"recaps":[{"through":{"chapter":1},"text":"Community recap."}]}`
 		summaryOnly = `{"id":"w","title":"Community Title","authors":[],"language":"en",
 			"recap_summary":{"in_short":"Community short."}}`
+		withRecaps = `{"id":"w","title":"Community Title","authors":[],"language":"en",
+			"recaps":[{"through":{"chapter":1},"text":"Community recap."}]}`
 	)
 	chars := &model.Characters{Work: "w", Characters: []model.Character{{ID: "gen", Name: "Gen", Reveal: model.Position{Chapter: 1}}}}
 	recaps := &model.Recaps{Work: "w", Recaps: []model.Recap{{Through: model.Position{Chapter: 1}, Text: "Gen recap."}}, InShort: "Gen short."}
 	summary := &model.Recaps{Work: "w", InShort: "Gen short.", Ending: "Gen ending."}
 	type shown struct{ characters, recaps bool }
+	both := metadata.AttachmentFiles{Characters: chars, Recaps: recaps}
 	for name, c := range map[string]struct {
 		work  string
 		files metadata.AttachmentFiles
 		want  shown
+		// noIDs: the book has no ASIN, so no community work; down: the
+		// community's lookup fails (community_unknown).
+		noIDs, down bool
 	}{
-		"the community has both":            {withBoth, metadata.AttachmentFiles{Characters: chars, Recaps: recaps}, shown{}},
-		"masked characters alone":           {withChars, metadata.AttachmentFiles{Characters: chars}, shown{}},
-		"generated recaps beside community": {withChars, metadata.AttachmentFiles{Characters: chars, Recaps: recaps}, shown{recaps: true}},
-		"a generated summary alone":         {bare, metadata.AttachmentFiles{Recaps: summary}, shown{}},
-		"beside a community summary":        {summaryOnly, metadata.AttachmentFiles{Characters: chars, Recaps: recaps}, shown{true, true}},
+		"the community has both":            {work: withBoth, files: both},
+		"masked characters alone":           {work: withChars, files: metadata.AttachmentFiles{Characters: chars}},
+		"masked recaps alone":               {work: withRecaps, files: metadata.AttachmentFiles{Recaps: recaps}},
+		"generated recaps beside community": {work: withChars, files: both, want: shown{recaps: true}},
+		"a generated summary alone":         {work: bare, files: metadata.AttachmentFiles{Recaps: summary}},
+		"beside a community summary":        {work: summaryOnly, files: both, want: shown{true, true}},
+		"no community match":                {work: withBoth, files: both, want: shown{true, true}, noIDs: true},
+		"the community down":                {files: both, want: shown{true, true}, down: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			e := generatedMetaEnv(t, c.work)
+			var e *testEnv
+			if c.down {
+				e = newMetaEnv(t, true, http.StatusServiceUnavailable)
+			} else {
+				e = generatedMetaEnv(t, c.work)
+			}
 			b := newBridgeEnvOn(t, e)
 			ctx := context.Background()
-			book := &catalog.Book{LibraryID: b.lib.ID, RelPath: "A/Book", Title: "Book", Author: "A", ASIN: "B0BOOK", AddedAt: "2020-01-01"}
+			asin := "B0BOOK"
+			if c.noIDs {
+				asin = ""
+			}
+			book := &catalog.Book{LibraryID: b.lib.ID, RelPath: "A/Book", Title: "Book", Author: "A", ASIN: asin, AddedAt: "2020-01-01"}
 			if _, err := e.cat.UpsertBook(ctx, book); err != nil {
 				t.Fatal(err)
 			}
@@ -441,7 +460,7 @@ func TestGeneratedShownAgrees(t *testing.T) {
 			b.beatWith(t, true, true, sidecarsEstimates)
 
 			resp, est, body := b.estimate(t, b.adminTok, b.lib.ID, "A/Book")
-			if resp.StatusCode != http.StatusOK || est.Has.CommunityUnknown {
+			if resp.StatusCode != http.StatusOK || est.Has.CommunityUnknown != c.down {
 				t.Fatalf("estimate: %d %s", resp.StatusCode, body)
 			}
 			byEstimate := shown{

@@ -234,7 +234,7 @@ export function detectJobsKnown(server: ServerInfo | undefined): boolean {
 export type GenerateAction = 'generate' | 'regenerate' | 'covered';
 
 /** The two parts a generate job writes and the community can cover. */
-const DIMENSIONS = ['characters', 'recaps'] as const;
+const DIMENSIONS: readonly ShareDimension[] = ['characters', 'recaps'];
 
 export function generateAction(has: {
   community: SidecarsCoverage;
@@ -254,7 +254,7 @@ export function generateAction(has: {
  */
 export function generatedShown(
   has: { community: SidecarsCoverage; local: SidecarsCoverage },
-  dimension: (typeof DIMENSIONS)[number],
+  dimension: ShareDimension,
 ): boolean {
   return has.local[dimension] && !has.community[dimension];
 }
