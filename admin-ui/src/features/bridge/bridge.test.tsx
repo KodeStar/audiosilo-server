@@ -404,6 +404,51 @@ describe('bridge page', () => {
     expect(within(jobs).getByText('Last step: Checking 3 files')).toBeInTheDocument();
   });
 
+  it("words a coded step in the console's language, else shows the Bridge's text (server#224)", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                id: 13,
+                kind: 'librivox.fetch',
+                params: { librivox_id: 194, work_id: 'w', recording_id: 'r3', library_id: 1 },
+                state: 'running',
+                // The console's own sentence, not the Bridge's English.
+                progress: {
+                  step: 'download',
+                  message: 'Fetching bit 2/3',
+                  message_code: 'downloading_section',
+                  message_params: { section: 2, sections: 3 },
+                },
+              }),
+              job({
+                id: 14,
+                kind: 'bridge.verify',
+                state: 'failed',
+                progress: {
+                  step: 'stat',
+                  message: 'Squinting at files',
+                  message_code: 'squinting',
+                },
+                finished_at: '2026-10-15T12:02:00Z',
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const jobs = await screen.findByRole('list', { name: 'Jobs' });
+    expect(
+      await within(jobs).findByText('Downloading section 2 of 3 from archive.org'),
+    ).toBeInTheDocument();
+    expect(within(jobs).queryByText('Fetching bit 2/3')).not.toBeInTheDocument();
+    // A code this console doesn't know (a newer Bridge's) shows its text.
+    expect(within(jobs).getByText('Last step: Squinting at files')).toBeInTheDocument();
+  });
+
   it('unpairs after saying what happens', async () => {
     let unpaired = false;
     const calls = mockFetch(

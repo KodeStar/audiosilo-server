@@ -24,7 +24,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
 import { formatDuration, formatList, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { isOpen, jobGone, openProgress } from '@/features/bridge/bridge-model';
+import { isOpen, jobGone, openProgress, progressText } from '@/features/bridge/bridge-model';
 import { BridgeSettingsLink, ExternalTextLink } from '@/features/bridge/generate-parts';
 import { useBridge, useTrackedJob } from '@/features/bridge/use-bridge';
 import { CardEmpty } from '@/features/settings/card-empty';
@@ -310,7 +310,8 @@ function RecordingRow({
             total: formatNumber(progress.total, lang),
           })
         : '';
-      const label = progress.text ?? t(`bridge.state.${state ?? r.job?.state ?? 'queued'}`);
+      const label =
+        progressText(t, progress) ?? t(`bridge.state.${state ?? r.job?.state ?? 'queued'}`);
       // With several libraries, which one it is going into (the open job is
       // the project's in any library, so not always the one picked here).
       const into =

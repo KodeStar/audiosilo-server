@@ -24,7 +24,9 @@ import {
   serverScheduled,
   mappingState,
   presence,
+  PROGRESS_CODES,
   progressOf,
+  progressText,
   resultSummary,
   safeHttpUrl,
   secondsLeft,
@@ -271,6 +273,88 @@ describe('serverScheduled', () => {
     // A follower's Check now, its requester since deleted.
     expect(of('podcast.poll')).toBe(false);
     expect(of('podcast.poll', { params: { show_id: 'a1b2c3d4e5f60718' } })).toBe(false);
+  });
+});
+
+describe('progress codes (server#224)', () => {
+  const t = (key: string, opts?: Record<string, unknown>) => `${key} ${JSON.stringify(opts ?? {})}`;
+
+  it('reads a known code with its params beside the English message', () => {
+    const p = progressOf({
+      step: 'download',
+      message: 'Downloading section 2 of 3 from archive.org',
+      message_code: 'downloading_section',
+      message_params: { section: 2, sections: 3 },
+      done: 1,
+      total: 3,
+    });
+    expect(p).toEqual({
+      text: 'Downloading section 2 of 3 from archive.org',
+      said: { code: 'downloading_section', params: { section: 2, sections: 3 } },
+      done: 1,
+      total: 3,
+    });
+    expect(progressText(t, p)).toBe(
+      'bridge.progress.downloading_section {"section":2,"sections":3}',
+    );
+    // Only the params the code fills in are passed on.
+    expect(
+      progressOf({ message: 'Finding', message_code: 'finding_library', message_params: { x: 1 } })
+        .said,
+    ).toEqual({ code: 'finding_library', params: {} });
+  });
+
+  it("shows the Bridge's text for an older Bridge, an unknown code or missing params", () => {
+    // An older Bridge sends no code.
+    expect(progressText(t, progressOf({ step: 'stat', message: 'Comparing the files' }))).toBe(
+      'Comparing the files',
+    );
+    // A newer Bridge's code this console doesn't know.
+    expect(
+      progressText(t, progressOf({ message: 'Reticulating', message_code: 'reticulating' })),
+    ).toBe('Reticulating');
+    // A code missing a value it fills in, or with one of the wrong type.
+    for (const message_params of [undefined, { section: 2 }, { section: 2, sections: {} }]) {
+      expect(
+        progressOf({ message: 'Downloading', message_code: 'downloading_section', message_params })
+          .said,
+      ).toBeUndefined();
+    }
+    expect(
+      progressOf({
+        message: 'x',
+        message_code: 'library_not_writable',
+        message_params: { library: ' ' },
+      }).said,
+    ).toBeUndefined();
+    // Not an own key of the code list.
+    expect(progressOf({ message: 'x', message_code: 'toString' }).said).toBeUndefined();
+    expect(progressText(t, {})).toBeUndefined();
+  });
+
+  it('has an English sentence for every code, filling in exactly its params', () => {
+    const dict = en as Record<string, string>;
+    const names = (s: string) => [...s.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort();
+    for (const [code, params] of Object.entries(PROGRESS_CODES)) {
+      const sentence = dict[`bridge.progress.${code}`];
+      expect(sentence, code).toBeTruthy();
+      expect(names(sentence), code).toEqual([...params].sort());
+    }
+    const keys = Object.keys(dict).filter((k) => k.startsWith('bridge.progress.'));
+    expect(keys).toHaveLength(Object.keys(PROGRESS_CODES).length);
+  });
+
+  it("keeps a failed job's coded last step", () => {
+    const progress = {
+      step: 'stat',
+      message: 'Compared the files',
+      message_code: 'compared_files',
+    };
+    expect(listedProgress({ state: 'failed', progress })).toEqual({
+      text: 'Compared the files',
+      said: { code: 'compared_files', params: {} },
+      last: true,
+    });
   });
 });
 

@@ -25,6 +25,7 @@ import {
   kindName,
   listedProgress,
   podcastSubject,
+  progressText,
   resultSummary,
   serverScheduled,
   stateLook,
@@ -163,6 +164,7 @@ function JobRow({
   // A generate, describe or detect job words its progress and result its own way (GenerateStatus).
   const generate = isBookKind(job.kind);
   const progress: ReturnType<typeof listedProgress> = generate ? {} : listedProgress(job);
+  const said = progressText(t, progress);
   const summary = generate ? null : resultSummary(job.result);
   const sync = syncSummary(job);
   const asin = backupAsin(job);
@@ -255,12 +257,10 @@ function JobRow({
               )}
             </span>
           ) : null}
-          {progress.text || progress.total ? (
+          {said || progress.total ? (
             <span className="text-[12.5px] text-muted-foreground">
               {[
-                progress.text && progress.last
-                  ? t('bridge.jobs.lastStep', { step: progress.text })
-                  : progress.text,
+                said && progress.last ? t('bridge.jobs.lastStep', { step: said }) : said,
                 progress.total
                   ? t('bridge.jobs.count', {
                       done: formatNumber(progress.done ?? 0, lang),

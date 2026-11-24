@@ -402,6 +402,44 @@ func TestUpdateHeld(t *testing.T) {
 	}
 }
 
+// A newer Bridge's coded progress (server#224: message_code and message_params
+// beside the English message, which the console words) is stored and served as
+// sent, and a parked job's progress that names no park keeps them when its park
+// is carried over; an older Bridge's uncoded progress is unchanged.
+func TestUpdateHeldKeepsProgressCodes(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	job := q.verify(t, "A", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	const coded = `{"step":"stat","message":"Comparing the files","message_code":"comparing_files","message_params":{"n":3},"total":3}`
+	j, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateRunning), Progress: json.RawMessage(coded)})
+	if err != nil || string(j.Progress) != coded {
+		t.Fatalf("coded = %s, %v", j.Progress, err)
+	}
+	const plain = `{"step":"stat","message":"Comparing the files"}`
+	if j, err = q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, Progress: json.RawMessage(plain)}); err != nil || string(j.Progress) != plain {
+		t.Fatalf("uncoded = %s, %v", j.Progress, err)
+	}
+	parked := `{"step":"place","message":"Needs attention","message_code":"library_not_writable","message_params":{"library":"Books"},"park":{"code":"not_writable"}}`
+	if _, err = q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateNeedsAttention), Error: ptr("needs a look"),
+		Progress: json.RawMessage(parked)}); err != nil {
+		t.Fatal(err)
+	}
+	j, err = q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateNeedsAttention), Error: ptr("needs a look"),
+		Progress: json.RawMessage(`{"step":"place","message":"Waiting","message_code":"mapping_wait"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(j.Progress, &got); err != nil || got["message_code"] != "mapping_wait" ||
+		got["park"].(map[string]any)["code"] != "not_writable" {
+		t.Fatalf("carried = %s, %v", j.Progress, err)
+	}
+}
+
 // A job cancelled while its claim held it (an admin's cancel of a parked job,
 // which ends it at once) answers that claim's next report with
 // ErrCancelledWhileHeld, still ErrNotHeld for an older Bridge (bridge#35). Any

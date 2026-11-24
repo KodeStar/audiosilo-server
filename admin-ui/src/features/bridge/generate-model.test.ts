@@ -327,6 +327,22 @@ describe('progress and result', () => {
       stage: 'proofreading',
       message: 'Proofreading chapter 3',
     });
+    // A coded message carries its code for the card to word (server#224); a
+    // labelled stage's still shows no message.
+    expect(
+      generateProgress({
+        step: 'sharing',
+        message: 'Sharing with the community',
+        message_code: 'sharing',
+      }),
+    ).toEqual({
+      stage: 'sharing',
+      message: 'Sharing with the community',
+      said: { code: 'sharing', params: {} },
+    });
+    expect(
+      generateProgress({ step: 'writing', message: 'Saving', message_code: 'saving_chapters' }),
+    ).toEqual({ stage: 'writing' });
     // The step stands in for the stage, never for the message.
     expect(generateProgress({ step: 'writing' })).toEqual({ stage: 'writing' });
     expect(generateProgress({ step: 'asr', stage: 'fact_pass' })).toEqual({ stage: 'fact_pass' });

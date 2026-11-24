@@ -492,6 +492,9 @@ type Job struct {
 	Path      *string         `json:"path"`
 	Params    json.RawMessage `json:"params"`
 	State     string          `json:"state"`
+	// Progress is the Bridge's own object, stored as sent: step, message, a
+	// newer Bridge's message_code and message_params (the console words the
+	// code, server#224), done, total and a kind's own fields.
 	Progress  json.RawMessage `json:"progress"`
 	Result    json.RawMessage `json:"result"`
 	Error     string          `json:"error"`

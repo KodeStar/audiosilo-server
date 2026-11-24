@@ -2962,7 +2962,11 @@ export interface BridgeJob {
   /** The stored params could not be read; the server answers them as null. */
   params_unreadable?: boolean;
   state: BridgeJobState;
-  /** null when the stored progress is not JSON (a damaged row). */
+  /**
+   * The Bridge's own object, stored as sent: step, message, a newer Bridge's
+   * message_code and message_params (server#224, progressOf), done, total and a
+   * kind's own fields. null when the stored progress is not JSON (a damaged row).
+   */
   progress: Record<string, unknown> | null;
   /** null when the stored result is not JSON (a damaged row). */
   result: Record<string, unknown> | null;

@@ -220,18 +220,146 @@ export function jobGone(err: unknown): boolean {
 }
 
 /**
- * What a job's progress says, leniently: its message (else its step) and a
- * done/total count when both are numbers. Any kind's progress reads this way.
+ * The progress sentences this console words itself (server#224): the
+ * Bridge's phrase codes (its internal/jobs/phrases.go), each with the
+ * message_params its locale key bridge.progress.<code> fills in. A code not
+ * here (a newer Bridge's) shows the Bridge's English message instead.
  */
-export function progressOf(progress: unknown): { text?: string; done?: number; total?: number } {
+export const PROGRESS_CODES = {
+  starting: [],
+  finished: [],
+  engine_starting: [],
+  library_folder_wait: [],
+  book_folder_wait: [],
+  folder_wait: [],
+  book_lookup: [],
+  book_files_lookup: [],
+  mapping_wait: [],
+  earlier_job_wait: [],
+  engine_release_wait: [],
+  chapters_job_wait: [],
+  download_wait: [],
+  saving_sidecars: [],
+  saving_chapters: [],
+  saving_readalong: [],
+  saving_description: [],
+  rescan_them: [],
+  rescan_it: [],
+  describing: [],
+  describing_parked: [],
+  sharing: [],
+  sharing_parked: [],
+  shared: [],
+  finding_library: [],
+  comparing_files: [],
+  compared_files: [],
+  checking_writable: [],
+  holding: [],
+  reading_community_record: [],
+  filing_corrections: [],
+  filed: [],
+  reading_audible_places: [],
+  sending_places: [],
+  listing_audible_library: [],
+  listing_audible_preorders: [],
+  reading_library_books: [],
+  matching_titles: [],
+  reporting_titles: [],
+  adding_asins: [],
+  adding_asin: [],
+  server_slow_down: [],
+  copying_book: [],
+  reading_audible_title: [],
+  downloading_audible: [],
+  removing_drm: [],
+  indexing_book: [],
+  account_backup_wait: [],
+  renewing_license: [],
+  library_not_writable: ['library'],
+  checking_retained: [],
+  fetching_feed: [],
+  reading_feed: [],
+  checking_feed: [],
+  saving_show: [],
+  saving_show_changes: [],
+  indexing_show: [],
+  resolving_episode: [],
+  checking_episode_audio: [],
+  fetching_episode: [],
+  saving_episode: [],
+  indexing_episode: [],
+  downloading_section: ['section', 'sections'],
+  downloaded_archive: [],
+  downloading_cover: [],
+  earlier_fetch_wait: [],
+  reading_recording: [],
+  metadata_retrying: [],
+  placing_book: [],
+} as const satisfies Record<string, readonly string[]>;
+
+export type ProgressCode = keyof typeof PROGRESS_CODES;
+
+/** A progress sentence by its code, with the values its locale key fills in. */
+export interface ProgressSaid {
+  code: ProgressCode;
+  params: Record<string, string | number>;
+}
+
+/**
+ * The sentence a progress names by code, when this console knows the code and
+ * the progress carries every value it fills in (each a string or a finite
+ * number); undefined otherwise, and from an older Bridge, which sends none.
+ */
+function saidOf(p: Record<string, unknown>): ProgressSaid | undefined {
+  const code = text(p.message_code);
+  if (!code || !Object.hasOwn(PROGRESS_CODES, code)) return undefined;
+  const sent =
+    p.message_params && typeof p.message_params === 'object'
+      ? (p.message_params as Record<string, unknown>)
+      : {};
+  const params: Record<string, string | number> = {};
+  for (const name of PROGRESS_CODES[code as ProgressCode]) {
+    const v = typeof sent[name] === 'string' ? text(sent[name]) : num(sent[name]);
+    if (v === undefined) return undefined;
+    params[name] = v;
+  }
+  return { code: code as ProgressCode, params };
+}
+
+/**
+ * What a job's progress says, leniently: its message (else its step), the
+ * sentence it names by code (`said`, which the console words in the admin's
+ * language: progressText), and a done/total count when both are numbers. Any
+ * kind's progress reads this way.
+ */
+export function progressOf(progress: unknown): {
+  text?: string;
+  said?: ProgressSaid;
+  done?: number;
+  total?: number;
+} {
   if (!progress || typeof progress !== 'object') return {};
   const p = progress as Record<string, unknown>;
   const done = num(p.done);
   const total = num(p.total);
+  const said = saidOf(p);
   return {
     text: text(p.message) ?? text(p.step),
+    ...(said ? { said } : {}),
     ...(done !== undefined && total !== undefined && total > 0 ? { done, total } : {}),
   };
+}
+
+/**
+ * A progress's sentence as the console shows it: the coded sentence in the
+ * admin's language, else the Bridge's own text (an older Bridge's, or a code
+ * this console doesn't know).
+ */
+export function progressText(
+  t: Translate,
+  p: { text?: string; said?: ProgressSaid },
+): string | undefined {
+  return p.said ? t(`bridge.progress.${p.said.code}`, p.said.params) : p.text;
 }
 
 /**
@@ -256,7 +384,7 @@ export function listedProgress(
   if (isOpen(job.state)) return progressOf(job.progress);
   if (job.state !== 'failed' && job.state !== 'cancelled') return {};
   const p = progressOf(job.progress);
-  return p.text || p.total ? { ...p, last: true } : p;
+  return p.text || p.said || p.total ? { ...p, last: true } : p;
 }
 
 /** A result's facts the page words (bridge.verify's), each only when present. */
