@@ -3553,7 +3553,7 @@
   "bridge.progress.account_backup_wait": "In attesa che finisca l'altro backup di questo account",
   "bridge.progress.renewing_license": "Il link di download è scaduto: richiesta di una nuova licenza ad Audible",
   "bridge.progress.library_not_writable": "Richiede attenzione: la libreria {{library}} deve essere associata e scrivibile sulla Bridge: controlla la sua associazione nella scheda Status della Bridge.",
-  "bridge.progress.checking_retained": "Verifica degli episodi conservati",
+  "bridge.progress.checking_retained": "Controllo degli episodi conservati",
   "bridge.progress.fetching_feed": "Recupero del feed del podcast",
   "bridge.progress.reading_feed": "Lettura del feed del podcast",
   "bridge.progress.checking_feed": "Verifica del feed del podcast",
