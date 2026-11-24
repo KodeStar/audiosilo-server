@@ -245,7 +245,7 @@ func (a *API) handlePodcastRequestDismiss(w http.ResponseWriter, r *http.Request
 	case errors.Is(err, bridge.ErrNotFound):
 		writeErrorCode(w, 404, "request_not_found", "Follow request not found.")
 	case errors.Is(err, bridge.ErrRequestNotDismissable):
-		writeErrorCode(w, 409, "request_open", "Only a follow request that failed or was cancelled can be dismissed.")
+		writeErrorCode(w, 409, "request_open", "Only a failed or cancelled follow request can be dismissed, once it has settled.")
 	default:
 		a.writeCatalogError(w, err, "dismiss podcast request failed", "Could not dismiss the request.")
 	}
