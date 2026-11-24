@@ -4,12 +4,12 @@ import (
 	"math"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -328,7 +328,7 @@ func (m *matcher) matchTitle(it Item) (idx int, denied bool) {
 		m.byAuthor[na] = ap
 	}
 	q := match.Query{Title: it.Title, Author: it.Author, Series: it.Series}
-	if seq, err := strconv.ParseFloat(it.Sequence, 64); err == nil {
+	if seq, ok := sequenceNumber(it.Sequence); ok {
 		q.Sequence, q.HasSequence = seq, true
 	}
 	best := func(want bool) int {
@@ -342,6 +342,22 @@ func (m *matcher) matchTitle(it Item) (idx int, denied bool) {
 		return i, false
 	}
 	return -1, best(false) >= 0
+}
+
+// sequenceNumber reads an item's series sequence as the number a match compares:
+// a plain decimal ("2", "2.5"), as ABS writes one, finite and a position a book
+// may hold (metadata.ParseSeriesPosition, ValidSeriesPosition). ParseFloat's
+// other readings ("NaN", "Inf", "1e3", "0x1p3") are no position, and a range or
+// a lettered sequence ("1-3", "2b") gives none.
+func sequenceNumber(s string) (float64, bool) {
+	if s == "" || strings.Trim(s, "0123456789.") != "" || strings.Count(s, ".") > 1 {
+		return 0, false
+	}
+	v, end, ok := metadata.ParseSeriesPosition(s)
+	if !ok || end != 0 || !metadata.ValidSeriesPosition(v) {
+		return 0, false
+	}
+	return v, true
 }
 
 func boolIndex(b bool) int {
