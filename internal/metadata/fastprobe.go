@@ -411,8 +411,11 @@ func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
 		n   int
 		err error
 	}
+	// The file alone, not b: a read given up on keeps its goroutine, and that
+	// must not keep the blocks and big alive with it.
+	f := b.f
 	r, ok := await(b.ctx, b.stuck, func() res {
-		n, err := b.f.ReadAt(p, off)
+		n, err := f.ReadAt(p, off)
 		return res{n, err}
 	}, nil)
 	if !ok {
