@@ -141,6 +141,29 @@ func TestOptionsWordlessFallback(t *testing.T) {
 	if _, _, ok := BestWith(dune, Query{Author: "Frank Herbert", Title: "Dune (2021 Edition)", Series: "Dune Chronicles", Sequence: 2, HasSequence: true}, Options{}); ok {
 		t.Error("stated sequence 2: matched the numberless series-named book")
 	}
+	// Under the default options too, the series' words are no title evidence: a
+	// later volume's number in the title, or a box set's words, keep a query off
+	// the series-named first volume. A stated sequence agreeing still claims it.
+	expanse := []Book{{Author: "James S. A. Corey", Title: "The Expanse", Series: "Expanse", SeriesIndex: 1}}
+	for _, q := range []Query{
+		{Author: "James S. A. Corey", Title: "The Expanse 2", Series: "Expanse Saga"},
+		{Author: "James S. A. Corey", Title: "The Expanse Box Set", Series: "Expanse Collection"},
+		{Author: "James S. A. Corey", Title: "The Expanse: Books 1-3", Series: "Expanse Collection"},
+		{Author: "James S. A. Corey", Title: "The Expanse 1-3", Series: "Expanse Collection"},
+		{Author: "James S. A. Corey", Title: "The Expanse (1–3)", Series: "Expanse Collection"},
+	} {
+		if i, _, ok := BestWith(expanse, q, Options{}); ok {
+			t.Errorf("%q: matched book %d, want none", q.Title, i)
+		}
+	}
+	if _, _, ok := BestWith(expanse, Query{Author: "James S. A. Corey", Title: "The Expanse: Deluxe Edition", Series: "Expanse Saga", Sequence: 1, HasSequence: true}, Options{}); !ok {
+		t.Error("a stated sequence agreeing: no match")
+	}
+	for _, title := range []string{"The Expanse", "The Expanse (Unabridged)", "The Expanse (2021 Edition)"} {
+		if _, _, ok := BestWith(expanse, Query{Author: "James S. A. Corey", Title: title, Series: "Expanse Saga"}, Options{}); !ok {
+			t.Errorf("%q: no match, want the series-named book", title)
+		}
+	}
 	o := Options{WordlessFallback: true}
 	const articleLast = "Mayor of Noobtown, The"
 	if got := CleanTitle(articleLast, "Mayor of Noobtown"); got != "The" {

@@ -98,8 +98,9 @@ func seriesBookMarker(title, series string) (float64, bool) {
 
 // seriesOnly reports whether candidate i's title is just its own series name
 // (and number), which every volume of the series shares: Options.ExactTitle
-// never matches on it, and when the query states a number only its number may
-// agree.
+// never matches on it, when the query states a number only its number may
+// agree, and under the default options a query naming more than the series, or
+// a span of volumes ("1-3"), claims it only on an agreeing stated sequence.
 func (x *Index) seriesOnly(i int) bool {
 	return x.series(i).seriesTrim != "" && x.own(i).bare
 }

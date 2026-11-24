@@ -480,22 +480,39 @@ func (x *Index) BestScore(q Query) (int, float64, bool) {
 				score = scoreBareVol1
 			}
 		default:
-			if qHasSeq && (o.WordlessFallback || q.HasSequence) && x.seriesOnly(i) {
+			bToks := x.toks(i)
+			if x.seriesOnly(i) {
 				// CleanTitle can give a series-named candidate its title's words
 				// back, so token overlap is the series matching itself: like a bare
 				// pair, only its number (1 when it states none) may agree, or one
-				// numberless volume would absorb every later one. Under the default
-				// options only a stated sequence vetoes: a number read from the
-				// query's title can be a year ("Dune (2021 Edition)").
+				// numberless volume would absorb every later one.
 				bSeq, ok := x.seqRef(i)
 				if !ok {
 					bSeq = 1
 				}
-				if !seqEqual(bSeq, qSeq) {
+				vSeq, vOK := qSeq, qHasSeq
+				if !o.WordlessFallback && !q.HasSequence {
+					// Under the default options a number the query's title states
+					// vetoes only outside its brackets: "Dune (2021 Edition)" is no
+					// volume 2021, "The Mayor of Noobtown 2" is volume 2.
+					vSeq, vOK = SeqFromTitle(stripParenGroups(q.Title), q.Series)
+				}
+				if vOK && !seqEqual(bSeq, vSeq) {
+					continue
+				}
+				// A span of numbers in the query's title ("The Expanse 1-3", "(Books
+				// 1-3)") is a pack of volumes, never the candidate alone: its first
+				// number agreeing is no evidence either.
+				if !o.WordlessFallback && !q.HasSequence && titleSpan.MatchString(stripSeries(q.Title, q.Series)) {
+					continue
+				}
+				// A query naming more than the series ("The Expanse Box Set", "...:
+				// Books 1-3") is another book of it: as a wordy side of a bare pair,
+				// only its stated sequence agreeing may still claim the candidate.
+				if !o.WordlessFallback && intersect(qToks, bToks) < len(qToks) && !(q.HasSequence && seqEqual(bSeq, q.Sequence)) {
 					continue
 				}
 			}
-			bToks := x.toks(i)
 			score = tokenScore(qToks, bToks)
 			if sameSeries {
 				score += scoreSeriesAgree
@@ -787,6 +804,10 @@ func stripSeries(title, series string) string {
 	}
 	return t
 }
+
+// titleSpan is two numbers joined by a hyphen or an en dash in a title, a span
+// of volumes ("1-3", "1 – 3"); a digit run never starts or ends inside a word.
+var titleSpan = regexp.MustCompile(`(?:^|[^\p{L}\p{N}])\d{1,3}\s*[-–]\s*\d{1,3}(?:[^\p{L}\p{N}]|$)`)
 
 // SeqFromTitle extracts a series sequence from a title by stripping the series name
 // and taking the first remaining number - the sequence in titles like "… 3",
