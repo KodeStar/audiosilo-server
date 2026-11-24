@@ -587,7 +587,10 @@ func residualTitle(title, series string, o Options) string {
 		// judging the genre tail so an edition note cannot hide it.
 		t = stripParenGroups(t)
 	}
-	t = stripSeries(dropGenreSubtitle(t), series)
+	// The genre tail is judged before the series comes out (stripSeries takes the
+	// separator after it: "Dungeon Crawler Carl: A LitRPG Adventure") and again
+	// after, for a tail that names the series ("Mort: A Discworld Novel").
+	t = dropGenreSubtitle(stripSeries(dropGenreSubtitle(t), series))
 	t = stripMatchNoise(t)
 	t = replaceFluff(t)
 	return tidyTitle(t)

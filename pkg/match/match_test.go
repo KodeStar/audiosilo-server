@@ -581,3 +581,26 @@ func TestTitlesShareWord(t *testing.T) {
 		}
 	}
 }
+
+// TestResidualGenreTailNamingSeries: a genre tail that names the book's series
+// ("A Discworld Novel") is dropped once the series is out, as a plain one is.
+func TestResidualGenreTailNamingSeries(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ title, series, want string }{
+		{"Mort: A Discworld Novel", "Discworld", "Mort"},
+		{"Mort - A Discworld Novel", "Discworld", "Mort"},
+		{"Thrawn: A Star Wars Novel", "Star Wars", "Thrawn"},
+		{"Dungeon Crawler Carl: A LitRPG Adventure", "Dungeon Crawler Carl", ""},
+		{"Emergence: A Tale of Knights", "Dragon Heart", "Emergence: A Tale of Knights"},
+	} {
+		for _, o := range []Options{{}, ImportOptions()} {
+			if got := residualTitle(tc.title, tc.series, o); got != tc.want {
+				t.Errorf("residualTitle(%q, %q, %+v) = %q, want %q", tc.title, tc.series, o, got, tc.want)
+			}
+		}
+	}
+	books := []Book{{Author: "Terry Pratchett", Title: "Mort: A Discworld Novel", Series: "Discworld"}}
+	if _, score, ok := BestWith(books, Query{Author: "Terry Pratchett", Title: "Mort", Series: "Discworld"}, Options{}); !ok || score < 2.5 {
+		t.Errorf("Mort against its Discworld-novel title: score %v ok %v, want the full-title bonus", score, ok)
+	}
+}
