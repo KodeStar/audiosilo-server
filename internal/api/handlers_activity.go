@@ -329,17 +329,30 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 // handleActivityStats answers GET /admin/stats?range=: {"activity": ...}, the
 // Activity page for the period (7d, 30d, 90d, 1y or a calendar year) in server
 // time, without the Overview's figures (the console reads those from the plain
-// /admin/stats).
+// /admin/stats). &parts=listening answers the period's listening alone
+// (catalog.ListeningActivity: Year in listening, server#225).
 func (a *API) handleActivityStats(w http.ResponseWriter, r *http.Request) {
-	label, from, to, err := catalog.ParseActivityRange(r.URL.Query().Get("range"), time.Now(), time.Local)
-	if err == nil {
-		var activity *catalog.Activity
-		if activity, err = a.cat.ActivityFor(r.Context(), label, from, to, time.Local); err == nil {
-			writeJSON(w, http.StatusOK, map[string]any{"activity": activity})
-			return
-		}
+	parts := r.URL.Query().Get("parts")
+	if parts != "" && parts != "listening" {
+		writeError(w, http.StatusBadRequest, "parts must be listening")
+		return
 	}
-	a.writeCatalogError(w, err, "activity stats failed", "could not load activity")
+	label, from, to, err := catalog.ParseActivityRange(r.URL.Query().Get("range"), time.Now(), time.Local)
+	if err != nil {
+		a.writeCatalogError(w, err, "activity stats failed", "could not load activity")
+		return
+	}
+	var activity any
+	if parts == "listening" {
+		activity, err = a.cat.ListeningActivityFor(r.Context(), label, from, to, time.Local)
+	} else {
+		activity, err = a.cat.ActivityFor(r.Context(), label, from, to, time.Local)
+	}
+	if err != nil {
+		a.writeCatalogError(w, err, "activity stats failed", "could not load activity")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"activity": activity})
 }
 
 // handleListeningDays answers GET /admin/listening?range=&user_id=: listening per

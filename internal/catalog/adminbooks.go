@@ -723,6 +723,15 @@ type BookFacets struct {
 // tags, and the filter panel shows the most common.
 const maxLabelFacets = 100
 
+// CountBooks is BookFacets' total alone: how many books match f, with none of
+// the per-dimension counts (the Books screen's "N this week", server#225).
+func (c *Catalog) CountBooks(ctx context.Context, f BookFilter) (int, error) {
+	where, args := f.where("")
+	var n int
+	err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books b WHERE `+where, args...).Scan(&n)
+	return n, err
+}
+
 // BookFacets computes the facet counts for f.
 func (c *Catalog) BookFacets(ctx context.Context, f BookFilter) (*BookFacets, error) {
 	out := &BookFacets{}

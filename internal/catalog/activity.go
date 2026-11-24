@@ -19,6 +19,18 @@ import (
 // completion (from progress), the devices in use (from tokens) and the state of
 // the collection. Listening is bucketed in server time (loc).
 type Activity struct {
+	ListeningActivity
+	Funnel        Funnel         `json:"funnel"`
+	DropOffs      []DropOff      `json:"drop_offs"`
+	Growth        []GrowthPoint  `json:"growth"`
+	Storage       Storage        `json:"storage"`
+	Coverage      Coverage       `json:"coverage"`
+	InactiveUsers []InactiveUser `json:"inactive_users"`
+}
+
+// ListeningActivity is an Activity's listening, what ListeningActivityFor
+// answers alone (Year in listening, server#225).
+type ListeningActivity struct {
 	Period
 	Totals ActivityTotals `json:"totals"`
 	// Estimated is how much of Totals.Listened is an estimate (seconds): listening
@@ -37,15 +49,9 @@ type Activity struct {
 	TopAuthors     []TopPerson     `json:"top_authors"`
 	TopNarrators   []TopPerson     `json:"top_narrators"`
 	TopUsers       []TopUser       `json:"top_users"`
-	Funnel         Funnel          `json:"funnel"`
-	DropOffs       []DropOff       `json:"drop_offs"`
 	Playback       []PlaybackShare `json:"playback"`
 	PeakConcurrent Peak            `json:"peak_concurrent"`
 	Clients        []ClientCount   `json:"clients"`
-	Growth         []GrowthPoint   `json:"growth"`
-	Storage        Storage         `json:"storage"`
-	Coverage       Coverage        `json:"coverage"`
-	InactiveUsers  []InactiveUser  `json:"inactive_users"`
 }
 
 // Period labels a stats period (the Activity page, a person's stats): the range
@@ -101,6 +107,9 @@ type TopBook struct {
 	Author    string  `json:"author"`
 	Listened  float64 `json:"listened"`
 	Listeners int     `json:"listeners"`
+	// CoverVersion is the book's Book.CoverVersion (the cover's cache buster);
+	// omitted when the path is no indexed book (any more).
+	CoverVersion string `json:"cover_version,omitempty"`
 }
 
 // TopPerson is an author or narrator (the whole field value, as the Library
@@ -143,6 +152,8 @@ type DropOff struct {
 	Chapter      string `json:"chapter"`
 	Listeners    int    `json:"listeners"`
 	ScanError    bool   `json:"scan_error"`
+	// CoverVersion is the book's Book.CoverVersion (the cover's cache buster).
+	CoverVersion string `json:"cover_version,omitempty"`
 }
 
 // PlaybackShare is listening by how it played: direct or through the transcoder,
@@ -162,12 +173,21 @@ type Peak struct {
 
 // ClientCount is how many devices listened in the period with one app build (as
 // each session recorded it, so a later upgrade doesn't rewrite the past). App ""
-// is a client that never named itself (released before the header).
+// is a client that never named itself (released before the header); APIKey
+// sets apart the personal API keys among those (server#224), counted as one row
+// on the console's Activity only (listenAcc.splitKeys; never on /me/stats).
 type ClientCount struct {
 	App      string `json:"app"`
 	Version  string `json:"version"`
 	Platform string `json:"platform"`
+	APIKey   bool   `json:"api_key,omitempty"`
 	Devices  int    `json:"devices"`
+}
+
+// clientKey is a ClientCount's row: an app build, or an API key that named none.
+type clientKey struct {
+	Client
+	apiKey bool
 }
 
 // GrowthPoint is the number of books indexed now that had appeared on disk by
@@ -284,7 +304,7 @@ func (c *Catalog) listeningDays(ctx context.Context, label string, acc *listenAc
 // (server#225): two reader connections at most, the page in about the time of
 // the longer of the two. Each writes only its own fields of the answer.
 func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*Activity, error) {
-	out := &Activity{Period: periodOf(label, from, to, loc)}
+	out := &Activity{ListeningActivity: ListeningActivity{Period: periodOf(label, from, to, loc)}}
 	var stepsErr error
 	var stepsPanic string
 	var wg sync.WaitGroup
@@ -307,7 +327,7 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 			}
 		}
 	})
-	err := c.activityListening(ctx, out, from, to, loc)
+	err := c.activityListening(ctx, &out.ListeningActivity, from, to, loc)
 	wg.Wait()
 	if stepsPanic != "" {
 		panic(stepsPanic)
@@ -318,10 +338,22 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 	return out, nil
 }
 
+// ListeningActivityFor is ActivityFor without its steps over the library and
+// progress (funnel, drop-offs, growth, storage, coverage and inactive users):
+// the period's listening alone, what Year in listening shows (server#225).
+func (c *Catalog) ListeningActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*ListeningActivity, error) {
+	out := &ListeningActivity{Period: periodOf(label, from, to, loc)}
+	if err := c.activityListening(ctx, out, from, to, loc); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // activityListening is ActivityFor's listening: the period's, the totals of the
 // one before it, and the books finished in each.
-func (c *Catalog) activityListening(ctx context.Context, out *Activity, from, to time.Time, loc *time.Location) error {
+func (c *Catalog) activityListening(ctx context.Context, out *ListeningActivity, from, to time.Time, loc *time.Location) error {
 	cur := newListenAcc(from, to, loc, listenAll)
+	cur.splitKeys = true
 	prev, err := c.listenPeriods(ctx, cur)
 	if err != nil {
 		return err
@@ -374,6 +406,9 @@ type listenAcc struct {
 	// onlyUser keeps only this user's listening (0 = everyone's; a person's own
 	// stats build theirs with newUserListenAcc).
 	onlyUser int64
+	// splitKeys gives the API keys that name no app their own clients row
+	// (ClientCount.APIKey): set by the console's Activity only.
+	splitKeys bool
 
 	listened  float64
 	estimated float64 // the part of listened that is estimated (listening_daily.estimated)
@@ -385,7 +420,7 @@ type listenAcc struct {
 	users     map[int64]*userAcc
 	playback  map[playKey]*PlaybackShare
 	intervals [][2]time.Time
-	clients   map[Client]map[int64]bool // app build -> the devices (tokens) that listened with it
+	clients   map[clientKey]map[int64]bool // app build -> the devices (tokens) that listened with it
 	firstHour time.Time
 	endHour   time.Time // an hour starting at or after this is outside the period
 	firstDay  string
@@ -394,6 +429,7 @@ type listenAcc struct {
 
 type bookAcc struct {
 	title, author, narrator, series string
+	coverArt                        string // books.cover_art, for TopBook.CoverVersion
 	listened                        float64
 	listeners                       map[int64]bool
 }
@@ -416,7 +452,7 @@ func newListenAcc(from, to time.Time, loc *time.Location, level listenLevel) *li
 		from: from, to: to, loc: loc, level: level,
 		listeners: map[int64]bool{}, books: map[Ref]*bookAcc{}, days: map[string]map[int64]float64{},
 		users:    map[int64]*userAcc{},
-		playback: map[playKey]*PlaybackShare{}, clients: map[Client]map[int64]bool{},
+		playback: map[playKey]*PlaybackShare{}, clients: map[clientKey]map[int64]bool{},
 		firstHour: hourOf(f),
 		endHour:   to,
 		firstDay:  f.Format(time.DateOnly),
@@ -443,6 +479,7 @@ type listenRow struct {
 	ref                Ref
 	title, author, nar string
 	series             string
+	coverArt           string
 }
 
 // add credits secs of listening to a row on a local day (and, for a raw session,
@@ -452,7 +489,8 @@ func (a *listenAcc) add(r listenRow, day string, hour *time.Time, secs float64) 
 	a.listeners[r.user] = true
 	b := a.books[r.ref]
 	if b == nil {
-		b = &bookAcc{title: r.title, author: r.author, narrator: r.nar, series: r.series, listeners: map[int64]bool{}}
+		b = &bookAcc{title: r.title, author: r.author, narrator: r.nar, series: r.series, coverArt: r.coverArt,
+			listeners: map[int64]bool{}}
 		a.books[r.ref] = b
 	}
 	b.listened += secs
@@ -499,8 +537,9 @@ func (a *listenAcc) countSession(r listenRow, n int) {
 // listenRowColumns are the names a listening row shows (listenRowJoins supplies
 // them); listenRowBlanks stand in when only totals are wanted.
 const (
-	listenRowColumns = `u.username, COALESCE(b.title, ''), COALESCE(b.author, ''), COALESCE(b.narrator, ''), COALESCE(b.series, '')`
-	listenRowBlanks  = `'', '', '', '', ''`
+	listenRowColumns = `u.username, COALESCE(b.title, ''), COALESCE(b.author, ''), COALESCE(b.narrator, ''), COALESCE(b.series, ''),
+		COALESCE(b.cover_art, '')`
+	listenRowBlanks = `'', '', '', '', '', ''`
 )
 
 // listenRowJoins joins the user and the book of a listening table aliased t.
@@ -530,9 +569,11 @@ const (
 )
 
 func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
-	cols, joins := listenRowColumns, listenRowJoins("s")
+	cols, joins, apiKey := listenRowColumns, listenRowJoins("s"), "0"
 	if a.level < listenAll { // totals or days only: no names needed
 		cols, joins = listenRowBlanks, ""
+	} else if a.splitKeys { // sessionKeyDeviceSQL (on tokens t) is for the clients breakdown
+		joins, apiKey = joins+` LEFT JOIN tokens t ON t.id = s.token_id`, sessionKeyDeviceSQL
 	}
 	where, args := sessionsOfEveryone, []any{formatSessionTime(a.to), formatSessionTime(a.from)}
 	if a.onlyUser != 0 {
@@ -541,7 +582,7 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT s.user_id, s.library_id, s.rel_path, `+cols+`,
 		        s.started_at, s.last_at, s.listened, s.codec, s.transcoded,
-		        s.token_id, s.client_app, s.client_version, s.client_platform, s.backfilled
+		        s.token_id, s.client_app, s.client_version, s.client_platform, s.backfilled, `+apiKey+`
 		   FROM listening_sessions s `+joins+where, args...)
 	if err != nil {
 		return err
@@ -555,11 +596,11 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 			transcoded           bool
 			token                int64
 			client               Client
-			backfilled           bool
+			backfilled, apiKey   bool
 		)
-		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar, &r.series,
+		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar, &r.series, &r.coverArt,
 			&startS, &lastS, &listened, &codec, &transcoded, &token, &client.App, &client.Version,
-			&client.Platform, &backfilled); err != nil {
+			&client.Platform, &backfilled, &apiKey); err != nil {
 			return err
 		}
 		// A session backfilled from the players' spans never recorded its device,
@@ -570,10 +611,12 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 		}
 		a.addSession(r, parseSessionTime(startS), parseSessionTime(lastS), listened, mode)
 		if a.level == listenAll && !backfilled {
-			if a.clients[client] == nil {
-				a.clients[client] = map[int64]bool{}
+			// A key whose script names its app is counted by that name.
+			key := clientKey{Client: client, apiKey: apiKey && client.App == ""}
+			if a.clients[key] == nil {
+				a.clients[key] = map[int64]bool{}
 			}
-			a.clients[client][token] = true
+			a.clients[key][token] = true
 		}
 	}
 	return rows.Err()
@@ -640,7 +683,7 @@ func (c *Catalog) collectDays(ctx context.Context, a *listenAcc) error {
 			sessions  int
 			estimated bool
 		)
-		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar, &r.series,
+		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar, &r.series, &r.coverArt,
 			&day, &listened, &sessions, &estimated); err != nil {
 			return err
 		}
@@ -674,7 +717,7 @@ func bookCounts[V any](listened map[Ref]V, finished map[Ref]bool) (books, done i
 }
 
 // result writes the accumulated listening into out.
-func (a *listenAcc) result(out *Activity, finished finishedSet) {
+func (a *listenAcc) result(out *ListeningActivity, finished finishedSet) {
 	out.Totals = a.totals(finished)
 	out.Estimated = a.estimated
 	out.HourWeekday = a.hw
@@ -707,9 +750,13 @@ func (a *listenAcc) topBooks(keep func(Ref) bool) []TopBook {
 		out = append(out, TopBook{LibraryID: ref.LibraryID, Path: ref.Path, Title: b.title,
 			Author: b.author, Listened: b.listened, Listeners: len(b.listeners)})
 	}
-	return topN(out, func(x, y TopBook) int {
+	out = topN(out, func(x, y TopBook) int {
 		return cmp.Or(cmp.Compare(y.Listened, x.Listened), cmp.Compare(x.Title, y.Title), cmp.Compare(x.Path, y.Path))
 	})
+	for i := range out { // the kept few's only
+		out[i].CoverVersion = CoverVersion(a.books[Ref{LibraryID: out[i].LibraryID, Path: out[i].Path}].coverArt)
+	}
+	return out
 }
 
 func bookAuthor(b *bookAcc) string   { return b.author }
@@ -760,11 +807,12 @@ func (a *listenAcc) playbackList() []PlaybackShare {
 func (a *listenAcc) clientList() []ClientCount {
 	out := []ClientCount{}
 	for cl, devices := range a.clients {
-		out = append(out, ClientCount{App: cl.App, Version: cl.Version, Platform: cl.Platform, Devices: len(devices)})
+		out = append(out, ClientCount{App: cl.App, Version: cl.Version, Platform: cl.Platform, APIKey: cl.apiKey,
+			Devices: len(devices)})
 	}
 	slices.SortFunc(out, func(x, y ClientCount) int {
 		return cmp.Or(cmp.Compare(y.Devices, x.Devices), cmp.Compare(x.App, y.App),
-			cmp.Compare(x.Version, y.Version), cmp.Compare(x.Platform, y.Platform))
+			cmp.Compare(x.Version, y.Version), cmp.Compare(x.Platform, y.Platform), cmp.Compare(sqlBool(x.APIKey), sqlBool(y.APIKey)))
 	})
 	return out
 }
@@ -969,7 +1017,7 @@ type stalledBook struct {
 // unfinished, one entry per book.
 func (c *Catalog) stalledBooks(ctx context.Context, idle string) ([]*stalledBook, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT b.id, b.library_id, b.rel_path, b.title, b.scan_error <> '', p.position`+stalledWhere+`
+		`SELECT b.id, b.library_id, b.rel_path, b.title, b.scan_error <> '', b.cover_art, p.position`+stalledWhere+`
 		    AND b.id IN (`+stalledBookIDs+`) ORDER BY b.id`, idle)
 	if err != nil {
 		return nil, err
@@ -978,14 +1026,16 @@ func (c *Catalog) stalledBooks(ctx context.Context, idle string) ([]*stalledBook
 	var out []*stalledBook
 	for rows.Next() {
 		var (
-			id  int64
-			d   DropOff
-			pos float64
+			id       int64
+			d        DropOff
+			coverArt string
+			pos      float64
 		)
-		if err := rows.Scan(&id, &d.LibraryID, &d.Path, &d.Title, &d.ScanError, &pos); err != nil {
+		if err := rows.Scan(&id, &d.LibraryID, &d.Path, &d.Title, &d.ScanError, &coverArt, &pos); err != nil {
 			return nil, err
 		}
 		if len(out) == 0 || out[len(out)-1].bookID != id {
+			d.CoverVersion = CoverVersion(coverArt) // once a book, not once a listener
 			out = append(out, &stalledBook{bookID: id, drop: d})
 		}
 		last := out[len(out)-1]

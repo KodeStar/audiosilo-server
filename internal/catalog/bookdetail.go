@@ -35,6 +35,13 @@ type AdminBookDetail struct {
 	// sends back (catalog.SaveChapterEdit).
 	ChapterEdit  *ChapterEdit `json:"chapter_edit,omitempty"`
 	ChapterBasis ChapterBasis `json:"chapter_basis"`
+	// DormantRenames are the book's chapter renames (chapter_overrides) that
+	// rename no chapter it has now: made for a chapter at a file and start the
+	// files no longer have (re-encoded with moved marks, say). Each is kept and
+	// applies again if that chapter comes back (server#224). Omitted when there
+	// are none, and while an edited list applies (its titles are the edit's, so
+	// every rename waits; the edit's own notice says so).
+	DormantRenames []DormantRename `json:"dormant_renames,omitempty"`
 	// GeneratedChaptersFit: the book has a stored chapters.json (the chapters
 	// the Bridge found in the narration) that fits its files as they are now,
 	// so it stands in with no choice when the community's don't apply (true
@@ -67,6 +74,15 @@ type AdminBookDetail struct {
 type GeneratedDescription struct {
 	Text        string `json:"text"`
 	GeneratedAt string `json:"generated_at,omitempty"`
+}
+
+// DormantRename is a chapter rename waiting for its chapter: the file it is on
+// (relative to the book, "" for a single-file book's own file), the chapter's
+// start in seconds there, and the title it gives it.
+type DormantRename struct {
+	File  string  `json:"file"`
+	Start float64 `json:"start"`
+	Title string  `json:"title"`
 }
 
 // AdminChapter is a chapter with its edit state.
@@ -181,6 +197,19 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 	           chapters.file_path, chapters.start, chapters."end", chapters.book_offset
 	      FROM chapters WHERE chapters.book_id = ? ORDER BY chapters.idx`, d.ChapterSource, libraryID, relPath, bookID); err != nil {
 		return nil, err
+	}
+	if d.ChapterSource != ChaptersFromEdited {
+		if d.DormantRenames, err = queryRows(ctx, c.db, func(rows *sql.Rows, r *DormantRename) error {
+			var startMS int64
+			err := rows.Scan(&r.File, &startMS, &r.Title)
+			r.Start = float64(startMS) / 1000
+			return err
+		}, `SELECT co.file, co.start_ms, co.title FROM chapter_overrides co
+		     WHERE co.library_id = ? AND co.path = ?
+		       AND NOT EXISTS(SELECT 1 FROM chapters WHERE chapters.book_id = ? AND `+chapterOverrideMatch+`)
+		     ORDER BY co.file, co.start_ms`, libraryID, relPath, bookID); err != nil {
+			return nil, err
+		}
 	}
 	files := &Book{ID: bookID}
 	if err := c.loadFiles(ctx, files); err != nil {

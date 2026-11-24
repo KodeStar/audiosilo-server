@@ -84,7 +84,7 @@ function LiveSession({ s }: { s: ListeningSession }) {
   const chapter = chapterLabel(s, t);
   const rows: [string, React.ReactNode][] = [
     [t('live.device'), s.device_name || t('live.unnamed')],
-    [t('live.app'), clientName(s.client)],
+    [t('live.app'), clientName(s.client, s.api_key)],
     [
       t('live.playback'),
       watchDownload(s) ? (
@@ -99,7 +99,13 @@ function LiveSession({ s }: { s: ListeningSession }) {
   return (
     <article className="flex flex-wrap items-start gap-x-5 gap-y-4 rounded-xl border bg-card p-4">
       <Link {...bookRoute(s.library_id, s.path)} className="w-[88px] shrink-0" aria-label={title}>
-        <BookCover libraryId={s.library_id} path={s.path} title={title} size={160} />
+        <BookCover
+          libraryId={s.library_id}
+          path={s.path}
+          title={title}
+          size={160}
+          version={s.cover_version}
+        />
       </Link>
       <div className="flex min-w-[220px] flex-1 flex-col gap-1.5">
         <div className="flex flex-wrap items-center gap-2">

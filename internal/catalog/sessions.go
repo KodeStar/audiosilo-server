@@ -254,12 +254,19 @@ type Session struct {
 	DeviceID   int64   `json:"device_id"`
 	DeviceName string  `json:"device_name"`
 	Client     *Client `json:"client"`
-	StartedAt  string  `json:"started_at"`
-	LastAt     string  `json:"last_at"`
-	StartPos   float64 `json:"start_position"`
-	EndPos     float64 `json:"position"`
-	Duration   float64 `json:"duration"`
-	Speed      float64 `json:"speed"`
+	// APIKey: the device is a personal API key (its token's kind while the
+	// token is kept), whose DeviceName is the key's label: a script sends no
+	// app header, so the console names it from these (server#224).
+	APIKey bool `json:"api_key,omitempty"`
+	// CoverVersion is the book's Book.CoverVersion (the cover's cache buster);
+	// omitted when the path is no indexed book (any more).
+	CoverVersion string  `json:"cover_version,omitempty"`
+	StartedAt    string  `json:"started_at"`
+	LastAt       string  `json:"last_at"`
+	StartPos     float64 `json:"start_position"`
+	EndPos       float64 `json:"position"`
+	Duration     float64 `json:"duration"`
+	Speed        float64 `json:"speed"`
 	// Listened is wall-clock seconds of playback.
 	Listened   float64 `json:"listened"`
 	Codec      string  `json:"codec"`
@@ -288,7 +295,7 @@ const sessionColumns = `s.id, s.user_id, u.username, s.library_id, s.rel_path,
 	COALESCE(b.title, ''), COALESCE(b.author, ''), s.token_id, s.device_name,
 	s.client_app, s.client_version, s.client_platform, s.started_at, s.last_at,
 	s.start_pos, s.end_pos, s.duration, s.speed, s.listened, s.codec, s.transcoded, s.finished, s.backfilled,
-	s.import_id`
+	s.import_id, COALESCE(b.cover_art, ''), ` + sessionKeyDeviceSQL
 
 // listenedSQL keeps a session out of every list and total until it has recorded
 // some listening: a single save (a player's "mark finished", another app syncing
@@ -297,7 +304,13 @@ const listenedSQL = `s.listened > 0`
 
 const sessionFrom = ` FROM listening_sessions s
 	JOIN users u ON u.id = s.user_id
-	LEFT JOIN books b ON b.library_id = s.library_id AND b.rel_path = s.rel_path`
+	LEFT JOIN books b ON b.library_id = s.library_id AND b.rel_path = s.rel_path
+	LEFT JOIN tokens t ON t.id = s.token_id`
+
+// sessionKeyDeviceSQL is whether a session's device (tokens t, joined on its
+// token_id) is a personal API key, while its token is kept: auth.KindAPI, which
+// this package doesn't import.
+const sessionKeyDeviceSQL = `COALESCE(t.kind, '') = 'api'`
 
 // scanSession scans sessionColumns (plus extra destinations after them) and
 // derives the client and the state.
@@ -305,15 +318,17 @@ func (c *Catalog) scanSession(rows *sql.Rows, s *Session, extra ...any) error {
 	var (
 		cl       Client
 		importID int64
+		coverArt string
 	)
 	dest := []any{&s.ID, &s.UserID, &s.Username, &s.LibraryID, &s.Path, &s.Title, &s.Author,
 		&s.DeviceID, &s.DeviceName, &cl.App, &cl.Version, &cl.Platform, &s.StartedAt, &s.LastAt,
 		&s.StartPos, &s.EndPos, &s.Duration, &s.Speed, &s.Listened, &s.Codec, &s.Transcoded, &s.Finished,
-		&s.Backfilled, &importID}
+		&s.Backfilled, &importID, &coverArt, &s.APIKey}
 	if err := rows.Scan(append(dest, extra...)...); err != nil {
 		return err
 	}
 	s.Imported = importID > 0
+	s.CoverVersion = CoverVersion(coverArt)
 	if cl.App != "" {
 		s.Client = &cl
 	}
@@ -344,7 +359,6 @@ func (c *Catalog) LiveSessions(ctx context.Context) ([]Session, error) {
 	all, err := queryRows(ctx, c.db, func(rows *sql.Rows, l *live) error {
 		return c.scanSession(rows, &l.Session, &l.IP, &l.bookID)
 	}, `SELECT `+sessionColumns+`, COALESCE(t.last_ip, ''), COALESCE(b.id, 0)`+sessionFrom+`
-	      LEFT JOIN tokens t ON t.id = s.token_id
 	     WHERE s.last_at >= ? AND s.import_id = 0 ORDER BY s.last_at DESC, s.id DESC`,
 		formatSessionTime(c.now().Add(-SessionGap)))
 	if err != nil {

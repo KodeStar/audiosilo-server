@@ -23,7 +23,7 @@ import { GenerateStatus } from '@/features/bridge/generate-status';
 import { useBookGenerateJob, useBridgeLink } from '@/features/bridge/use-generate';
 import { DetectChaptersDialog } from '@/features/health/detect-chapters-dialog';
 import { toastError } from '@/lib/errors';
-import { formatClock, formatDateTime, formatDuration } from '@/lib/format';
+import { counted, formatClock, formatDateTime, formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -215,6 +215,26 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
             actions={revertButton}
           >
             {t('book.chapters.edit.dormantBody')} {editedBy}
+          </Notice>
+        ) : null}
+        {detail.dormant_renames?.length ? (
+          <Notice
+            tone="info"
+            icon={Info}
+            title={t('book.chapters.dormantRenames', counted(detail.dormant_renames.length, lang))}
+          >
+            <p>{t('book.chapters.dormantRenamesBody')}</p>
+            <ul className="mt-1.5 flex flex-col gap-0.5">
+              {detail.dormant_renames.map((r) => (
+                <li key={`${r.file}|${r.start}`} className="break-words">
+                  {t(r.file ? 'book.chapters.dormantRenameIn' : 'book.chapters.dormantRename', {
+                    title: r.title,
+                    time: formatClock(r.start),
+                    file: r.file,
+                  })}
+                </li>
+              ))}
+            </ul>
           </Notice>
         ) : null}
         {edited ? (

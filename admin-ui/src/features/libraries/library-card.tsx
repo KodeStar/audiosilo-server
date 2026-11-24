@@ -360,7 +360,7 @@ function FannedCovers({ library: l }: { library: AdminLibrary }) {
             transform: `rotate(${(k - (list.length - 1) / 2) * 4}deg)`,
           }}
         >
-          <BookCover libraryId={l.id} path={b.rel_path} title={b.title} />
+          <BookCover libraryId={l.id} path={b.rel_path} title={b.title} version={b.cover_version} />
         </div>
       ))}
     </div>

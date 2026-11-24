@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
 // Phase 3: the Health and Jobs endpoints.
@@ -699,4 +703,67 @@ func TestDuplicateGroupKeyAction(t *testing.T) {
 	action("DELETE", member, "A", key, 403)
 	action("DELETE", admin, "A", key, 204)
 	action("DELETE", admin, "A", key, 204) // retry after the selection disappeared
+}
+
+// A Re-read answered still_reading that then fails is a warning in the log
+// (the admin was told it goes on), unless the server's stop ended it or the
+// path holds no book: those are no failure.
+func TestLogLateReread(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	a := &API{log: slog.New(slog.NewTextHandler(&logs, nil))}
+	lib := &catalog.Library{ID: 7}
+	for _, tc := range []struct {
+		err  error
+		warn bool
+	}{
+		{nil, false},
+		{errors.Join(library.ErrStopping, context.Canceled), false},
+		{library.ErrNotIndexable, false},
+		{library.ErrOutsideRoot, false},
+		{errors.New("disk I/O error"), true},
+	} {
+		logs.Reset()
+		a.logLateReread(lib, "A/Book", tc.err)
+		if got := strings.Contains(logs.String(), "level=WARN"); got != tc.warn {
+			t.Errorf("err %v: warned = %v (%q), want %v", tc.err, got, logs.String(), tc.warn)
+		}
+	}
+}
+
+// TestStartReread: a Re-read on its own goroutine answers its request through
+// done, a panic in it as the read's failure rather than the server's end; one
+// its request left (the 202 still_reading) logs its own failure, counted in
+// rereads, so the log is written before WaitMediaCaches returns.
+func TestStartReread(t *testing.T) {
+	t.Parallel()
+	var logs syncBuffer
+	a := &API{log: slog.New(slog.NewTextHandler(&logs, nil))}
+	lib := &catalog.Library{ID: 7}
+
+	failed := errors.New("disk I/O error")
+	if err := <-a.startReread(lib, "A/Book", func() error { return failed }).done; !errors.Is(err, failed) {
+		t.Errorf("a failed read's answer = %v, want its error", err)
+	}
+	if err := <-a.startReread(lib, "A/Book", func() error { panic("boom") }).done; err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("a panicking read's answer = %v, want its panic as the failure", err)
+	}
+
+	hold := make(chan struct{})
+	rr := a.startReread(lib, "A/Slow", func() error { <-hold; return failed })
+	if !rr.leave() {
+		t.Fatal("a read still going was not left")
+	}
+	close(hold)
+	a.rereads.Wait()
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "A/Slow") {
+		t.Errorf("a left read's failure was not logged by the time rereads ended: %q", out)
+	}
+	if len(rr.done) != 0 {
+		t.Error("a left read sent its outcome to nobody")
+	}
+	ended := a.startReread(lib, "A/Quick", func() error { return nil })
+	if err := <-ended.done; err != nil || ended.leave() {
+		t.Errorf("an ended read: %v, left %v; want nil and not left", err, ended.leave())
+	}
 }

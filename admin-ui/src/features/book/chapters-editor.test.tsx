@@ -1368,4 +1368,32 @@ describe('an edited chapter list on the card', () => {
       screen.getByRole('button', { name: 'Rename chapter Prelude to the Stormlight Archive' }),
     ).toBeInTheDocument();
   });
+
+  it('lists the chapter renames waiting for their chapters (server#224)', async () => {
+    mockFetch(
+      routes(
+        bookDetail({
+          dormant_renames: [
+            { file: '', start: 1800, title: 'The Storm' },
+            { file: 'Part 2.m4b', start: 3725, title: 'Aftermath' },
+          ],
+        }),
+      ),
+    );
+    renderApp(URL);
+    expect(
+      await screen.findByText('2 chapter renames are waiting for their chapters'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('“The Storm” at 30:00')).toBeInTheDocument();
+    expect(screen.getByText('“Aftermath” at 1:02:05 in Part 2.m4b')).toBeInTheDocument();
+  });
+
+  it('says nothing of renames when none waits', async () => {
+    mockFetch(routes(bookDetail()));
+    renderApp(URL);
+    expect(
+      (await screen.findAllByRole('button', { name: /Rename chapter/ })).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/waiting for (its|their) chapter/)).toBeNull();
+  });
 });

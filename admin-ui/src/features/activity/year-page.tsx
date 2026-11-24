@@ -2,8 +2,8 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Sparkles } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
-import { keys, useActivity, useServerInfo } from '@/api/hooks';
-import type { Activity } from '@/api/types';
+import { keys, useListeningActivity, useServerInfo } from '@/api/hooks';
+import type { ListeningActivity } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { EmptyState } from '@/components/empty-state';
 import { Monogram } from '@/components/monogram';
@@ -26,9 +26,10 @@ export function YearPage() {
   const qc = useQueryClient();
   // With no year picked, the server's "year" (its current one, which the browser's
   // clock can be a day away from around New Year); its answer names it.
-  const activity = useActivity(search.year ? String(search.year) : 'year');
+  const activity = useListeningActivity(search.year ? String(search.year) : 'year');
   const thisYear =
-    Number(qc.getQueryData<Activity>(keys.activity('year'))?.range) || new Date().getFullYear();
+    Number(qc.getQueryData<ListeningActivity>(keys.listeningActivity('year'))?.range) ||
+    new Date().getFullYear();
   const year = search.year ?? thisYear;
   const years = recentYears(thisYear);
   if (!years.includes(year)) years.push(year);
@@ -84,7 +85,7 @@ export function YearPage() {
   );
 }
 
-function YearStory({ a, year, current }: { a: Activity; year: number; current: boolean }) {
+function YearStory({ a, year, current }: { a: ListeningActivity; year: number; current: boolean }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const server = useServerInfo();
@@ -135,6 +136,7 @@ function YearStory({ a, year, current }: { a: Activity; year: number; current: b
                     libraryId={top.library_id}
                     path={top.path}
                     title={top.title || top.path}
+                    version={top.cover_version}
                     className="shadow-cover"
                   />
                 </Link>
@@ -203,6 +205,7 @@ function YearStory({ a, year, current }: { a: Activity; year: number; current: b
                     path={b.path}
                     title={b.title || b.path}
                     size={160}
+                    version={b.cover_version}
                   />
                 </Link>
                 <span className="truncate text-[12.5px] font-semibold">{b.title || b.path}</span>

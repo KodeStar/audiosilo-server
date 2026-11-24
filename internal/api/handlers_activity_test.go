@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -269,6 +270,55 @@ func TestAdminEditProgressNeedsTheUsersAccess(t *testing.T) {
 	}
 }
 
+// The console's Activity counts the API keys that name no app as their own
+// clients row (api_key, server#224); the player's GET /me/stats keeps its clients
+// unsplit, with no api_key field (its Stable wire shape).
+func TestStatsClientsSplitAPIKeysForAdminOnly(t *testing.T) {
+	t.Parallel()
+	e := newActivityEnv(t)
+	_, key := e.mintAPIKey(t, e.playerTok, "script")
+	other, err := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "Old phone", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range []string{key, other} { // two devices, neither naming its app
+		for _, pos := range []string{"10", "20"} {
+			resp, body := e.do(t, "PUT", e.libPath()+"/progress?path="+url.QueryEscape(unsouled), tok,
+				`{"position":`+pos+`,"duration":120}`)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("progress save = %d %s", resp.StatusCode, body)
+			}
+		}
+	}
+
+	resp, body := e.do(t, "GET", "/api/v1/admin/stats?range=7d", e.console, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin stats = %d %s", resp.StatusCode, body)
+	}
+	var admin struct {
+		Activity catalog.Activity `json:"activity"`
+	}
+	decodeInto(t, body, &admin)
+	if want := []catalog.ClientCount{{Devices: 1}, {APIKey: true, Devices: 1}}; !reflect.DeepEqual(admin.Activity.Clients, want) {
+		t.Fatalf("admin clients = %+v, want %+v", admin.Activity.Clients, want)
+	}
+
+	resp, body = e.do(t, "GET", "/api/v1/me/stats?range=7d", e.playerTok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("my stats = %d %s", resp.StatusCode, body)
+	}
+	if strings.Contains(body, `"api_key"`) {
+		t.Fatalf("my stats carries api_key: %s", body)
+	}
+	var mine struct {
+		Stats catalog.UserStats `json:"stats"`
+	}
+	decodeInto(t, body, &mine)
+	if want := []catalog.ClientCount{{Devices: 2}}; !reflect.DeepEqual(mine.Stats.Clients, want) {
+		t.Fatalf("my clients = %+v, want %+v", mine.Stats.Clients, want)
+	}
+}
+
 func TestAdminStatsRange(t *testing.T) {
 	t.Parallel()
 	e := newActivityEnv(t)
@@ -299,6 +349,37 @@ func TestAdminStatsRange(t *testing.T) {
 	}
 	if resp, _ := e.do(t, "GET", "/api/v1/admin/stats?range=7d", e.memberTok, ""); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("member stats = %d, want 403", resp.StatusCode)
+	}
+
+	// &parts=listening (Year in listening, server#225): the same listening, and
+	// none of the steps over the library and progress, left out of the answer.
+	resp, slim := e.do(t, "GET", "/api/v1/admin/stats?range=7d&parts=listening", e.console, "")
+	var listening struct {
+		Activity map[string]json.RawMessage `json:"activity"`
+	}
+	if err := json.Unmarshal([]byte(slim), &listening); resp.StatusCode != http.StatusOK || err != nil {
+		t.Fatalf("parts=listening = %d %s (%v)", resp.StatusCode, slim, err)
+	}
+	_, fullBody := e.do(t, "GET", "/api/v1/admin/stats?range=7d", e.console, "")
+	full := map[string]json.RawMessage{}
+	_ = json.Unmarshal([]byte(fullBody), &struct {
+		Activity *map[string]json.RawMessage `json:"activity"`
+	}{&full})
+	for _, k := range []string{"funnel", "drop_offs", "growth", "storage", "coverage", "inactive_users"} {
+		if _, ok := listening.Activity[k]; ok {
+			t.Errorf("parts=listening carries %s: %s", k, slim)
+		}
+	}
+	for _, k := range []string{"range", "totals", "days", "hour_weekday", "top_books", "top_narrators", "top_users"} {
+		if got, ok := listening.Activity[k]; !ok || string(got) != string(full[k]) {
+			t.Errorf("parts=listening %s = %s, want the full answer's", k, got)
+		}
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/admin/stats?range=7d&parts=funnel", e.console, ""); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("parts=funnel = %d, want 400", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/admin/stats?range=7d&parts=listening", e.memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("member parts=listening = %d, want 403", resp.StatusCode)
 	}
 }
 

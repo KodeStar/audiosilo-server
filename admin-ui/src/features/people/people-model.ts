@@ -155,6 +155,8 @@ export interface CurrentBook {
   title: string;
   position: number;
   duration: number;
+  /** The book's cover_version (its cover's cache key). */
+  cover_version?: string;
   /** A live session (playing or paused in the last ten minutes) on some device. */
   live: boolean;
 }
