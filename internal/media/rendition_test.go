@@ -289,6 +289,25 @@ func TestQueueAndStatusOfTakeTheLook(t *testing.T) {
 	}
 }
 
+// TestWarmLooksOnce (server#359): a warm looks at each source once and hands
+// that look to StatusOf and the run's open. Not parallel: it swaps statBelow.
+func TestWarmLooksOnce(t *testing.T) {
+	m, runs := fakeRenditions(t, nil, func(out string) error { return os.WriteFile(out, []byte("m4a copy"), 0o600) })
+	src := srcFile(t, "a.mp3")
+	var looks atomic.Int32
+	was := statBelow
+	t.Cleanup(func() { statBelow = was })
+	statBelow = func(ctx context.Context, root, abs string, wait time.Duration) (fs.FileInfo, error) {
+		looks.Add(1)
+		return was(ctx, root, abs, wait)
+	}
+	m.WarmAll(context.Background(), "ffmpeg", filepath.Dir(src), []string{src})
+	m.Wait()
+	if n, r := looks.Load(), runs.Load(); n != 1 || r != 1 {
+		t.Fatalf("the warm stat'ed the source %d times over %d runs, want once and one run", n, r)
+	}
+}
+
 // TestRenditionQueueAndStatus: Status starts nothing; Queue starts a missing
 // file's encode and answers pending, then ready with its size; a refused file
 // is failed, remembered, and not queued again; a run that failed for another

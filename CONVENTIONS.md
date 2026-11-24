@@ -1678,7 +1678,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   neither the ebook nor the read-along, `warmRemux`'s answer: each would wait out its own `fileWait` on the same
   share, three of them the request's whole time). A file cache's run opens its source as a bounded look
   (`FileCache.openWait`, `sourceWait`), so a share that answered the stat but not the open frees the run's slot
-  rather than holding it and every run queued behind it; its own stats of the source (`Open`, `Status`, `RefusedFor`, a warm's first look; `Queue` and `StatusOf` take the caller's, the renditions list's one look per file, server#359) are
+  rather than holding it and every run queued behind it; its own stats of the source (`Open`, `Status`, `RefusedFor`, a warm's one look; `Queue` and `StatusOf` take the caller's, the renditions list's one look per file, and a warm hands its look to `StatusOf` and the run's open, server#359) are
   given a scan's look time (`media.sourceWait`), never none, so one on a share that stopped answering since never
   holds its mount's slot for good. A stream that waited on a remux gives its next look (the live transcode's it
   falls back to, or the stored file's open once the remux refused the file) at least `API.fileWait`

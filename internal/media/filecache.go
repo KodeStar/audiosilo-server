@@ -250,7 +250,7 @@ func (m *FileCache) Ext() string { return m.spec.ext }
 // given up on (metadata.GaveUp: a share that stopped answering, a transient
 // fault among them: transientGaveUp) or ctx's error as it is, never the file
 // gone. A request looks with it before asking the cache for the copy (Open, Status, RefusedFor), whose own stat of
-// the source then answers at once, as the share just did (Queue and StatusOf take that look and make none); that stat is given
+// the source then answers at once, as the share just did (Queue, StatusOf and a warm's open take that look and make none); that stat is given
 // sourceWait all the same, so one on a share that stopped answering since is
 // given up on rather than holding one of its mount's slots for good.
 func Source(ctx context.Context, root, abs string, wait time.Duration) (os.FileInfo, error) {
@@ -301,6 +301,12 @@ func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, root, abs stri
 	if err != nil {
 		return nil, "", err
 	}
+	return m.openOf(ctx, runCtx, ffmpegPath, root, abs, info)
+}
+
+// openOf is Open for a caller that has looked at abs itself (Source, a
+// warm's look): info is that look's, so the source isn't stat'ed again.
+func (m *FileCache) openOf(ctx, runCtx context.Context, ffmpegPath, root, abs string, info os.FileInfo) (*os.File, string, error) {
 	key := m.key(abs, info)
 	f, fl, err := m.begin(runCtx, ffmpegPath, key, root, abs, info, true)
 	if f != nil || err != nil {
@@ -535,7 +541,7 @@ func (m *FileCache) WarmAll(runCtx context.Context, ffmpegPath, root string, pat
 			if st, _, _ := m.StatusOf(abs, info); st == CacheReady {
 				continue
 			}
-			if f, _, err := m.Open(runCtx, runCtx, ffmpegPath, root, abs); err == nil {
+			if f, _, err := m.openOf(runCtx, runCtx, ffmpegPath, root, abs, info); err == nil {
 				f.Close()
 			}
 		}
