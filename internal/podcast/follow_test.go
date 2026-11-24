@@ -237,15 +237,20 @@ func TestImportDuplicatesPrivateGolden(t *testing.T) {
 		gotRaw, _ := json.MarshalIndent(got, "", "  ")
 		t.Fatalf("rows differ from the golden:\n%s", gotRaw)
 	}
+	// The private row went to the queue as private, with its secret, and the
+	// response never echoes it.
+	if len(q.requests) != 1 || !q.requests[0].Private || !strings.Contains(q.requests[0].FeedURL, "OPML_PRIVATE_CANARY_2C3") {
+		t.Fatalf("queue requests %+v", q.requests)
+	}
 	// A row's outline title goes to the queue with its request (fe#126); the
 	// queue keeps it only for a public feed (bridge.Subscribe).
 	if q.requests[0].Title != "Private" {
 		t.Fatalf("queue request title %q", q.requests[0].Title)
 	}
-	// The private row went to the queue as private, with its secret, and the
-	// response never echoes it.
-	if len(q.requests) != 1 || !q.requests[0].Private || !strings.Contains(q.requests[0].FeedURL, "OPML_PRIVATE_CANARY_2C3") {
-		t.Fatalf("queue requests %+v", q.requests)
+	// One bound for every title a request may carry, so an outline's comes
+	// back whole on its request row.
+	if bridge.MaxSubscribeTitleBytes != opml.MaxTitleBytes {
+		t.Fatalf("subscribe title bound %d, OPML title bound %d", bridge.MaxSubscribeTitleBytes, opml.MaxTitleBytes)
 	}
 	if out, _ := json.Marshal(got); strings.Contains(string(out), "OPML_PRIVATE_CANARY_2C3") || strings.Contains(string(out), "hosts") {
 		t.Fatal("the result echoes a raw URL")

@@ -14,6 +14,7 @@ import (
 // that title, cleaned to one line, never a private feed's; a title beside a
 // path is refused.
 func TestPodcastFollowRequestTitle(t *testing.T) {
+	t.Parallel()
 	b, _, _ := podcastEnv(t, false)
 	h := podcastHeaders()
 	follow := func(body string) (int, string) {
@@ -39,9 +40,10 @@ func TestPodcastFollowRequestTitle(t *testing.T) {
 }
 
 // DELETE /podcasts/requests/{id}: the caller's own failed request goes
-// (allowed); an open one is 409, another user's or a gone one 404, an old
-// client 403 (denied). It works with the module off.
+// (allowed); an open one is 409, another user's or a gone one 404, a demo
+// account or an old client 403 (denied). It works with the module off.
 func TestPodcastRequestDismiss(t *testing.T) {
+	t.Parallel()
 	b, uid, _ := podcastEnv(t, false)
 	h := podcastHeaders()
 	resp, out := b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"feed_url":"https://feeds.example.com/broken.xml"}`, b.lib.ID), h)
@@ -74,6 +76,8 @@ func TestPodcastRequestDismiss(t *testing.T) {
 
 	_, bobTok := newUserWithSession(t, b.testEnv, "bob", false)
 	dismiss(bobTok, h, 404, "request_not_found")
+	_, demoTok := newUserWithSession(t, b.testEnv, "demo-dismiss", true)
+	dismiss(demoTok, h, 403, "demo_account")
 	// The request's owner, from a player older than podcasts.
 	old, err := b.auth.IssueToken(context.Background(), uid, auth.KindSession, "old", 0)
 	if err != nil {
@@ -102,6 +106,7 @@ func TestPodcastRequestDismiss(t *testing.T) {
 // An OPML import's new public requests carry their outline's title (fe#126),
 // a request without one null; the rows themselves never echo the document.
 func TestOPMLImportRequestTitles(t *testing.T) {
+	t.Parallel()
 	b, _, _ := podcastEnv(t, false)
 	doc := `<?xml version="1.0" encoding="UTF-8"?><opml version="2.0"><body>` +
 		`<outline type="rss" text="Listed Show" xmlUrl="https://feeds.example.com/listed.xml"/>` +

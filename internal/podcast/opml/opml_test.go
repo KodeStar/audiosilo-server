@@ -95,6 +95,7 @@ func TestParseDuplicatesSample(t *testing.T) {
 // An outline's title is its title attribute, else its text, cleaned to one
 // line and cut to MaxTitleBytes; neither is "".
 func TestParseOutlineTitles(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("é", MaxTitleBytes)
 	doc, err := Parse([]byte(wrap(`<outline title=" Title&#10;Two " text="Text" xmlUrl="https://a.example/1"/>` +
 		`<outline title=" " text="Only text" xmlUrl="https://a.example/2"/>` +
