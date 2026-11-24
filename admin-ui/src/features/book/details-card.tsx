@@ -163,6 +163,11 @@ function FieldRow({
   const labels = isLabelField(field);
   // A label list's draft is its JSON (LabelInput's list), shown as chips.
   const chips = labels ? parseLabels(draft ?? value.value) : [];
+  // What a revert goes back to, for its hint: the Bridge's enrichment an edit
+  // hides (an ASIN or ISBN, which reads as community), else the scanned value
+  // and the layer it came from.
+  const revertTo = value.enrichment || value.scanned;
+  const revertSource = value.enrichment ? 'community' : (value.scanned_source ?? 'tag');
 
   // After Enter or Escape, keyboard focus goes back to the value.
   useEffect(() => {
@@ -270,9 +275,9 @@ function FieldRow({
             type="button"
             onClick={onRevert}
             title={
-              value.scanned
-                ? t(`book.revert.${value.scanned_source ?? 'tag'}Hint`, {
-                    value: quote(shownValue(t, field, value.scanned)),
+              revertTo
+                ? t(`book.revert.${revertSource}Hint`, {
+                    value: quote(shownValue(t, field, revertTo)),
                   })
                 : t('book.revert.noTag')
             }

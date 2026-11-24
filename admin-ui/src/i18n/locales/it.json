@@ -663,6 +663,7 @@
   "book.revert.tagHint": "Tag del file: {{value}}",
   "book.revert.absHint": "File di Audiobookshelf: {{value}}",
   "book.revert.pathHint": "Nomi di cartella e file: {{value}}",
+  "book.revert.communityHint": "Community: {{value}}",
   "book.revert.noTag": "Non impostato nel file",
   "book.revert.done": "{{field}} ripristinato dal file",
   "book.revert.doneBody": "Ora «{{value}}». Le scansioni seguono di nuovo il file.",

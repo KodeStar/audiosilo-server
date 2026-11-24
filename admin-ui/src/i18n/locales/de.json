@@ -640,6 +640,7 @@
   "book.revert.tagHint": "Datei-Tag: {{value}}",
   "book.revert.absHint": "Audiobookshelf-Datei: {{value}}",
   "book.revert.pathHint": "Ordner- und Dateinamen: {{value}}",
+  "book.revert.communityHint": "Community: {{value}}",
   "book.revert.noTag": "In der Datei nicht gesetzt",
   "book.revert.done": "{{field}} auf die Datei zurückgesetzt",
   "book.revert.doneBody": "Jetzt „{{value}}“. Neue Scans folgen wieder der Datei.",

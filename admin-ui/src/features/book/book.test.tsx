@@ -383,6 +383,14 @@ describe('book page', () => {
       scanned: 'Michael Kramer',
       locked: true,
     };
+    // An edit over the Bridge's enrichment goes back to it, not the scan.
+    detail.fields.asin = {
+      value: 'B000000002',
+      source: 'edited',
+      scanned: '',
+      enrichment: 'B000000001',
+      locked: true,
+    };
     mockFetch(routes(detail));
     renderApp(URL);
     expect(await screen.findByRole('button', { name: 'Revert Title to the file' })).toHaveAttribute(
@@ -396,6 +404,10 @@ describe('book page', () => {
     expect(screen.getByRole('button', { name: 'Revert Narrator to the file' })).toHaveAttribute(
       'title',
       'File tag: Michael Kramer',
+    );
+    expect(screen.getByRole('button', { name: 'Revert ASIN to the file' })).toHaveAttribute(
+      'title',
+      'Community: B000000001',
     );
   });
 

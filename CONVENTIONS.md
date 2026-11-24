@@ -2263,7 +2263,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Each field also carries
   `scanned_source` (`FieldValue.ScannedSource`: `tag`, `path` or `abs`, omitted with no scanned
   value), the scanned value's own source under an edit, so the console's Revert hint names the
-  layer it goes back to ("Audiobookshelf file: ..."). Revert = delete the
+  layer it goes back to ("Audiobookshelf file: ...", or "Community: ..." for the `enrichment` an edit
+  hides, which a revert restores over `scanned`). Revert = delete the
   override + `refreshEffective` (restores the scanned value, the ABS file's where it gives one; no
   reindex, no disk).
   **Audiobookshelf metadata.json** (`metadata/absfile.go`, `catalog/absfile.go`, migration `0046`):
