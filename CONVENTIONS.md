@@ -433,7 +433,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `generated.recap_summary` (always sent, false included: the player falls back to `recaps` only when
   it is absent, an older server) is true only when the summary itself did, so a community work with
   a summary alone (which `fillable` leaves the list to fill) keeps its summary credited to the
-  community beside a generated list. Out of scope for now: no cover remote-fallback, no tag-based ASIN extraction.
+  community beside a generated list. **Generated and shown** (the Regenerate label, server#218): a part
+  is generated here and shown when the book has it and `fillable` lets it in, characters, or recaps
+  with a recap list (a summary alone is no recaps, on either side). One rule, read two ways: the
+  console's `generateAction` from the estimate (`has.local[d] && !has.community[d]`: `local` is every
+  generated file, masked ones included, recaps only with a list, `catalog.BookAttachmentParts` and
+  `recapListExpr`, which `EarlierInSeries` shares; `community` is what `fillable` leaves unfilled,
+  `meta.Coverage`), the player's `generateOffer` from `/meta` (`generated.characters`, or
+  `generated.recaps` with a non-empty `recaps`); `TestGeneratedShownAgrees` pins the two together.
+  Out of scope for now: no cover remote-fallback, no tag-based ASIN extraction.
   **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
   each family (key `ordering_of || id`) into ONE rail whose top-level view is the
   MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so

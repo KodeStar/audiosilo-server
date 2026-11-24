@@ -72,6 +72,17 @@ func sigParts(sig string) metadata.AttachmentParts {
 	return p
 }
 
+// recapListExpr is whether col, a book_attachments recaps value (NULL from an
+// outer join), holds a recap list: the one meaning of "has generated recaps"
+// (BookAttachmentParts, EarlierInSeries). A file with only a whole-book summary
+// has none, as a community work with only a recap_summary has none on /meta.
+// The CASE keeps json_array_length (which fails the query on anything but
+// JSON) off an empty value and one that no longer decodes, which read as none,
+// as decodeAttachment reads them.
+func recapListExpr(col string) string {
+	return `COALESCE(CASE WHEN json_valid(` + col + `) THEN json_array_length(` + col + `, '$.recaps') > 0 END, 0)`
+}
+
 // attachmentsUncheckedExpr is a books row's Signature.AttachmentsUnchecked: a
 // book whose attachments weren't read since the columns existed (NULL), or were
 // read for another index of the row (an older server re-indexed it).
@@ -239,17 +250,21 @@ func (c *Catalog) BookAttachments(ctx context.Context, bookID int64, want metada
 	return a, nil
 }
 
-// BookAttachmentParts reports which generated parts book id has stored, without
-// reading them (the Bridge estimate's has.local). A stored column is a checked
-// file the server wrote, so a non-empty one is a part the book has.
+// BookAttachmentParts reports which generated parts book id has stored (the
+// Bridge estimate's has.local): every file the book has, including one the
+// community's own part masks on /meta. A stored column is a checked file the
+// server wrote, so a non-empty one is a part the book has, but recaps only
+// with a recap list (recapListExpr): a recaps.json holding only a whole-book
+// summary has no recaps, as /meta reads a community work (meta's fillable).
 // octet_length of a bare TEXT column comes from the record header, so the
-// values themselves (and their overflow pages) are never loaded, as comparing
-// each with an empty string would; the columns are NOT NULL text defaulting to
-// an empty string, so the two agree.
+// characters and description values (and their overflow pages) are never
+// loaded, as comparing each with an empty string would; the columns are NOT
+// NULL text defaulting to an empty string, so the two agree. The recaps value
+// is read, for this one book.
 func (c *Catalog) BookAttachmentParts(ctx context.Context, bookID int64) (metadata.AttachmentParts, error) {
 	var p metadata.AttachmentParts
 	err := c.db.QueryRowContext(ctx,
-		`SELECT octet_length(characters) > 0, octet_length(recaps) > 0, octet_length(description) > 0
+		`SELECT octet_length(characters) > 0, `+recapListExpr("recaps")+`, octet_length(description) > 0
 		   FROM book_attachments WHERE book_id = ?`, bookID).
 		Scan(&p.Characters, &p.Recaps, &p.Description)
 	if errors.Is(err, sql.ErrNoRows) {

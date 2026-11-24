@@ -383,3 +383,86 @@ func TestItemGenerated(t *testing.T) {
 		}
 	}
 }
+
+// TestGeneratedShownAgrees: the one rule for "a part is generated here and
+// shown" (the console's and the player's Regenerate, server#218) reads the same
+// from both answers: the estimate's has.local without has.community, and /meta's
+// work.generated with that list on the work. A generated file the community
+// masks counts in neither, and a recaps.json holding only a whole-book summary
+// is no recaps in either (has.local.recaps false; /meta serves the summary with
+// no list).
+func TestGeneratedShownAgrees(t *testing.T) {
+	t.Parallel()
+	const (
+		bare      = `{"id":"w","title":"Community Title","authors":[],"language":"en"}`
+		withChars = `{"id":"w","title":"Community Title","authors":[],"language":"en",
+			"characters":[{"id":"community-hero","name":"Hero","reveal":{"chapter":1}}]}`
+		withBoth = `{"id":"w","title":"Community Title","authors":[],"language":"en",
+			"characters":[{"id":"community-hero","name":"Hero","reveal":{"chapter":1}}],
+			"recaps":[{"through":{"chapter":1},"text":"Community recap."}]}`
+		summaryOnly = `{"id":"w","title":"Community Title","authors":[],"language":"en",
+			"recap_summary":{"in_short":"Community short."}}`
+	)
+	chars := &model.Characters{Work: "w", Characters: []model.Character{{ID: "gen", Name: "Gen", Reveal: model.Position{Chapter: 1}}}}
+	recaps := &model.Recaps{Work: "w", Recaps: []model.Recap{{Through: model.Position{Chapter: 1}, Text: "Gen recap."}}, InShort: "Gen short."}
+	summary := &model.Recaps{Work: "w", InShort: "Gen short.", Ending: "Gen ending."}
+	type shown struct{ characters, recaps bool }
+	for name, c := range map[string]struct {
+		work  string
+		files metadata.AttachmentFiles
+		want  shown
+	}{
+		"the community has both":            {withBoth, metadata.AttachmentFiles{Characters: chars, Recaps: recaps}, shown{}},
+		"masked characters alone":           {withChars, metadata.AttachmentFiles{Characters: chars}, shown{}},
+		"generated recaps beside community": {withChars, metadata.AttachmentFiles{Characters: chars, Recaps: recaps}, shown{recaps: true}},
+		"a generated summary alone":         {bare, metadata.AttachmentFiles{Recaps: summary}, shown{}},
+		"beside a community summary":        {summaryOnly, metadata.AttachmentFiles{Characters: chars, Recaps: recaps}, shown{true, true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := generatedMetaEnv(t, c.work)
+			b := newBridgeEnvOn(t, e)
+			ctx := context.Background()
+			book := &catalog.Book{LibraryID: b.lib.ID, RelPath: "A/Book", Title: "Book", Author: "A", ASIN: "B0BOOK", AddedAt: "2020-01-01"}
+			if _, err := e.cat.UpsertBook(ctx, book); err != nil {
+				t.Fatal(err)
+			}
+			var sig []string
+			if c.files.Characters != nil {
+				sig = append(sig, "characters.json:1:1")
+			}
+			if c.files.Recaps != nil {
+				sig = append(sig, "recaps.json:1:1")
+			}
+			if err := e.cat.SetAttachments(ctx, b.lib.ID, map[string]catalog.AttachmentsReading{
+				"A/Book": {Sig: strings.Join(sig, ","), Files: c.files}}); err != nil {
+				t.Fatal(err)
+			}
+			b.beatWith(t, true, true, sidecarsEstimates)
+
+			resp, est, body := b.estimate(t, b.adminTok, b.lib.ID, "A/Book")
+			if resp.StatusCode != http.StatusOK || est.Has.CommunityUnknown {
+				t.Fatalf("estimate: %d %s", resp.StatusCode, body)
+			}
+			byEstimate := shown{
+				characters: est.Has.Local.Characters && !est.Has.Community.Characters,
+				recaps:     est.Has.Local.Recaps && !est.Has.Community.Recaps,
+			}
+			g := getGenerated(t, e, b.lib.ID, "A/Book", "", b.adminTok)
+			var byMeta shown
+			if g.Work != nil && g.Work.Generated != nil {
+				byMeta = shown{
+					characters: g.Work.Generated.Characters && len(g.Work.Characters) > 0,
+					recaps:     g.Work.Generated.Recaps && len(g.Work.Recaps) > 0,
+				}
+			}
+			if byEstimate != c.want || byMeta != c.want {
+				t.Fatalf("shown by the estimate %+v, by /meta %+v, want %+v\nestimate %s\nmeta %s", byEstimate, byMeta, c.want, body, g.raw)
+			}
+			// The masked file still counts as the book's own (Write a description reads it).
+			if c.files.Characters != nil && !est.Has.Local.Characters {
+				t.Errorf("has.local lost the masked characters: %s", body)
+			}
+		})
+	}
+}

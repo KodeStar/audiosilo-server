@@ -154,7 +154,8 @@ func TestSetAttachmentsCompareAndSet(t *testing.T) {
 }
 
 // BookAttachments reads only the parts asked for (provenance always), and
-// BookAttachmentParts says which parts are stored without reading them.
+// BookAttachmentParts says which parts are stored, recaps only with a recap
+// list (a summary alone is no recaps).
 func TestBookAttachmentsParts(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -163,21 +164,28 @@ func TestBookAttachmentsParts(t *testing.T) {
 		Attachments: AttachmentsReading{Sig: "characters.json:1:1,recaps.json:1:1,description.json:1:1,bridge.json:1:1",
 			Files: metadata.AttachmentFiles{
 				Characters:  &model.Characters{Characters: []model.Character{{ID: "hero", Name: "Hero"}}},
-				Recaps:      &model.Recaps{InShort: "Short."},
+				Recaps:      &model.Recaps{Recaps: []model.Recap{{Text: "So far."}}, InShort: "Short."},
 				Description: &model.Description{Work: "w", Text: "A described book.", License: "CC-BY-SA-4.0"},
 				Provenance:  &metadata.AttachmentProvenance{Kind: "sidecars.generate"},
 			}}}
 	recapsOnly := Book{LibraryID: lib.ID, RelPath: "Recaps", Title: "Recaps", AddedAt: "2024-01-01T00:00:00Z",
 		Attachments: AttachmentsReading{Sig: "recaps.json:1:1",
-			Files: metadata.AttachmentFiles{Recaps: &model.Recaps{InShort: "Short."}}}}
+			Files: metadata.AttachmentFiles{Recaps: &model.Recaps{Recaps: []model.Recap{{Text: "So far."}}}}}}
+	summaryOnly := Book{LibraryID: lib.ID, RelPath: "Summary", Title: "Summary", AddedAt: "2024-01-01T00:00:00Z",
+		Attachments: AttachmentsReading{Sig: "characters.json:1:1,recaps.json:1:1",
+			Files: metadata.AttachmentFiles{
+				Characters: &model.Characters{Characters: []model.Character{{ID: "hero", Name: "Hero"}}},
+				Recaps:     &model.Recaps{InShort: "Short.", Ending: "Ends."},
+			}}}
 	none := Book{LibraryID: lib.ID, RelPath: "None", Title: "None", AddedAt: "2024-01-01T00:00:00Z"}
-	for _, b := range []*Book{&all, &recapsOnly, &none} {
+	for _, b := range []*Book{&all, &recapsOnly, &summaryOnly, &none} {
 		if _, err := c.UpsertBook(ctx, b); err != nil {
 			t.Fatal(err)
 		}
 	}
 	allID, _ := c.GetBookByPath(ctx, lib.ID, "All")
 	recapsID, _ := c.GetBookByPath(ctx, lib.ID, "Recaps")
+	summaryID, _ := c.GetBookByPath(ctx, lib.ID, "Summary")
 	noneID, _ := c.GetBookByPath(ctx, lib.ID, "None")
 
 	// The description alone: the characters and recaps stored beside it are never read.
@@ -190,12 +198,28 @@ func TestBookAttachmentsParts(t *testing.T) {
 		t.Fatalf("a part it lacks = %+v, %v", a, err)
 	}
 
+	// A recaps value that no longer decodes (a later server's, say) is none, never
+	// a failed read.
+	broken := Book{LibraryID: lib.ID, RelPath: "Broken", Title: "Broken", AddedAt: "2024-01-01T00:00:00Z",
+		Attachments: AttachmentsReading{Sig: "characters.json:1:1",
+			Files: metadata.AttachmentFiles{Characters: &model.Characters{Characters: []model.Character{{ID: "hero", Name: "Hero"}}}}}}
+	if _, err := c.UpsertBook(ctx, &broken); err != nil {
+		t.Fatal(err)
+	}
+	brokenID, _ := c.GetBookByPath(ctx, lib.ID, "Broken")
+	if _, err := c.db.ExecContext(ctx, `UPDATE book_attachments SET recaps = '{"recaps":[' WHERE book_id = ?`, brokenID.ID); err != nil {
+		t.Fatal(err)
+	}
+
 	for _, tc := range []struct {
 		id   int64
 		want metadata.AttachmentParts
 	}{
 		{allID.ID, metadata.AllAttachmentParts},
+		{brokenID.ID, metadata.AttachmentParts{Characters: true}},
 		{recapsID.ID, metadata.AttachmentParts{Recaps: true}},
+		// The summary is stored (/meta serves it), but it is no recap list.
+		{summaryID.ID, metadata.AttachmentParts{Characters: true}},
 		{noneID.ID, metadata.AttachmentParts{}},
 	} {
 		if got, err := c.BookAttachmentParts(ctx, tc.id); err != nil || got != tc.want {
