@@ -109,8 +109,9 @@ func (s *Scanner) EbookDigestNow(ctx context.Context, lib catalog.Library, idx c
 		if err != nil || idx.HashedSig == was || idx.HashedSig == sig {
 			break
 		}
-		current, err = liveSig()
-		if err != nil || current != sig {
+		// The file gone or changed since the hash (or its look given up on): the
+		// competing digest stands, and nothing failed to record.
+		if now, lerr := liveSig(); lerr != nil || now != sig {
 			break
 		}
 		was = idx.HashedSig
