@@ -1,6 +1,7 @@
 package fsaccess
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -22,11 +23,7 @@ const DirCheckTimeout = 5 * time.Second
 // CheckDirs performs the image's startup checks as the server user. A warning
 // is advisory. The launcher decides whether it can start with the given data.
 func CheckDirs(dataDir, backups string, dataChownFailed, backupChownFailed bool, out io.Writer) {
-	var table []mounts.Mount
-	if f, err := os.Open("/proc/self/mountinfo"); err == nil {
-		_ = mounts.Scan(f, func(m mounts.Mount) { table = append(table, m) })
-		_ = f.Close()
-	}
+	table, _ := mounts.Table() // a table cut short checks what it read
 	checkDirs(dataDir, backups, dataChownFailed, backupChownFailed, table, out, DirCheckTimeout)
 }
 
@@ -49,9 +46,10 @@ func checkDirs(dataDir, backups string, dataFailed, backupFailed bool, table []m
 	for _, m := range table {
 		visible[m.Point] = m
 	}
+	var checks []check
 	write := func(path string, chownFailed bool) {
 		ro := onReadOnlyMount(path, visible)
-		checkFolder(out, path, limit, func() string { return writeProblem(path, ro, chownFailed) })
+		checks = append(checks, startCheck(path, func() string { return writeProblem(path, ro, chownFailed) }))
 	}
 	write(data, dataFailed)
 	if backups != "" && backups != data {
@@ -64,8 +62,9 @@ func checkDirs(dataDir, backups string, dataFailed, backupFailed bool, table []m
 		// A nested directory is another app's mount, but an unreadable
 		// mounted config file matters even inside /data or on tmpfs.
 		filesOnly := mounts.Within(path, data) || !visible[path].ContentPath()
-		checkFolder(out, path, limit, func() string { return readMount(path, filesOnly) })
+		checks = append(checks, startCheck(path, func() string { return readMount(path, filesOnly) }))
 	}
+	report(out, checks, limit)
 }
 
 func onReadOnlyMount(path string, table map[string]mounts.Mount) bool {
@@ -124,18 +123,42 @@ func readMount(path string, filesOnly bool) string {
 	return ""
 }
 
-// A hard mount can hold any stat, open, read, write, removal or owner lookup.
-// Only the caller prints: a late result cannot print a second warning or hold
+// check is one folder's probe, running on a goroutine of its own.
+type check struct {
+	path string
+	done chan string // the warning ("" for none), sent once
+}
+
+func startCheck(path string, probe func() string) check {
+	c := check{path: path, done: make(chan string, 1)}
+	go func() { c.done <- probe() }()
+	return c
+}
+
+// report prints the checks' warnings in order. A hard mount can hold any stat,
+// open, read, write, removal or owner lookup, so the checks run at once and
+// share one limit: several dead shares hold the start for limit, not limit
+// each. Only report prints: a late result cannot print a second warning or hold
 // the server start. The short-lived checkdirs process exits after the checks.
-func checkFolder(out io.Writer, path string, limit time.Duration, probe func() string) {
-	done := make(chan string, 1)
-	go func() { done <- probe() }()
-	select {
-	case message := <-done:
-		if message != "" {
+func report(out io.Writer, checks []check, limit time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	for _, c := range checks {
+		message, answered := "", true
+		select {
+		case message = <-c.done: // an answer already in wins over a passed limit
+		default:
+			select {
+			case message = <-c.done:
+			case <-ctx.Done():
+				answered = false
+			}
+		}
+		switch {
+		case !answered:
+			_, _ = fmt.Fprintf(out, "audiosilo: WARNING: %s didn't answer within %v. Check the network share.\n", c.path, limit)
+		case message != "":
 			_, _ = fmt.Fprintln(out, "audiosilo: WARNING:", message)
 		}
-	case <-time.After(limit):
-		_, _ = fmt.Fprintf(out, "audiosilo: WARNING: %s didn't answer within %v. Check the network share.\n", path, limit)
 	}
 }

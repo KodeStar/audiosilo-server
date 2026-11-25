@@ -251,3 +251,7 @@ func unescape(s string) string {
 	}
 	return b.String()
 }
+
+// Table reads the mount table once, uncached (readTable): nil off Linux and
+// macOS, and nil with the error when it can't be read.
+func Table() ([]Mount, error) { return readTable() }

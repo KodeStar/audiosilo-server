@@ -74,16 +74,7 @@ func command(args []string, dataDir string, stdout, stderr io.Writer) (code int,
 	case len(args) == 1 && args[0] == "healthcheck":
 		return healthcheck(dataDir, stdout, stderr), true
 	case args[0] == "checkdirs":
-		flags := flag.NewFlagSet("checkdirs", flag.ContinueOnError)
-		flags.SetOutput(stderr)
-		dataFailed := flags.Bool("data-chown-failed", false, "the entrypoint could not change the data folder's owner")
-		backupFailed := flags.Bool("backups-chown-failed", false, "the entrypoint could not change the backups folder's owner")
-		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
-			_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] checkdirs")
-			return 2, true
-		}
-		fsaccess.CheckDirs(dataDir, configuredBackups(dataDir), *dataFailed, *backupFailed, stderr)
-		return 0, true
+		return checkDirs(args[1:], dataDir, stderr), true
 	case args[0] == "healthcheck":
 		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] healthcheck (flags go before the command)")
 		return 2, true
@@ -91,6 +82,21 @@ func command(args []string, dataDir string, stdout, stderr io.Writer) (code int,
 		_, _ = fmt.Fprintf(stderr, "audiosilo: unknown command %q (the commands are \"version\", \"reset-admin\", \"healthcheck\" and \"checkdirs\"; run with -h for the flags)\n", args[0])
 		return 2, true
 	}
+}
+
+// checkDirs runs the checkdirs command: the folder warnings on stderr, exit 0
+// whatever they say (they never hold the start), 2 when asked wrongly.
+func checkDirs(args []string, dataDir string, stderr io.Writer) int {
+	flags := flag.NewFlagSet("checkdirs", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	dataFailed := flags.Bool("data-chown-failed", false, "the entrypoint could not change the data folder's owner")
+	backupFailed := flags.Bool("backups-chown-failed", false, "the entrypoint could not change the backups folder's owner")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] checkdirs")
+		return 2
+	}
+	fsaccess.CheckDirs(dataDir, configuredBackups(dataDir), *dataFailed, *backupFailed, stderr)
+	return 0
 }
 
 // The root ownership pass is opt-in by environment only. The unprivileged

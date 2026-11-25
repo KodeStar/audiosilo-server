@@ -102,8 +102,20 @@ func TestFolderCheckTimeout(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	var out bytes.Buffer
-	checkFolder(&out, "/backups", time.Millisecond, func() string { <-release; return "late permission error" })
-	if got := out.String(); !strings.Contains(got, "/backups didn't answer") || strings.Contains(got, "owner") {
-		t.Errorf("hung backups check: %q", got)
+	hung := func() string { <-release; return "late permission error" }
+	checks := []check{
+		startCheck("/data", hung),
+		startCheck("/backups", hung),
+		startCheck("/books", func() string { return "/books refused" }),
+	}
+	start := time.Now()
+	report(&out, checks, 50*time.Millisecond)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("two hung checks held the start for %v, want one shared limit", elapsed)
+	}
+	got := out.String()
+	data, backups, books := strings.Index(got, "/data didn't answer"), strings.Index(got, "/backups didn't answer"), strings.Index(got, "/books refused")
+	if data < 0 || backups < data || books < backups || strings.Contains(got, "late permission error") {
+		t.Errorf("hung checks: %q", got)
 	}
 }
