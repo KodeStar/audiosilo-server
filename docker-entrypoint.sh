@@ -134,12 +134,14 @@ chown_folder() {
 }
 
 # Runs checkdirs behind the command prefix in "$@" (su-exec as the server user,
-# or nothing when the container already runs as it).
+# or nothing when the container already runs as it). Advisory only: under set -e
+# a check that could not run (a crash, a killed process) would otherwise end
+# this script before the server starts.
 check_folders() {
   set -- "$@" audiosilo --data "$DATA" checkdirs
   if [ -n "$DATA_CHOWN_FAILED" ]; then set -- "$@" --data-chown-failed; fi
   if [ -n "$BACKUPS_CHOWN_FAILED" ]; then set -- "$@" --backups-chown-failed; fi
-  "$@"
+  "$@" || true
 }
 
 # Ends the watcher BusyBox's timeout leaves behind each command for up to a second.
