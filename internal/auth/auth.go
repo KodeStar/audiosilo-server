@@ -95,8 +95,8 @@ var (
 	// from a bogus token.
 	ErrCodeExhausted = errors.New("invite has no uses left")
 	// ErrInviteUsedByDevice means this pairing token already gave this device a
-	// session and its one retry is spent, too late, or the session has ended or
-	// been used (replayInvite).
+	// session and its one retry is spent, too late, its invite has expired, or
+	// the session has ended or been used (replayInvite).
 	ErrInviteUsedByDevice = errors.New("invite already used by this device")
 	// ErrCodeExpired is returned by ConsumePairing when the parent invite
 	// expired between redeem and exchange.

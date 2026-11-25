@@ -24,7 +24,10 @@ type PairingSession struct {
 
 // ConsumePairing spends an unlinked token once, or claims one use on a linked
 // token's parent code. Only invite-derived exchanges with a random device key
-// can recover a lost answer (see replayInvite).
+// can recover a lost answer (see replayInvite). A linked token is never
+// revoked here (its code's cap and expiry govern it), and a token signed out,
+// or of an account disabled, since its read is refused before any use is
+// claimed (spendToken).
 func (s *Service) ConsumePairing(ctx context.Context, secret, deviceName, deviceID string) (PairingSession, error) {
 	hash := hashSecret(secret)
 	u, row, err := s.lookupToken(ctx, hash, KindPairing)
