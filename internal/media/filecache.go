@@ -357,6 +357,7 @@ func (m *FileCache) Cached(ctx context.Context, root, abs string) (*os.File, str
 		if m.spec.checkSource != nil {
 			src, err := m.openSourceForCopy(ctx, root, abs, info)
 			if err != nil {
+				m.remember(key, err)
 				return nil, "", err
 			}
 			src.Close()
@@ -581,17 +582,29 @@ func (m *FileCache) hit(key string) (*os.File, bool) {
 	return f, true
 }
 
+// remember keeps err for key when it is the file's refusal (ffmpeg's, or the
+// spec's source check), never a source that could not be opened (openFault):
+// the next look at that one answers for itself.
+func (m *FileCache) remember(key string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rememberLocked(key, err)
+}
+
+// rememberLocked is remember with mu held.
+func (m *FileCache) rememberLocked(key string, err error) {
+	if errors.Is(err, ErrRefused) && !errors.Is(err, ErrNoSource) {
+		m.failed.Add(key, m.now())
+	}
+}
+
 // lead runs key's copy of abs (info is what the key was made from) and
 // settles fl for every waiter.
 func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, root, abs string, info os.FileInfo, fl *cacheFlight) {
 	defer m.running.Done()
 	err := m.make(runCtx, ffmpegPath, key, root, abs, info)
 	m.mu.Lock()
-	// ffmpeg's refusal of the file, never a source that could not be opened
-	// (openFault): the next look at that one answers for itself.
-	if errors.Is(err, ErrRefused) && !errors.Is(err, ErrNoSource) {
-		m.failed.Add(key, m.now())
-	}
+	m.rememberLocked(key, err)
 	delete(m.inflight, key)
 	fl.err = err
 	m.mu.Unlock()

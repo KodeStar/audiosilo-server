@@ -276,6 +276,14 @@ func TestRemuxerRefusesOtherCodecs(t *testing.T) {
 	m, runs := countingRemuxer(t, nil)
 	m.freeSpace = func(string) (uint64, bool) { t.Error("checked disk space for AAC"); return 0, true }
 	ctx := context.Background()
+	// A HEAD's look (Cached) finds the codec too, and remembers the refusal
+	// as a run's would be, so the next request reads no header again.
+	if _, _, err := m.Cached(ctx, filepath.Dir(src), src); !errors.Is(err, ErrRefused) {
+		t.Fatalf("cached = %v, want ErrRefused", err)
+	}
+	if left := m.RefusedFor(filepath.Dir(src), src); left <= 0 {
+		t.Fatalf("refusal after a HEAD left %v, want it remembered", left)
+	}
 	for range 2 {
 		if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) {
 			t.Fatalf("open = %v, want ErrRefused", err)
