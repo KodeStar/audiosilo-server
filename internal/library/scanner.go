@@ -3236,21 +3236,20 @@ func (s *Scanner) WaitReads(wait context.Context) (left int) {
 		}
 	}
 	s.flightMu.Unlock()
-	for i, d := range done {
+	for _, d := range done {
 		select {
 		case <-d:
 		case <-wait.Done():
-			for _, d := range done[i:] {
-				select {
-				case <-d:
-				default:
-					left++
-				}
-			}
-			return left
 		}
 	}
-	return 0
+	for _, d := range done {
+		select {
+		case <-d:
+		default:
+			left++
+		}
+	}
+	return left
 }
 
 // endFlight ends flight f with its outcome, for its waiters.

@@ -473,11 +473,9 @@ const logRingSize = 2000
 
 // shutdownReadWait is how long shutdown waits, once the base context has
 // ended, for the book reads detached from their requests (a favourite's, a
-// Re-read's, an open's) before it closes the database without them. A read
-// the stop ended returns within ffprobe's kill grace (5 s); one held on a FUSE
-// share that stopped answering (its file's close waits for the share) may
-// never, and would hold the process until the share answers or a SIGKILL. It
-// is left to end on its own, writing nothing (library.Scanner.WaitReads).
+// Re-read's, an open's) before it closes the database without them: a read
+// the stop ended returns within ffprobe's kill grace (5 s), one held on a
+// share that stopped answering may never (see library.Scanner.WaitReads).
 const shutdownReadWait = 5 * time.Second
 
 // baseURL builds a best-effort browser base URL from config: the configured

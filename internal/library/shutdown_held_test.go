@@ -62,12 +62,15 @@ func TestWaitReadsLeavesAHeldRead(t *testing.T) {
 	stop() // the server stops
 	wait, cancelWait := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancelWait()
-	start := time.Now()
-	if left := s.WaitReads(wait); left != 1 {
-		t.Errorf("WaitReads left %d reads under way, want the held one", left)
-	}
-	if took := time.Since(start); took > testwait.Scaled(5*time.Second) {
-		t.Errorf("WaitReads took %v past its 100ms wait", took)
+	left := make(chan int, 1)
+	go func() { left <- s.WaitReads(wait) }()
+	select {
+	case n := <-left:
+		if n != 1 {
+			t.Errorf("WaitReads left %d reads under way, want the held one", n)
+		}
+	case <-time.After(testwait.Scaled(5 * time.Second)):
+		t.Fatal("WaitReads waited on the held read past its 100ms wait")
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
