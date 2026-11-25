@@ -82,6 +82,7 @@ jobs:
         with:
           context: .
           push: true
+          sbom: true
           platforms: linux/amd64,linux/arm64
           # VERSION is the semver on a tag, else dev-<short sha> (the metadata
           # version would be "edge" or a branch name). Keep comments out of
