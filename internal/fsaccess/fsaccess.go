@@ -45,9 +45,11 @@ func exists(p string) bool {
 // the fix when the system refused permission, or says to mount it read and
 // write when it is on a read-only mount.
 type Error struct {
-	Path  string // the folder or file refused
-	Write bool   // writing was refused (else reading)
-	Err   error  // the system's error
+	Path   string    // the folder or file refused
+	Write  bool      // writing was refused (else reading)
+	Err    error     // the system's error
+	Access *Identity // for permission failures
+	hint   string    // captured during the check, so formatting never stats a dead share
 }
 
 func (e *Error) Unwrap() error { return e.Err }
@@ -62,7 +64,7 @@ func (e *Error) Error() string {
 	case isReadOnly(e.Err):
 		msg += ". " + readOnlyHint
 	case errors.Is(e.Err, fs.ErrPermission):
-		msg += ". " + Hint(e.Path, e.Write)
+		msg += ". " + e.hint
 	}
 	return msg
 }
@@ -92,7 +94,13 @@ func Wrap(path string, write bool, err error) error {
 	if errors.As(err, &e) {
 		return err
 	}
-	return &Error{Path: path, Write: write, Err: err}
+	failure := &Error{Path: path, Write: write, Err: err}
+	if errors.Is(err, fs.ErrPermission) {
+		info, _ := os.Stat(path)
+		failure.Access = IdentityOf(info)
+		failure.hint = hint(info, write, failure.Access)
+	}
+	return failure
 }
 
 // IsPermission reports whether err is the system refusing the server: permission
@@ -116,50 +124,84 @@ func User() string {
 	return fmt.Sprintf("%d:%d", uid, gid)
 }
 
+// Identity is the server account and the owner of the folder it checked, in UID:GID form.
+type Identity struct {
+	ServerUser string `json:"server_user"`
+	Owner      string `json:"owner,omitempty"`
+}
+
+// IdentityOf uses the stat from the bounded folder check. When the folder
+// could not be reached, the server's own identity is still known on Unix.
+func IdentityOf(info fs.FileInfo) *Identity {
+	user := User()
+	if user == "" {
+		return nil
+	}
+	id := &Identity{ServerUser: user}
+	if uid, gid, ok := ownerOf(info); ok {
+		id.Owner = fmt.Sprintf("%d:%d", uid, gid)
+	}
+	return id
+}
+
+// Description names the accounts for a folder or file, when the OS supplies them.
+func (id *Identity) Description(noun string) string {
+	if id == nil {
+		return ""
+	}
+	text := "The server runs as user " + id.ServerUser
+	if id.Owner != "" {
+		text += " and the " + noun + " belongs to " + id.Owner
+	}
+	return text + "."
+}
+
 // Hint is the fix for a folder (or file) at path the server isn't allowed to
 // read or write: who the server runs as, who owns it, and, in a container, PUID
 // and PGID set to the owner (or, in one started with --user, the owner as that
 // user, as the entrypoint says). The path itself is the caller's to name (Error
 // does).
 func Hint(path string, write bool) string {
+	info, _ := os.Stat(path)
+	return hint(info, write, IdentityOf(info))
+}
+
+func hint(info fs.FileInfo, write bool, id *Identity) string {
 	access := "read"
 	if write {
 		access = "read and write"
 	}
 	noun := "folder"
-	if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
+	if info != nil && !info.IsDir() {
 		noun = "file"
 	}
-	user := User()
-	if user == "" {
+	if id == nil {
 		return fmt.Sprintf("Give the account the server runs as %s access to the %s.", access, noun)
 	}
+	user := id.ServerUser
 	give := fmt.Sprintf("give user %s %s access to the %s", user, access, noun)
 	giveFirst := "G" + give[1:] // the clause opening a sentence
 	var b strings.Builder
-	fmt.Fprintf(&b, "The server runs as user %s", user)
-	ouid, ogid, known := ownerOf(path)
-	uid, _ := running()
-	if known {
-		fmt.Fprintf(&b, " and the %s belongs to %d:%d", noun, ouid, ogid)
-	}
-	b.WriteString(". ")
+	b.WriteString(id.Description(noun))
+	b.WriteByte(' ')
+	ouid, ogid, known := strings.Cut(id.Owner, ":")
+	uid, _, _ := strings.Cut(user, ":")
 	switch {
 	case known && ouid == uid:
 		// The right owner: the mode refuses it.
 		fmt.Fprintf(&b, "%s (its permissions refuse it).", giveFirst)
-	case known && ouid == 0:
+	case known && ouid == "0":
 		// Never advise running the server as root.
 		fmt.Fprintf(&b, "%s, for example by making %s its owner on the host.", giveFirst, user)
 	case InContainer():
 		asUser := os.Getenv(EnvStartedAsUser) == "1"
 		switch {
 		case asUser && known:
-			fmt.Fprintf(&b, "Run the container as the %s's owner (user: \"%d:%d\"), or %s.", noun, ouid, ogid, give)
+			fmt.Fprintf(&b, "Run the container as the %s's owner (user: \"%s:%s\"), or %s.", noun, ouid, ogid, give)
 		case asUser:
 			fmt.Fprintf(&b, "Run the container as the %s's owner (user: in compose, --user with docker run), or %s.", noun, give)
 		case known:
-			fmt.Fprintf(&b, "Set PUID=%d and PGID=%d (the %s's owner) on the container, or %s.", ouid, ogid, noun, give)
+			fmt.Fprintf(&b, "Set PUID=%s and PGID=%s (the %s's owner) on the container, or %s.", ouid, ogid, noun, give)
 		default:
 			fmt.Fprintf(&b, "Set PUID and PGID on the container to the %s's owner, or %s.", noun, give)
 		}

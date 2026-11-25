@@ -140,7 +140,14 @@ describe('libraries', () => {
   it('celebrates the safety stop for a library whose folder is unreachable', async () => {
     mockFetch(
       routes({
-        'GET /admin/libraries': { body: { libraries: libraries([{}, { available: false }]) } },
+        'GET /admin/libraries': {
+          body: {
+            libraries: libraries([
+              {},
+              { available: false, folder_access: { server_user: '1000:1000', owner: '1026:100' } },
+            ]),
+          },
+        },
       }),
     );
     renderApp('/library/libraries');
@@ -149,6 +156,9 @@ describe('libraries', () => {
     expect(within(kids).getByText('Safety stop: nothing was deleted')).toBeInTheDocument();
     expect(within(kids).getByText(/can't read \/mnt\/nas\/kids/)).toBeInTheDocument();
     expect(within(kids).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(
+      within(kids).getByText(/The server runs as 1000:1000. The folder belongs to 1026:100/),
+    ).toBeVisible();
     // The shell says so too.
     expect(screen.getByText('Kids is offline')).toBeInTheDocument();
   });
@@ -157,13 +167,20 @@ describe('libraries', () => {
     mockFetch(
       routes({
         'GET /admin/libraries': {
-          body: { libraries: libraries([{}, { available: false, book_count: 0 }]) },
+          body: {
+            libraries: libraries([
+              {},
+              { available: false, book_count: 0, folder_access: { server_user: '1000:1000' } },
+            ]),
+          },
         },
       }),
     );
     renderApp('/library/libraries');
     const kids = await screen.findByRole('listitem', { name: 'Kids' });
     expect(within(kids).getByText("AudioSilo can't read this folder")).toBeInTheDocument();
+    expect(within(kids).getByText(/The server runs as 1000:1000/)).toBeVisible();
+    expect(within(kids).queryByText(/The folder belongs to/)).not.toBeInTheDocument();
     expect(within(kids).queryByText(/Safety stop/)).not.toBeInTheDocument();
   });
 
@@ -589,7 +606,11 @@ describe('libraries, review regressions', () => {
           if (path === '/mnt/locked') {
             return {
               status: 404,
-              body: { error: 'folder not found or not readable', code: 'folder_unreadable' },
+              body: {
+                error: 'folder not found or not readable',
+                code: 'folder_unreadable',
+                folder_access: { server_user: '1000:1000', owner: '1026:100' },
+              },
             };
           }
           return { body: { path: '/', dirs: [{ name: 'locked', path: '/mnt/locked' }] } };
@@ -602,7 +623,9 @@ describe('libraries, review regressions', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Add a library' });
     await user.click(within(dialog).getByRole('button', { name: 'Browse' }));
     await user.click(await within(dialog).findByRole('button', { name: 'locked' }));
-    expect(await within(dialog).findByText(/can't read it/)).toBeInTheDocument();
+    expect(
+      await within(dialog).findByText(/can't read it.*The folder belongs to 1026:100/),
+    ).toBeVisible();
     expect(
       within(dialog).getByText('locked', { selector: '[aria-current="location"]' }),
     ).toBeInTheDocument();

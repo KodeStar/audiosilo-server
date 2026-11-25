@@ -1,4 +1,5 @@
 import i18n, { type TFunction } from 'i18next';
+import type { FolderAccess } from '@/api/types';
 import { ApiError } from '@/api/client';
 import { toast } from './toast';
 
@@ -148,11 +149,23 @@ export function errorMessage(
       if (text) return text;
     }
     const key = err.code ? (byCode?.[err.code] ?? BY_CODE[err.code]) : undefined;
-    if (key) return t(key);
+    if (key) return t(key) + folderAccessText(err.folderAccess, t);
     if (err.status === 429) return t('auth.rateLimited');
     return err.message;
   }
   return t('auth.unreachable');
+}
+
+/** The server and folder owner identified by a bounded filesystem check. */
+export function folderAccessText(access: FolderAccess | undefined, t: TFunction): string {
+  if (!access?.server_user) return '';
+  return (
+    ' ' +
+    t(access.owner ? 'folders.access.owner' : 'folders.access.user', {
+      server_user: access.server_user,
+      owner: access.owner,
+    })
+  );
 }
 
 /** Toasts a failed action: what didn't happen, and why. */

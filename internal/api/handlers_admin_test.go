@@ -16,6 +16,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
@@ -60,10 +61,11 @@ func TestAdminLibrariesAvailability(t *testing.T) {
 	}
 	var out struct {
 		Libraries []struct {
-			ID        int64  `json:"id"`
-			Root      string `json:"root"`
-			BookCount *int   `json:"book_count"`
-			Available *bool  `json:"available"`
+			ID        int64              `json:"id"`
+			Root      string             `json:"root"`
+			BookCount *int               `json:"book_count"`
+			Available *bool              `json:"available"`
+			Access    *fsaccess.Identity `json:"folder_access"`
 		} `json:"libraries"`
 	}
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
@@ -78,10 +80,16 @@ func TestAdminLibrariesAvailability(t *testing.T) {
 		}
 		switch l.ID {
 		case main.ID:
+			if l.Access != nil {
+				t.Errorf("online library carried folder access: %+v", l.Access)
+			}
 			if !*l.Available || *l.BookCount == 0 {
 				t.Errorf("Main = available %v, %d books; want available with books", *l.Available, *l.BookCount)
 			}
 		case gone.ID:
+			if user := fsaccess.User(); user != "" && (l.Access == nil || l.Access.ServerUser != user || l.Access.Owner != "") {
+				t.Errorf("missing root: %+v", l.Access)
+			}
 			if *l.Available {
 				t.Error("a library whose root is missing reads as available")
 			}
@@ -97,6 +105,62 @@ func TestAdminLibrariesAvailability(t *testing.T) {
 
 	if resp, _ := e.do(t, "GET", "/api/v1/admin/libraries", memberTok, ""); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("non-admin GET /admin/libraries = %d, want 403", resp.StatusCode)
+	}
+}
+
+// An admin gets the accounts seen by the bounded root probe, picker and
+// setup preview. A listener cannot inspect server folder ownership.
+func TestAdminFolderAccess(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() <= 0 {
+		t.Skip("requires Unix permission checks as a non-root user")
+	}
+	e := newTestEnv(t)
+	admin, member, _ := adminAndMember(t, e)
+	root := t.TempDir()
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fsaccess.IdentityOf(info)
+	if err := os.Chmod(root, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
+	lib, err := e.cat.CreateLibrary(t.Context(), catalog.Library{Name: "Locked", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.api.scanner.Scan(t.Context(), *lib); !fsaccess.IsPermission(err) {
+		t.Fatalf("scan of locked folder: %v", err)
+	}
+	for _, c := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{"GET", "/api/v1/admin/libraries", "", 200},
+		{"GET", "/api/v1/admin/system", "", 200},
+		{"GET", "/api/v1/admin/fs/dirs?path=" + url.QueryEscape(root), "", 404},
+		{"POST", "/api/v1/admin/setup/preview", fmt.Sprintf(`{"root":%q}`, root), 404},
+	} {
+		resp, body := e.do(t, c.method, c.path, admin, c.body)
+		var got struct {
+			Access    *fsaccess.Identity `json:"folder_access"`
+			Libraries []adminLibrary     `json:"libraries"`
+		}
+		if resp.StatusCode != c.status || json.Unmarshal([]byte(body), &got) != nil {
+			t.Fatalf("%s: %d %s", c.path, resp.StatusCode, body)
+		}
+		if len(got.Libraries) == 1 {
+			got.Access = got.Libraries[0].FolderAccess
+		}
+		if got.Access == nil || want.Owner == "" || *got.Access != *want {
+			t.Errorf("%s: wanted %+v in %s", c.path, want, body)
+		}
+		resp, body = e.do(t, c.method, c.path, member, c.body)
+		if resp.StatusCode != 403 || strings.Contains(body, "folder_access") {
+			t.Errorf("member %s: %d %s", c.path, resp.StatusCode, body)
+		}
 	}
 }
 

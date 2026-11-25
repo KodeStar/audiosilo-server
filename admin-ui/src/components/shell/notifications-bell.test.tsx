@@ -77,6 +77,9 @@ describe('notifications bell', () => {
     await user.click(await screen.findByRole('button', { name: 'Notifications, 2 new' }));
     const popup = await screen.findByRole('dialog', { name: 'Notifications' });
     expect(await within(popup).findByText('A backup failed')).toBeInTheDocument();
+    const reason = within(popup).getByText(/Check that the mount allows writes/);
+    expect(reason).toHaveTextContent(/read and write access/);
+    expect(reason).not.toHaveTextContent(/PUID|PGID/);
     // Seen while open: no dot left behind.
     expect(localStorage.getItem('audiosilo_events_seen')).toBe('8');
   });

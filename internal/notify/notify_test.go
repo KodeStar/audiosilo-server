@@ -321,6 +321,7 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const detail = "The server runs as user 1000:1000 and the folder belongs to 1026:100."
 	finish := func(status string) {
 		id, err := cat.StartScanRun(ctx, lib.ID, "schedule", nil)
 		if err != nil {
@@ -329,7 +330,7 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 		if err := cat.FinishScanRun(ctx, id, status, catalog.ScanCounts{}, nil); err != nil {
 			t.Fatal(err)
 		}
-		s.ScanFinished(ctx, library.RunReport{Library: *lib, RunID: id, Status: status})
+		s.ScanFinished(ctx, library.RunReport{Library: *lib, RunID: id, Status: status, Detail: detail})
 	}
 	count := func() int {
 		s.Flush()
@@ -337,6 +338,9 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 		n := 0
 		for _, e := range events {
 			if e.Kind == KindLibraryUnavailable {
+				if e.Data["detail"] != detail || !strings.Contains(compose(e, Server{}).Text, detail) {
+					t.Fatalf("offline detail missing: %+v", e)
+				}
 				n++
 			}
 		}

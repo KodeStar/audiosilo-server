@@ -14,6 +14,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
@@ -755,9 +756,10 @@ func (a *API) handleEndKeys(w http.ResponseWriter, r *http.Request) {
 // list shows every library's state.
 type adminLibrary struct {
 	catalog.Library
-	BookCount int                  `json:"book_count"`
-	Available bool                 `json:"available"`
-	Scan      library.ScanProgress `json:"scan"`
+	FolderAccess *fsaccess.Identity   `json:"folder_access,omitempty"`
+	BookCount    int                  `json:"book_count"`
+	Available    bool                 `json:"available"`
+	Scan         library.ScanProgress `json:"scan"`
 	// The admin-only settings (off the player's library wire) and, with a schedule,
 	// when the next scheduled scan is due.
 	FromConfig     bool     `json:"from_config"`
@@ -788,7 +790,7 @@ func (a *API) adminLibraries(ctx context.Context) ([]adminLibrary, error) {
 	if err != nil {
 		return nil, err
 	}
-	available := a.scanner.RootsAvailable(libs, counts)
+	statuses := a.scanner.RootStatuses(libs, counts)
 	next, err := a.scanner.NextScans(ctx, libs)
 	if err != nil {
 		return nil, err
@@ -798,7 +800,8 @@ func (a *API) adminLibraries(ctx context.Context) ([]adminLibrary, error) {
 		out[i] = adminLibrary{
 			Library:        l,
 			BookCount:      counts[l.ID],
-			Available:      available[l.ID],
+			Available:      statuses[l.ID].Available,
+			FolderAccess:   statuses[l.ID].Access,
 			Scan:           a.scanner.Progress(l.ID),
 			FromConfig:     a.configLibrary(l.Name),
 			ScanSchedule:   l.ScanSchedule,
@@ -856,7 +859,15 @@ func writeFolderError(w http.ResponseWriter, err error) {
 		writeErrorCode(w, http.StatusBadRequest, codePathNotAbsolute, "path must be absolute")
 		return
 	}
-	writeErrorCode(w, http.StatusNotFound, codeFolderUnreadable, "folder not found or not readable")
+	access := fsaccess.IdentityOf(nil)
+	if e, ok := errors.AsType[*fsaccess.Error](err); ok && e.Access != nil {
+		access = e.Access
+	}
+	body := map[string]any{"error": "folder not found or not readable", "code": codeFolderUnreadable}
+	if access != nil {
+		body["folder_access"] = access
+	}
+	writeJSON(w, http.StatusNotFound, body)
 }
 
 // libraryRequest is the body of a library create or edit. The scan settings are

@@ -4,14 +4,13 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"io"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/pool"
 )
@@ -120,16 +119,8 @@ func CheckRoot(root string) (string, error) {
 		return "", ErrNotAbsolute
 	}
 	root = filepath.Clean(root)
-	f, err := os.Open(root)
-	if err != nil {
-		return "", ErrRootUnreadable
-	}
-	defer f.Close()
-	if info, err := f.Stat(); err != nil || !info.IsDir() {
-		return "", ErrRootUnreadable
-	}
-	if _, err := f.ReadDir(1); err != nil && !errors.Is(err, io.EOF) {
-		return "", ErrRootUnreadable
+	if err := fsaccess.CheckRead(root); err != nil {
+		return "", errors.Join(ErrRootUnreadable, err)
 	}
 	return root, nil
 }

@@ -198,6 +198,12 @@ func TestParseLine(t *testing.T) {
 	if want := (Mount{Point: "/mnt/My Books", FSType: "fuse.shfs", Device: "0:6"}); !ok || m != want {
 		t.Errorf("ParseLine = %+v %t, want %+v", m, ok, want)
 	}
+	for _, options := range []string{"ro - btrfs /dev/sda rw", "rw - btrfs /dev/sda ro"} {
+		m, ok := ParseLine(`9 1 0:6 / /data/tab\0117\134040 ` + options)
+		if !ok || !m.ReadOnly || m.Point != "/data/tab\t7\\040" {
+			t.Errorf("escaped read-only mount: %+v", m)
+		}
+	}
 	for _, bad := range []string{"not a mount line", "1 2 - ext4", "1 0 0:1 / / rw -"} {
 		if _, ok := ParseLine(bad); ok {
 			t.Errorf("ParseLine(%q) read a mount", bad)

@@ -8,9 +8,8 @@ import (
 )
 
 // owner is the uid and gid owning path (known false when it can't be read).
-func owner(path string) (uid, gid int, known bool) {
-	fi, err := os.Stat(path)
-	if err != nil {
+func owner(fi os.FileInfo) (uid, gid int, known bool) {
+	if fi == nil {
 		return 0, 0, false
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)

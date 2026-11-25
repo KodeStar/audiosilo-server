@@ -49,6 +49,14 @@ describe('describeEvent', () => {
     );
   });
 
+  it("keeps the offline scan's details and reads older events without them", () => {
+    const detail = 'The server runs as user 1000:1000 and the folder belongs to 1026:100.';
+    expect(describeEvent(ev('library_unavailable', { detail })).body?.values?.detail).toBe(
+      ' ' + detail,
+    );
+    expect(describeEvent(ev('library_unavailable', {})).body?.values?.detail).toBe('');
+  });
+
   it('joins a device and its app, and survives missing or odd data', () => {
     expect(
       describeEvent(ev('new_device', { user: 'sam', device: "Sam's iPhone", app: 'AudioSilo 1.4' }))

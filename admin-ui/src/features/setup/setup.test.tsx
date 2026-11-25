@@ -217,7 +217,11 @@ describe('the folder step', () => {
         {
           'POST /admin/setup/preview': {
             status: 404,
-            body: { error: 'folder not found or not readable', code: 'folder_unreadable' },
+            body: {
+              error: 'folder not found or not readable',
+              code: 'folder_unreadable',
+              folder_access: { server_user: '1000:1000', owner: '1026:100' },
+            },
           },
         },
       ),
@@ -230,6 +234,9 @@ describe('the folder step', () => {
       await screen.findByText(
         /\/Users\/me\/Audiobooks isn't there, isn't a folder, or the server can't read it\. In Docker/,
       ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/The server runs as 1000:1000. The folder belongs to 1026:100/),
     ).toBeVisible();
     // Nothing to name until a folder is found (ADMIN-06).
     expect(screen.queryByLabelText('Library name')).not.toBeInTheDocument();

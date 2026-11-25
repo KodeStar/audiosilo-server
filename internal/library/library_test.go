@@ -424,8 +424,19 @@ func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
 	// protection.
 	empty := *lib
 	empty.Root = t.TempDir()
-	if _, err := scanner.Scan(ctx, empty); !errors.Is(err, ErrLibraryUnavailable) {
+	res, err := scanner.Scan(ctx, empty)
+	if !errors.Is(err, ErrLibraryUnavailable) {
 		t.Fatalf("expected ErrLibraryUnavailable for empty root, got %v", err)
+	}
+	info, statErr := os.Stat(empty.Root)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if id := fsaccess.IdentityOf(info); id != nil {
+		detail := closingEvent(catalog.RunUnavailable, err, res).Detail
+		if !strings.Contains(detail, id.Description("folder")) {
+			t.Errorf("offline event lost the empty folder's owner: %s", detail)
+		}
 	}
 	if indexed() != 2 {
 		t.Fatalf("index was pruned despite empty root: %d remain", indexed())

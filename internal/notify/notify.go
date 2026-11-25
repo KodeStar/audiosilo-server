@@ -764,6 +764,9 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 	case KindLibraryUnavailable:
 		m.Title = str("library") + " is offline"
 		m.Text = "Its folder can't be read, so the scan stopped. Nothing was removed: books and progress are kept until it is back."
+		if detail := str("detail"); detail != "" {
+			m.Text += " " + detail
+		}
 		m.Link, m.Tags, m.Priority, m.Color = link("/library/libraries"), []string{"electric_plug"}, 4, colorWarn
 	case KindNewDevice:
 		m.Title = "New sign-in: " + str("user")
@@ -1138,7 +1141,7 @@ func (s *Service) ScanFinished(ctx context.Context, r library.RunReport) {
 			return
 		}
 		s.Emit(ctx, Event{Kind: KindLibraryUnavailable, Data: map[string]any{
-			"library": lib, "library_id": r.Library.ID,
+			"library": lib, "library_id": r.Library.ID, "detail": r.Detail,
 		}})
 	}
 }

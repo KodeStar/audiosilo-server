@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 )
 
 // The job queue: every library scan the server starts (on startup, on a schedule,
@@ -380,6 +381,13 @@ func closingEvent(status string, err error, res *ScanResult) catalog.RunEvent {
 		// The cause alone: the console words "stopped, nothing was removed" itself.
 		return newEvent("error", "unavailable", func(e *catalog.RunEvent) {
 			e.Detail = strings.TrimPrefix(err.Error(), ErrLibraryUnavailable.Error()+": ")
+			// A permission error already says who owns the folder. An empty,
+			// missing or unresponsive root can still name the accounts we know.
+			if failure, ok := errors.AsType[*fsaccess.Error](err); !ok || failure.Access == nil {
+				if detail := fsaccess.IdentityOf(res.rootInfo).Description("folder"); detail != "" {
+					e.Detail += ". " + detail
+				}
+			}
 		})
 	case catalog.RunCancelled, catalog.RunInterrupted:
 		return newEvent("warn", status, nil)

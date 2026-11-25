@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { FolderSearch, FolderOpen, LoaderCircle, TriangleAlert } from 'lucide-react';
+import { ApiError } from '@/api/client';
 import type { AdminLibrary, LibraryPreview } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Badge } from '@/components/ui/badge';
@@ -10,7 +11,7 @@ import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { ServerFolderPicker } from '@/features/libraries/library-form-dialog';
 import { describedBy } from '@/lib/a11y';
-import { errorMessage } from '@/lib/errors';
+import { errorMessage, folderAccessText } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { isAbsolutePath } from '@/lib/paths';
 import { defaultLibraryName, folderErrorKey, hasBookLibrary } from './setup-model';
@@ -118,7 +119,8 @@ export function FolderStep({
     inputError ??
     (queryError
       ? errorKey
-        ? t(errorKey, { root: checked })
+        ? t(errorKey, { root: checked }) +
+          folderAccessText(queryError instanceof ApiError ? queryError.folderAccess : undefined, t)
         : errorMessage(queryError, t)
       : undefined);
 

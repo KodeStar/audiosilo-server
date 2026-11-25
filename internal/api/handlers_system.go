@@ -138,11 +138,12 @@ type MetadataStatus struct {
 
 // LibraryStatus is a library root on Health > System.
 type LibraryStatus struct {
-	ID        int64         `json:"id"`
-	Name      string        `json:"name"`
-	Root      string        `json:"root"`
-	Available bool          `json:"available"`
-	Disk      *library.Disk `json:"disk"` // nil when the root doesn't answer
+	FolderAccess *fsaccess.Identity `json:"folder_access,omitempty"`
+	ID           int64              `json:"id"`
+	Name         string             `json:"name"`
+	Root         string             `json:"root"`
+	Available    bool               `json:"available"`
+	Disk         *library.Disk      `json:"disk"` // nil when the root doesn't answer
 }
 
 // TLSStatus is the server's TLS on Health > System.
@@ -201,7 +202,7 @@ func (a *API) handleSystem(w http.ResponseWriter, r *http.Request) {
 	roots := make([]LibraryStatus, 0, len(libs))
 	for _, l := range libs {
 		st := status[l.ID]
-		roots = append(roots, LibraryStatus{ID: l.ID, Name: l.Name, Root: l.Root, Available: st.Available, Disk: st.Disk})
+		roots = append(roots, LibraryStatus{ID: l.ID, Name: l.Name, Root: l.Root, Available: st.Available, Disk: st.Disk, FolderAccess: st.Access})
 	}
 
 	tlsStatus := TLSStatus{Mode: string(a.config().TLS.Mode), Hosts: append([]string{}, a.config().TLS.Hosts...),

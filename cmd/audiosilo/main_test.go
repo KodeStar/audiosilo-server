@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,8 @@ func TestCommand(t *testing.T) {
 	}{
 		{args: nil, code: 0, done: false},
 		{args: []string{"version"}, code: 0, done: true, out: "audiosilo dev\n"},
-		{args: []string{"foo"}, code: 2, done: true, errOut: `unknown command "foo" (the commands are "version", "reset-admin" and "healthcheck"`},
+		{args: []string{"foo"}, code: 2, done: true, errOut: `unknown command "foo" (the commands are "version", "reset-admin", "healthcheck" and "checkdirs"`},
+		{args: []string{"checkdirs", "extra"}, code: 2, done: true, errOut: "usage: audiosilo [--data <folder>] checkdirs"},
 		{args: []string{"version", "extra"}, code: 2, done: true, errOut: `"version" takes no arguments`},
 		{args: []string{"reset-admin", "a", "b"}, code: 2, done: true, errOut: "usage: audiosilo [--data <folder>] reset-admin [username]"},
 		{args: []string{"reset-admin", "--data", "/x"}, code: 2, done: true, errOut: "flags go before the command"},
@@ -42,6 +44,33 @@ func TestCommand(t *testing.T) {
 		if !strings.Contains(errOut.String(), tc.errOut) || (tc.errOut == "" && errOut.Len() > 0) {
 			t.Errorf("command(%q) stderr = %q, want %q", tc.args, errOut.String(), tc.errOut)
 		}
+	}
+}
+
+// An existing YAML setting overrides the default write probe, even when the
+// Docker-only opt-in for changing ownership was never set.
+func TestCheckDirsConfiguredBackups(t *testing.T) {
+	if os.Geteuid() <= 0 {
+		t.Skip("requires Unix permission checks as a non-root user")
+	}
+	t.Setenv("AUDIOSILO_BACKUP_DIR", "")
+	data := t.TempDir()
+	backups := t.TempDir()
+	if err := os.WriteFile(filepath.Join(data, "config.yaml"), []byte(fmt.Sprintf("backups:\n  dir: %q\n", backups)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(backups, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(backups, 0o700) })
+	var out, diagnostic bytes.Buffer
+	code, done := command([]string{"checkdirs"}, data, &out, &diagnostic)
+	if code != 0 || !done || !strings.Contains(diagnostic.String(), "can't write to "+backups) {
+		t.Fatalf("YAML backups probe: code %d, %q", code, diagnostic.String())
+	}
+	t.Setenv("AUDIOSILO_BACKUP_DIR", data)
+	if got := configuredBackups(data); got != data {
+		t.Fatalf("environment override: %q", got)
 	}
 }
 

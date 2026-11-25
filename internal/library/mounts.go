@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/mounts"
 )
@@ -19,15 +18,6 @@ import (
 
 // maxMountHints caps the hints.
 const maxMountHints = 20
-
-// pseudoFS are the filesystem types that never hold books.
-var pseudoFS = map[string]bool{
-	"proc": true, "sysfs": true, "devtmpfs": true, "devpts": true, "tmpfs": true, "ramfs": true,
-	"cgroup": true, "cgroup2": true, "mqueue": true, "securityfs": true, "debugfs": true,
-	"tracefs": true, "pstore": true, "bpf": true, "fusectl": true, "configfs": true,
-	"hugetlbfs": true, "autofs": true, "binfmt_misc": true, "nsfs": true, "rpc_pipefs": true,
-	"efivarfs": true, "selinuxfs": true, "squashfs": true, "overlay": true,
-}
 
 // MountHints are the mount points that may hold books (mountHints), [] off
 // Linux or when the mount table can't be read. exclude are folders never to
@@ -54,7 +44,7 @@ func mountHints(r io.Reader, exclude []string, isDir func(string) bool) []string
 	out := []string{}
 	_ = mounts.Scan(r, func(m mounts.Mount) { // a table cut short offers what it read
 		point := m.Point
-		if pseudoFS[m.FSType] || systemPath(point) || slices.Contains(out, point) {
+		if !m.ContentPath() || slices.Contains(out, point) {
 			return
 		}
 		if slices.ContainsFunc(exclude, func(e string) bool { return e != "" && filepath.Clean(e) == point }) {
@@ -69,21 +59,4 @@ func mountHints(r io.Reader, exclude []string, isDir func(string) bool) []string
 		out = out[:maxMountHints]
 	}
 	return out
-}
-
-// systemPath reports whether a mount point belongs to the system rather than to
-// anyone's books: the root itself, /proc, /sys, /tmp, anything under /dev, /run,
-// /etc, /boot or /snap (Docker binds /etc/hosts and friends). Under is by whole
-// segments: /devices or /snapshots is someone's folder.
-func systemPath(p string) bool {
-	switch p {
-	case "/", "/proc", "/sys", "/tmp", "/dev", "/run", "/boot", "/snap":
-		return true
-	}
-	for _, prefix := range []string{"/proc/", "/sys/", "/dev/", "/run/", "/etc/", "/boot/", "/snap/"} {
-		if strings.HasPrefix(p, prefix) {
-			return true
-		}
-	}
-	return false
 }

@@ -37,6 +37,7 @@ Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe),
 setup wizard** instead of the auto-admin banner - see below). Commands: `version`,
 `reset-admin [username]` (a new admin password, printed once: lost first-run password; flags go
 before the command, `audiosilo --data /data reset-admin`; see First-run setup in CONVENTIONS.md),
+`checkdirs` (the image's bounded startup checks for writable data and backups and readable mounts, run as the server user),
 `healthcheck` (`launcher.Healthcheck`: GET `/healthz` on the bind address and TLS mode `config.yaml` +
 env give, exit 0 on 200 or a 503 `"status":"starting"` (the launcher listens before the database
 opens, `server.StartGate` answering until the start is done, under the API's CORS policy (`api.CORS`) and with
