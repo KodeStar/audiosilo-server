@@ -734,7 +734,7 @@ func TestLogLateReread(t *testing.T) {
 // TestStartReread: a Re-read on its own goroutine answers its request through
 // done, a panic in it as the read's failure rather than the server's end; one
 // its request left (the 202 still_reading) logs its own failure, counted in
-// rereads, so the log is written before WaitMediaCaches returns.
+// bookReads, so the log is written before WaitMediaCaches returns.
 func TestStartReread(t *testing.T) {
 	t.Parallel()
 	var logs syncBuffer
@@ -757,7 +757,7 @@ func TestStartReread(t *testing.T) {
 	close(hold)
 	a.bookReads.Wait()
 	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "A/Slow") {
-		t.Errorf("a left read's failure was not logged by the time rereads ended: %q", out)
+		t.Errorf("a left read's failure was not logged by the time book reads ended: %q", out)
 	}
 	if len(rr.done) != 0 {
 		t.Error("a left read sent its outcome to nobody")

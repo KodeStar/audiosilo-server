@@ -3361,7 +3361,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `{"still_reading": true}` and goes on, so the console says it shows when done rather than meeting
   the timeout's bare 503: its looks keep `API.fileWait` but no wait cap, and another read of the book under way
   (a second click racing the first, a scan's) is waited on while it moves on, `WithUncappedWait`, then this one
-  reads the book itself, so a fix made between the clicks is picked up; counted in `API.rereads`,
+  reads the book itself, so a fix made between the clicks is picked up; counted in `API.bookReads`,
   which `WaitMediaCaches` waits for, and a failure after the 202 logged as a warning, server#224), `GET
   /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`
   (queue every library: `Scanner.EnqueueAll`, also the startup scans), `GET /admin/scan-runs`

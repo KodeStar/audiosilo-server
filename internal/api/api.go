@@ -450,8 +450,9 @@ func (a *API) renditionsOn() bool { return a.renditions != nil && a.ffmpeg != ""
 // to end (the launcher defers it, so once shutdown cancels the base context
 // their ffmpeg is killed and its .part removed before the process exits), and
 // for the cover thumbnails a console batch answered without (bounded reads),
-// so none records its colour after the database closed, and for the Re-reads
-// answered still_reading (ended by the base context too).
+// so none records its colour after the database closed, and for the detached
+// book reads (startBookRead: the Re-reads answered still_reading and the
+// favourites' reads, ended by the base context too).
 func (a *API) WaitMediaCaches() {
 	a.bookReadMu.Lock()
 	a.bookReadsClosed = true

@@ -556,10 +556,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// counted as added: the discs of one are one book added, not one each
 	// (PLAYER-08).
 	addedSplit := map[string]bool{}
-	// recordWrite counts a book written (err nil) or not, and logs its problem
-	// or the failure.
-	recordWrite := func(r *bookRead, err error) {
-		b := r.book
+	// recordWrite counts a book written (r.err nil) or not, and logs its
+	// problem or the failure.
+	recordWrite := func(r *bookRead) {
+		b, err := r.book, r.err
 		if r.reused {
 			return
 		}
@@ -618,7 +618,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		}
 		for _, r := range batch {
 			<-r.stored
-			recordWrite(r, r.err)
+			recordWrite(r)
 		}
 		clear(batch)
 		batch = batch[:0]
@@ -678,7 +678,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			if r.finished() {
 				r.drop(s)
 				if r.err == nil {
-					recordWrite(r, nil)
+					recordWrite(r)
 				}
 				continue
 			}
@@ -727,8 +727,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			lastLog = time.Now()
 		}
 		old, existed := sigs[b.RelPath]
-		if existed && old.MTime == b.MTime && old.Size == b.Size &&
-			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) && (!old.DurationStale || keptAsStored(old)) &&
+		if existed && sameFiles(b, old) && (!old.DurationStale || keptAsStored(old)) &&
 			((s.ffprobePath == "" && (old.ProbeUnsure || keptAsStored(old))) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
 			(old.CoverPath != "" || !b.CoverSeen || keptAsStored(old)) && !s.problemCleared(ctx, lib, old, slots) {
 			// Unchanged since last scan, its files in the order stored (a book
@@ -2820,10 +2819,15 @@ func (s *Scanner) openedSinceScan(lib catalog.Library, b *catalog.Book) bool {
 	return opened && root == lib.Root
 }
 
+// sameFiles reports whether discovery found book b's files as sig stored them:
+// the same mtime and size, and a folder's files in the stored order.
+func sameFiles(b *catalog.Book, sig catalog.Signature) bool {
+	return sig.MTime == b.MTime && sig.Size == b.Size && (!b.IsFolder || sig.FileOrder == catalog.FileOrderKey(b.Files))
+}
+
 func matchesOpenedBook(b *catalog.Book, sig catalog.Signature) bool {
 	return sig.IndexedAt != "" && sig.ScanError == "" && sig.ContentHash != "" && !sig.DurationStale &&
-		sig.MTime == b.MTime && sig.Size == b.Size && sig.IsFolder == b.IsFolder &&
-		(!b.IsFolder || sig.FileOrder == catalog.FileOrderKey(b.Files)) && sig.SplitParent == b.SplitParent &&
+		sameFiles(b, sig) && sig.IsFolder == b.IsFolder && sig.SplitParent == b.SplitParent &&
 		(!b.CoverSeen || sig.CoverPath != "") && sig.ABSSig == b.ABS.Sig && sig.AttachmentsSig == b.Attachments.Sig &&
 		sig.EbookSig == b.EbookFile.Sig && (!sig.ABSUnchecked || sig.ABSSig == "") &&
 		(!sig.AttachmentsUnchecked || sig.AttachmentsSig == "")
@@ -2946,7 +2950,7 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 	for {
 		f, lead := s.claimFlight(bookKey{lib.ID, book.RelPath}, nil)
 		if f == nil {
-			return nil, errors.Join(ErrStopping, context.Canceled)
+			return nil, errFlightStopping
 		}
 		if lead {
 			read := func() {
@@ -2974,6 +2978,9 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 // ErrStopping is an on-demand read's error when the server's stop
 // (SetBaseContext) ended it while its caller still waited.
 var ErrStopping = errors.New("library: the server is stopping")
+
+// errFlightStopping is claimFlight's refusal once the server is stopping.
+var errFlightStopping = errors.Join(ErrStopping, context.Canceled)
 
 // awaitFlight waits for flight f to end, then loads the book it stored; ctx's
 // error when ctx ends first, the flight's when it stored none. A caller that
@@ -3030,7 +3037,7 @@ func (s *Scanner) startFlight(ctx context.Context, key bookKey, scan *bookRead) 
 	for {
 		f, lead := s.claimFlight(key, scan)
 		if f == nil {
-			return nil, errors.Join(ErrStopping, context.Canceled)
+			return nil, errFlightStopping
 		}
 		if lead {
 			return f, nil
