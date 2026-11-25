@@ -112,8 +112,20 @@ func thumbnail(src []byte, size int, mode thumbnailMode) ([]byte, error) {
 	}
 	w, h := fitWithin(cfg.Width, cfg.Height, size)
 	keepICC := mode == storedCover && len(render.icc) > 0
-	if cmyk, ok := img.(*image.CMYK); ok && keepICC {
+	space := iccSpace(render.icc)
+	if cmyk, ok := img.(*image.CMYK); ok && keepICC && (space == "" || space == "CMYK") {
 		return encodeCMYKCover(cmyk, w, h, render.orientation, render.icc)
+	}
+	gray := cfg.ColorModel == color.GrayModel || cfg.ColorModel == color.Gray16Model
+	// A profile for other channels than the JPEG holds (a gray one on a gray
+	// PNG with alpha, drawn here as colour) is dropped: a viewer would reject
+	// it or draw wrong colours.
+	want := "RGB "
+	if gray {
+		want = "GRAY"
+	}
+	if keepICC && space != "" && space != want {
+		keepICC = false
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	op := draw.Src
@@ -126,7 +138,7 @@ func thumbnail(src []byte, size int, mode thumbnailMode) ([]byte, error) {
 	// factor, so a large downscale averages its source pixels instead of aliasing.
 	draw.BiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), op, nil)
 	pixels := orientCover(dst, render.orientation)
-	if keepICC && (cfg.ColorModel == color.GrayModel || cfg.ColorModel == color.Gray16Model) {
+	if keepICC && gray {
 		gray := image.NewGray(pixels.Bounds())
 		draw.Draw(gray, gray.Bounds(), pixels, image.Point{}, draw.Src)
 		pixels = gray
@@ -145,9 +157,28 @@ type jpegRendering struct {
 	uncertain   bool
 }
 
-// readJPEGRendering reads the display metadata before the image data.
+// iccSpace is the colour space ("RGB ", "GRAY", "CMYK") an ICC profile's
+// header names, read from its JPEG APP2 segments (marker, length,
+// "ICC_PROFILE\x00", sequence number and count, then the profile); "" when
+// the first segment is not the profile's first or names another space.
+func iccSpace(segments []byte) string {
+	const head = 2 + 2 + 12 + 2
+	if len(segments) < head+20 || segments[head-2] != 1 {
+		return ""
+	}
+	switch space := string(segments[head+16 : head+20]); space {
+	case "RGB ", "GRAY", "CMYK":
+		return space
+	}
+	return ""
+}
+
+// readJPEGRendering reads the display metadata before the image data. An EXIF
+// block it can't read leaves it uncertain but still reads on, so an ICC
+// profile after it is kept.
 func readJPEGRendering(src []byte) jpegRendering {
 	r := jpegRendering{uncertain: true}
+	badExif := false
 	for i := 2; i+4 <= len(src); {
 		if src[i] != 0xFF {
 			return r
@@ -158,7 +189,7 @@ func readJPEGRendering(src []byte) jpegRendering {
 			i++
 			continue
 		case marker == 0xDA || marker == 0xD9: // the image data, or its end
-			r.uncertain = false
+			r.uncertain = badExif
 			return r
 		case marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7): // no length
 			i += 2
@@ -172,12 +203,13 @@ func readJPEGRendering(src []byte) jpegRendering {
 		switch {
 		case marker == 0xE2 && len(seg) >= 14 && bytes.HasPrefix(seg, []byte("ICC_PROFILE\x00")):
 			r.icc = append(r.icc, src[i:i+2+n]...)
-		case marker == 0xE1 && len(seg) >= 6 && bytes.HasPrefix(seg, []byte("Exif\x00\x00")):
-			o, ok := exifOrientation(seg[6:])
-			if !ok {
-				return r
+		case marker == 0xE1 && len(seg) >= 6 && bytes.HasPrefix(seg, []byte("Exif\x00")):
+			// The pad byte after "Exif\x00" is 0 by the spec, 0xFF from some writers.
+			if o, ok := exifOrientation(seg[6:]); ok {
+				r.orientation = o
+			} else {
+				badExif = true
 			}
-			r.orientation = o
 		}
 		i += 2 + n
 	}
@@ -191,15 +223,26 @@ func orientCover(src image.Image, orientation int) image.Image {
 		return src
 	}
 	w, h := src.Bounds().Dx(), src.Bounds().Dy()
-	bounds := src.Bounds()
+	bounds := image.Rect(0, 0, w, h)
 	if orientation >= 5 {
 		bounds = image.Rect(0, 0, h, w)
 	}
-	var dst draw.Image
-	if _, ok := src.(*image.Gray); ok {
-		dst = image.NewGray(bounds)
+	// The pixels are moved as bytes (a stored cover is millions of them, and
+	// At boxes each one): a gray plane's one byte, else RGBA's four.
+	var spix, dpix []byte
+	var sstride, dstride, bpp int
+	var dst image.Image
+	if g, ok := src.(*image.Gray); ok {
+		d := image.NewGray(bounds)
+		spix, sstride, dpix, dstride, bpp, dst = g.Pix, g.Stride, d.Pix, d.Stride, 1, d
 	} else {
-		dst = image.NewRGBA(bounds)
+		s, ok := src.(*image.RGBA)
+		if !ok {
+			s = image.NewRGBA(image.Rect(0, 0, w, h))
+			draw.Draw(s, s.Bounds(), src, src.Bounds().Min, draw.Src)
+		}
+		d := image.NewRGBA(bounds)
+		spix, sstride, dpix, dstride, bpp, dst = s.Pix, s.Stride, d.Pix, d.Stride, 4, d
 	}
 	for y := range h {
 		for x := range w {
@@ -220,7 +263,8 @@ func orientCover(src image.Image, orientation int) image.Image {
 			case 8:
 				dx, dy = y, w-1-x
 			}
-			dst.Set(dx, dy, src.At(x, y))
+			at := dy*dstride + dx*bpp
+			copy(dpix[at:at+bpp], spix[y*sstride+x*bpp:])
 		}
 	}
 	return dst

@@ -362,6 +362,17 @@ func TestCoverOrientation(t *testing.T) {
 		if got.Rect.Dx() != tc.width || string(got.Pix) != tc.pixels {
 			t.Errorf("orientation %d: %v %q, want width %d and %q", tc.orientation, got.Rect, got.Pix, tc.width, tc.pixels)
 		}
+		// RGBA pixels move the same way, all four bytes together.
+		rgba := image.NewRGBA(img.Rect)
+		for i, c := range img.Pix {
+			copy(rgba.Pix[4*i:], []byte{c, c + 1, c + 2, 255})
+		}
+		turned := orientCover(rgba, tc.orientation).(*image.RGBA)
+		for i, c := range []byte(tc.pixels) {
+			if !bytes.Equal(turned.Pix[4*i:4*i+4], []byte{c, c + 1, c + 2, 255}) || turned.Rect.Dx() != tc.width {
+				t.Errorf("orientation %d: RGBA pixel %d = %v, want %q", tc.orientation, i, turned.Pix[4*i:4*i+4], c)
+			}
+		}
 	}
 }
 
@@ -420,5 +431,35 @@ func TestStoredWebPCoverKeepsOrientationAndProfile(t *testing.T) {
 	}
 	if w, h := decodedSize(t, out); w != 2 || h != 4 || !bytes.Contains(out, jpegProfile(profile)) {
 		t.Fatalf("stored WebP: %dx%d or missing profile", w, h)
+	}
+}
+
+// A stored cover keeps a profile only for the channels its JPEG holds, and an
+// EXIF block it can't read does not lose the profile after it.
+func TestStoredCoverProfileMatchesItsChannels(t *testing.T) {
+	t.Parallel()
+	profileOf := func(space string) []byte {
+		p := make([]byte, 128)
+		copy(p[16:], space)
+		return segment(0xE2, append([]byte("ICC_PROFILE\x00\x01\x01"), p...))
+	}
+	badExif := segment(0xE1, []byte("Exif\x00\x00XX\x00\x2a\x00\x00\x00\x08"))
+	for _, tc := range []struct {
+		name string
+		segs [][]byte
+		kept bool
+	}{
+		{"rgb", [][]byte{profileOf("RGB ")}, true},
+		{"gray on colour", [][]byte{profileOf("GRAY")}, false},
+		{"after a bad exif", [][]byte{badExif, profileOf("RGB ")}, true},
+	} {
+		icc := tc.segs[len(tc.segs)-1]
+		out, err := StoredCoverJPEG(jpegWith(encodeJPEG(t, 16, 8), tc.segs...), 8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w, h := decodedSize(t, out); w != 8 || h != 4 || bytes.Contains(out, icc) != tc.kept {
+			t.Errorf("%s: %dx%d, profile kept %v, want %v", tc.name, w, h, bytes.Contains(out, icc), tc.kept)
+		}
 	}
 }
