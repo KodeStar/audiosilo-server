@@ -96,6 +96,9 @@ func coverHost(t *testing.T) (*httptest.Server, []byte) {
 	}
 	turnedJPEG := turnedJPEGOver(turned.Bytes(), catalog.MaxCoverBytes)
 	mux.HandleFunc("/turned.jpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(turnedJPEG) })
+	// A small JPEG whose colour profile alone is larger than an upload may be.
+	profiledJPEG := profiledJPEGOver(turned.Bytes(), catalog.MaxCoverBytes)
+	mux.HandleFunc("/profiled.jpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(profiledJPEG) })
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, small
@@ -112,6 +115,25 @@ func turnedJPEGOver(jpg []byte, n int) []byte {
 	out = append(out, seg(0xE2, []byte("ICC_PROFILE\x00\x01\x01test profile"))...)
 	for len(out) <= n {
 		out = append(out, seg(0xFE, make([]byte, 65000))...)
+	}
+	return append(out, jpg[2:]...)
+}
+
+// profiledJPEGOver is jpg with an RGB colour profile in APP2 segments after
+// its start, the profile larger than n bytes.
+func profiledJPEGOver(jpg []byte, n int) []byte {
+	const chunk = 65000
+	count := n/chunk + 2
+	out := []byte{0xFF, 0xD8}
+	for i := range count {
+		payload := append([]byte("ICC_PROFILE\x00"), byte(i+1), byte(count))
+		body := make([]byte, chunk)
+		if i == 0 {
+			copy(body[16:], "RGB ")
+		}
+		payload = append(payload, body...)
+		out = append(out, binary.BigEndian.AppendUint16([]byte{0xFF, 0xE2}, uint16(len(payload)+2))...)
+		out = append(out, payload...)
 	}
 	return append(out, jpg[2:]...)
 }
@@ -265,6 +287,18 @@ func TestSetCommunityCover(t *testing.T) {
 	if cfg, format, err = image.DecodeConfig(bytes.NewReader(cv.Data)); err != nil || format != "jpeg" ||
 		cfg.Width != 240 || cfg.Height != 400 || !bytes.Contains(cv.Data, []byte("ICC_PROFILE\x00\x01\x01")) || len(cv.Data) > catalog.MaxCoverBytes {
 		t.Fatalf("turned cover stored as %s %dx%d, %d bytes (%v)", format, cfg.Width, cfg.Height, len(cv.Data), err)
+	}
+	// A profile that alone keeps the re-encode past the cap: kept without it,
+	// not refused as too large.
+	if code, body := set(adminTok, url, host.URL+"/profiled.jpg"); code != http.StatusOK {
+		t.Fatalf("set profiled = %d %s", code, body)
+	}
+	if cv, err = e.cat.Cover(ctx, libID, p); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, format, err = image.DecodeConfig(bytes.NewReader(cv.Data)); err != nil || format != "jpeg" ||
+		cfg.Width != 400 || bytes.Contains(cv.Data, []byte("ICC_PROFILE\x00")) || len(cv.Data) > catalog.MaxCoverBytes {
+		t.Fatalf("profiled cover stored as %s %dx%d, %d bytes (%v)", format, cfg.Width, cfg.Height, len(cv.Data), err)
 	}
 }
 

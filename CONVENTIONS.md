@@ -3138,6 +3138,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   custom cover through `saveCustomCover`, the upload's own path, once `keepableCover` has read its
   header (413 past `media.MaxThumbnailSourcePixels`), re-encoded within 1600 px first when it is
   over 5 MiB. The saved JPEG applies EXIF orientation to the pixels and retains the ICC profile
+  when it names the JPEG's channels (RGB, gray, CMYK) and the result still fits 5 MiB (else it is saved without one)
   (audited `book.cover_set`, `source: community`); 400 for a URL
   that isn't http(s), 502 `cover_unavailable`, 413/415 as an upload. Both 404 `metadata_off`
   while metadata is off (`metadataOff`). Tests swap the fetch through `API.fetchCover`.
