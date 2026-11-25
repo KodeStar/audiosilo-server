@@ -5017,8 +5017,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a private temp file. It opens mounted regular files for reading and lists mounted library folders.
   Each probe gets five seconds, including the owner lookup. A permission failure uses the same
   `fsaccess` explanation as startup, including `user:` under an explicit user and read-write mount
-  advice for a read-only filesystem. A timeout reports an unresponsive share. The explicit backups
-  folder's ownership steps are also bounded by the shell's five-second timeout. BusyBox's `timeout`
+  advice for a read-only filesystem. A timeout reports an unresponsive share. The data folder's own
+  chown and the explicit backups folder's ownership steps are also bounded by the shell's
+  five-second timeout; the walk of the data folder's contents (`audiosilo chowndata`,
+  `fsaccess.ChownTree`) is not, as a large folder may need longer, and is skipped when the data
+  folder's own chown timed out. BusyBox's `timeout`
   leaves a watcher behind each command: `reap_watchers` ends them before the hand-over, or each would
   stay a zombie under the server. `scripts/test-entrypoint.sh` (Docker) is its test, not run in CI.
 - **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):

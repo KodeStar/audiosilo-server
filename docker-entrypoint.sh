@@ -16,8 +16,10 @@
 # (server#368). It warns and carries on: the server's own start-up error says the
 # same about the data folder. The checks share one time limit
 # (fsaccess.DirCheckTimeout): a share whose server is gone is said not to answer,
-# and never holds the start. The root-only ownership steps below are each bounded
-# by $WAIT seconds for the same reason.
+# and never holds the start. The root-only ownership steps on the data folder
+# itself and on the backups folder are each bounded by $WAIT seconds for the
+# same reason; the walk of the data folder's contents is not (a large folder may
+# need longer), and is skipped when the data folder itself didn't answer.
 #
 # If the container is started with an explicit non-root user (docker `--user` /
 # compose `user:`), we skip the chown/drop, run the same checks and exec as that
@@ -103,8 +105,9 @@ chown_data() {
 
 # The status passed to checkdirs is about this folder alone. A failed chown
 # of a child (such as a mounted config file) says nothing about its parent.
+# Bounded: 124 or 143 (timeout's) is a folder that didn't answer.
 chown_folder() {
-  find "$1" -maxdepth 0 \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$RUN_AS" {} +
+  timeout "$WAIT" find "$1" -maxdepth 0 \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$RUN_AS" {} +
 }
 
 # Whether folder $1 is reached through no link, its own name included: root's
@@ -155,8 +158,12 @@ if [ "$(id -u)" = "0" ]; then
   BACKUPS=$(trim "${AUDIOSILO_BACKUP_DIR:-}")
   if ! usable_path "$BACKUPS"; then BACKUPS=""; fi
   if usable_path "$DATA"; then
-    chown_folder "$DATA" 2>/dev/null || DATA_CHOWN_FAILED=1
-    chown_data 2>/dev/null || true
+    rc=0
+    chown_folder "$DATA" 2>/dev/null || rc=$?
+    if [ "$rc" != 0 ]; then DATA_CHOWN_FAILED=1; fi
+    # A data folder that didn't answer in time isn't walked: the walk would hold
+    # the start on it.
+    case "$rc" in 124 | 143) ;; *) chown_data 2>/dev/null || true ;; esac
   fi
   if [ -n "$BACKUPS" ]; then
     # The folder and AudioSilo's own backup files in it, never the rest (it may be
