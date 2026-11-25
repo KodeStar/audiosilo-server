@@ -2,6 +2,7 @@ package media
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"golang.org/x/image/bmp"
 )
 
@@ -283,7 +285,7 @@ func TestFitWithin(t *testing.T) {
 	}
 }
 
-// Every type coverMIME accepts as art must decode: a BMP cover (old ID3 tags)
+// Every type metadata.CoverMIME accepts as art must decode: a BMP cover (old ID3 tags)
 // would otherwise have has_cover set yet never a thumbnail.
 func TestThumbnailDecodesBMP(t *testing.T) {
 	t.Parallel()
@@ -292,8 +294,8 @@ func TestThumbnailDecodesBMP(t *testing.T) {
 	if err := bmp.Encode(&buf, img); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := coverMIME(buf.Bytes()); !ok {
-		t.Fatal("coverMIME refused a BMP")
+	if _, ok := metadata.CoverMIME(buf.Bytes()); !ok {
+		t.Fatal("metadata.CoverMIME refused a BMP")
 	}
 	out, err := Thumbnail(buf.Bytes(), 160)
 	if err != nil {
@@ -301,5 +303,187 @@ func TestThumbnailDecodesBMP(t *testing.T) {
 	}
 	if w, h := decodedSize(t, out); w != 160 || h != 80 {
 		t.Fatalf("size = %dx%d, want 160x80", w, h)
+	}
+}
+
+func TestStoredCoverKeepsInkChannels(t *testing.T) {
+	data, err := base64.StdEncoding.DecodeString(cmykJPEG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := jpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	icc := segment(0xe2, []byte("ICC_PROFILE\x00\x01\x01printer profile"))
+	out, err := StoredCoverJPEG(jpegWith(data, icc), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := jpeg.Decode(bytes.NewReader(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inks, ok := got.(*image.CMYK)
+	if !ok || !bytes.Contains(out, icc) {
+		t.Fatal("lost ink channels or profile")
+	}
+	// Each channel is recompressed at thumbnail quality.
+	expected := src.(*image.CMYK)
+	for ch := range 4 {
+		var diff int
+		for y := range 8 {
+			for x := range 8 {
+				a := int(inks.Pix[y*inks.Stride+4*x+ch])
+				b := int(expected.Pix[y*expected.Stride+4*x+ch])
+				diff += max(a-b, b-a)
+			}
+		}
+		if diff/64 > 14 {
+			t.Errorf("channel %d: mean absolute error %d", ch, diff/64)
+		}
+	}
+}
+
+// A CMYK JPEG whose profile names RGB channels: the profile never applied to
+// its ink values, so the stored RGB cover is saved without it.
+func TestStoredCMYKCoverDropsAnRGBProfile(t *testing.T) {
+	t.Parallel()
+	data, err := base64.StdEncoding.DecodeString(cmykJPEG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := make([]byte, 128)
+	copy(p[16:], "RGB ")
+	icc := segment(0xE2, append([]byte("ICC_PROFILE\x00\x01\x01"), p...))
+	out, err := StoredCoverJPEG(jpegWith(data, icc), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := jpeg.Decode(bytes.NewReader(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, cmyk := got.(*image.CMYK); cmyk || bytes.Contains(out, []byte("ICC_PROFILE\x00")) {
+		t.Fatalf("stored as %T, profile kept %v; want RGB without the profile", got, bytes.Contains(out, []byte("ICC_PROFILE\x00")))
+	}
+}
+
+func TestCoverOrientation(t *testing.T) {
+	// Row order distinguishes a clockwise turn from a counter-clockwise one
+	// and checks both mirror axes. Gray is also used for CMYK's ink planes.
+	img := image.NewGray(image.Rect(0, 0, 3, 2))
+	copy(img.Pix, "abcdef")
+	for _, tc := range []struct {
+		orientation int
+		width       int
+		pixels      string
+	}{
+		{1, 3, "abcdef"}, {2, 3, "cbafed"}, {3, 3, "fedcba"}, {4, 3, "defabc"},
+		{5, 2, "adbecf"}, {6, 2, "daebfc"}, {7, 2, "fcebda"}, {8, 2, "cfbead"},
+	} {
+		got := orientCover(img, tc.orientation).(*image.Gray)
+		if got.Rect.Dx() != tc.width || string(got.Pix) != tc.pixels {
+			t.Errorf("orientation %d: %v %q, want width %d and %q", tc.orientation, got.Rect, got.Pix, tc.width, tc.pixels)
+		}
+		// RGBA pixels move the same way, all four bytes together.
+		rgba := image.NewRGBA(img.Rect)
+		for i, c := range img.Pix {
+			copy(rgba.Pix[4*i:], []byte{c, c + 1, c + 2, 255})
+		}
+		turned := orientCover(rgba, tc.orientation).(*image.RGBA)
+		for i, c := range []byte(tc.pixels) {
+			if !bytes.Equal(turned.Pix[4*i:4*i+4], []byte{c, c + 1, c + 2, 255}) || turned.Rect.Dx() != tc.width {
+				t.Errorf("orientation %d: RGBA pixel %d = %v, want %q", tc.orientation, i, turned.Pix[4*i:4*i+4], c)
+			}
+		}
+	}
+}
+
+func TestStoredPNGCoverKeepsOrientationAndProfile(t *testing.T) {
+	img := encodePNG(t, 50, 80, color.White)
+	var chunks bytes.Buffer
+	add := func(tag string, data []byte) {
+		chunks.Write(binary.BigEndian.AppendUint32(nil, uint32(len(data))))
+		payload := append([]byte(tag), data...)
+		chunks.Write(payload)
+		chunks.Write(binary.BigEndian.AppendUint32(nil, crc32.ChecksumIEEE(payload)))
+	}
+	var compressed bytes.Buffer
+	z := zlib.NewWriter(&compressed)
+	profile := bytes.Repeat([]byte("profile data"), 6000)
+	if _, err := z.Write(profile); err != nil {
+		t.Fatal(err)
+	}
+	if err := z.Close(); err != nil {
+		t.Fatal(err)
+	}
+	add("eXIf", exifSegment("II", 8)[10:])
+	add("iCCP", append([]byte("profile\x00\x00"), compressed.Bytes()...))
+	// After the signature and IHDR chunk.
+	src := bytes.Join([][]byte{img[:33], chunks.Bytes(), img[33:]}, nil)
+	out, err := StoredCoverJPEG(src, 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, h := decodedSize(t, out); w != 40 || h != 25 || !bytes.Contains(out, jpegProfile(profile)) {
+		t.Fatalf("stored PNG: %dx%d or missing split profile", w, h)
+	}
+}
+
+func TestStoredWebPCoverKeepsOrientationAndProfile(t *testing.T) {
+	// A 4 x 2 lossless WebP. The extended container adds an ICC and EXIF chunk.
+	plain, err := base64.StdEncoding.DecodeString("UklGRhwAAABXRUJQVlA4TA8AAAAvA0AAAAcQ0f/+ByKi/wEA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := func(tag string, data []byte) []byte {
+		buf := binary.LittleEndian.AppendUint32([]byte(tag), uint32(len(data)))
+		buf = append(buf, data...)
+		if len(data)%2 != 0 {
+			buf = append(buf, 0)
+		}
+		return buf
+	}
+	profile := []byte("RGB profile")
+	extended := chunk("VP8X", []byte{0x28, 0, 0, 0, 3, 0, 0, 1, 0, 0})
+	src := bytes.Join([][]byte{plain[:12], extended, chunk("ICCP", profile), plain[12:], chunk("EXIF", exifSegment("II", 6)[10:])}, nil)
+	binary.LittleEndian.PutUint32(src[4:], uint32(len(src)-8))
+	out, err := StoredCoverJPEG(src, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, h := decodedSize(t, out); w != 2 || h != 4 || !bytes.Contains(out, jpegProfile(profile)) {
+		t.Fatalf("stored WebP: %dx%d or missing profile", w, h)
+	}
+}
+
+// A stored cover keeps a profile only for the channels its JPEG holds, and an
+// EXIF block it can't read does not lose the profile after it.
+func TestStoredCoverProfileMatchesItsChannels(t *testing.T) {
+	t.Parallel()
+	profileOf := func(space string) []byte {
+		p := make([]byte, 128)
+		copy(p[16:], space)
+		return segment(0xE2, append([]byte("ICC_PROFILE\x00\x01\x01"), p...))
+	}
+	badExif := segment(0xE1, []byte("Exif\x00\x00XX\x00\x2a\x00\x00\x00\x08"))
+	for _, tc := range []struct {
+		name string
+		segs [][]byte
+		kept bool
+	}{
+		{"rgb", [][]byte{profileOf("RGB ")}, true},
+		{"gray on colour", [][]byte{profileOf("GRAY")}, false},
+		{"after a bad exif", [][]byte{badExif, profileOf("RGB ")}, true},
+	} {
+		icc := tc.segs[len(tc.segs)-1]
+		out, err := StoredCoverJPEG(jpegWith(encodeJPEG(t, 16, 8), tc.segs...), 8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w, h := decodedSize(t, out); w != 8 || h != 4 || bytes.Contains(out, icc) != tc.kept {
+			t.Errorf("%s: %dx%d, profile kept %v, want %v", tc.name, w, h, bytes.Contains(out, icc), tc.kept)
+		}
 	}
 }

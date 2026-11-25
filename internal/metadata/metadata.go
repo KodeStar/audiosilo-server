@@ -399,6 +399,9 @@ func readFile(ctx context.Context, m *Metadata, root, path string, ff ffRules, c
 	// through the probe for nothing.
 	tags := &blockReader{b: b, keep: m.Format == "mp3" && (ff != ffNone || counting)}
 	why := b.bounded(rctx, func() { md, terr = tag.ReadFrom(tags) })
+	if why == "" && m.Format == "mka" {
+		why = b.bounded(rctx, func() { m.HasCover = mkvPicture(b).size > 0 })
+	}
 	// The iTunes narrator item, which neither dhowden nor ffprobe reads. Asked
 	// of an MP4 (or a file named as one dhowden could not read: its walk is
 	// bounded and a stranger simply has no moov).

@@ -297,6 +297,7 @@ export const PROGRESS_CODES = {
   reading_recording: [],
   metadata_retrying: [],
   placing_book: [],
+  asr_turn_wait: [],
 } as const satisfies Record<string, readonly string[]>;
 
 type ProgressCode = keyof typeof PROGRESS_CODES;

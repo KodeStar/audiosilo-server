@@ -148,14 +148,16 @@ type Options struct {
 
 // Mirror keeps the local copy and serves metaserve's API over it.
 type Mirror struct {
-	dir       string
-	client    *release.Client
-	enabled   func() bool
-	now       func() time.Time
-	freeBytes func(string) (uint64, error)
-	log       *slog.Logger
-	qlog      *log.Logger // the query layer's notices, through log
-	handler   http.Handler
+	loaded     chan struct{} // closed when the first usable copy is published
+	loadedOnce sync.Once
+	dir        string
+	client     *release.Client
+	enabled    func() bool
+	now        func() time.Time
+	freeBytes  func(string) (uint64, error)
+	log        *slog.Logger
+	qlog       *log.Logger // the query layer's notices, through log
+	handler    http.Handler
 
 	cur  atomic.Pointer[query.DB]
 	wake chan struct{}
@@ -196,7 +198,7 @@ func New(dir string, opts Options) (*Mirror, error) {
 	m := &Mirror{
 		dir:     dir,
 		enabled: opts.Enabled, now: opts.Now, freeBytes: opts.FreeBytes, log: opts.Logger,
-		wake:     make(chan struct{}, 1),
+		wake: make(chan struct{}, 1), loaded: make(chan struct{}),
 		interval: checkInterval, retry: retryInterval, startAfter: startDelay, grace: swapGrace,
 		enabledPoll: enabledPoll,
 		retiring:    map[*query.DB]bool{},
@@ -296,7 +298,7 @@ func (m *Mirror) openCopy() {
 	// The state's facts about the copy come from the copy itself.
 	info := db.Info()
 	m.st.BuiltAt, m.st.SchemaVersion, m.st.SizeBytes = info.BuiltAt, info.SchemaVersion, size
-	m.cur.Store(db)
+	m.publish(db)
 }
 
 // openFile opens the copy of tag, checked against the size the state recorded
@@ -350,6 +352,15 @@ func (m *Mirror) sweep() {
 // Current is the copy answering now, nil until a usable one exists. The query
 // handler loads it once per request, so a swap never splits one answer.
 func (m *Mirror) Current() *query.DB { return m.cur.Load() }
+
+// Loaded closes when the mirror can first answer, from disk or a download.
+func (m *Mirror) Loaded() <-chan struct{} { return m.loaded }
+
+func (m *Mirror) publish(db *query.DB) *query.DB {
+	old := m.cur.Swap(db)
+	m.loadedOnce.Do(func() { close(m.loaded) })
+	return old
+}
 
 // Ready reports whether a usable copy is loaded (meta.Mirror).
 func (m *Mirror) Ready() bool { return m.cur.Load() != nil }
@@ -630,7 +641,7 @@ func (m *Mirror) guardDisk(declared int64) error {
 func (m *Mirror) swap(db *query.DB, rel *release.Release, res release.Result) {
 	info := db.Info()
 	m.mu.Lock()
-	old := m.cur.Swap(db)
+	old := m.publish(db)
 	m.openingNew = false
 	m.st.Tag = rel.Tag
 	m.st.PublishedAt = rel.PublishedAt

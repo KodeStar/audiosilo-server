@@ -49,7 +49,7 @@ func NewRenditionCache(dir string, log *slog.Logger) (*FileCache, error) {
 }
 
 // renditionETag is the strong validator of key's copy of size bytes: the key
-// names the source's path, size, mtime and the encode's version, and the size
+// names the source's identity, path, size, mtime and the encode's version, and the size
 // tells two encodes apart should a re-encode after an eviction ever differ, so
 // a resumed download (If-Range) never splices two encodes.
 func renditionETag(key string, size int64) string {

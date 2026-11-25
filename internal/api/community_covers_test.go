@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -91,11 +92,14 @@ func coverHost(t *testing.T) (*httptest.Server, []byte) {
 	// A JPEG within storedCoverSide yet larger than an upload may be, drawn turned
 	// (EXIF orientation 6), which media.Thumbnail hands back as its own bytes.
 	var turned bytes.Buffer
-	if err := jpeg.Encode(&turned, big.SubImage(image.Rect(0, 0, 400, 400)), nil); err != nil {
+	if err := jpeg.Encode(&turned, big.SubImage(image.Rect(0, 0, 400, 240)), nil); err != nil {
 		t.Fatal(err)
 	}
 	turnedJPEG := turnedJPEGOver(turned.Bytes(), catalog.MaxCoverBytes)
 	mux.HandleFunc("/turned.jpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(turnedJPEG) })
+	// A small JPEG whose colour profile alone is larger than an upload may be.
+	profiledJPEG := profiledJPEGOver(turned.Bytes(), catalog.MaxCoverBytes)
+	mux.HandleFunc("/profiled.jpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(profiledJPEG) })
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, small
@@ -109,8 +113,28 @@ func turnedJPEGOver(jpg []byte, n int) []byte {
 	}
 	tiff := []byte("MM\x00\x2a\x00\x00\x00\x08\x00\x01\x01\x12\x00\x03\x00\x00\x00\x01\x00\x06\x00\x00\x00\x00\x00\x00")
 	out := append([]byte{0xFF, 0xD8}, seg(0xE1, append([]byte("Exif\x00\x00"), tiff...))...)
+	out = append(out, seg(0xE2, []byte("ICC_PROFILE\x00\x01\x01test profile"))...)
 	for len(out) <= n {
 		out = append(out, seg(0xFE, make([]byte, 65000))...)
+	}
+	return append(out, jpg[2:]...)
+}
+
+// profiledJPEGOver is jpg with an RGB colour profile in APP2 segments after
+// its start, the profile larger than n bytes.
+func profiledJPEGOver(jpg []byte, n int) []byte {
+	const chunk = 65000
+	count := n/chunk + 2
+	out := []byte{0xFF, 0xD8}
+	for i := range count {
+		payload := append([]byte("ICC_PROFILE\x00"), byte(i+1), byte(count))
+		body := make([]byte, chunk)
+		if i == 0 {
+			copy(body[16:], "RGB ")
+		}
+		payload = append(payload, body...)
+		out = append(out, binary.BigEndian.AppendUint16([]byte{0xFF, 0xE2}, uint16(len(payload)+2))...)
+		out = append(out, payload...)
 	}
 	return append(out, jpg[2:]...)
 }
@@ -182,6 +206,44 @@ func TestCommunityCovers(t *testing.T) {
 		if resp, got := e.do(t, "POST", url, adminTok, body); resp.StatusCode != code {
 			t.Errorf("POST %.60s = %d %s, want %d", body, resp.StatusCode, got, code)
 		}
+	}
+}
+
+// A community cover over an upload's size whose colour profile no JPEG can
+// carry (an iCCP chunk inflating past 255 APP2 segments) is kept without it,
+// as one whose re-encode is too large with it is, not refused.
+func TestKeepableCoverWithoutAnUnkeepableProfile(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	var img bytes.Buffer
+	if err := png.Encode(&img, image.NewRGBA(image.Rect(0, 0, 64, 48))); err != nil {
+		t.Fatal(err)
+	}
+	chunk := func(tag string, data []byte) []byte {
+		payload := append([]byte(tag), data...)
+		out := binary.BigEndian.AppendUint32(nil, uint32(len(data)))
+		out = append(out, payload...)
+		return binary.BigEndian.AppendUint32(out, crc32.ChecksumIEEE(payload))
+	}
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	if _, err := zw.Write(make([]byte, 17<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	iccp := chunk("iCCP", append([]byte("big\x00\x00"), z.Bytes()...))
+	pad := chunk("tEXt", append([]byte("pad\x00"), make([]byte, catalog.MaxCoverBytes)...))
+	// After the signature and IHDR chunk.
+	src := bytes.Join([][]byte{img.Bytes()[:33], iccp, pad, img.Bytes()[33:]}, nil)
+	jpg, err := e.api.keepableCover(t.Context(), src, "https://covers.example/big.png")
+	if err != nil {
+		t.Fatalf("keepableCover = %v, want it kept without its profile", err)
+	}
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(jpg))
+	if err != nil || format != "jpeg" || cfg.Width != 64 || cfg.Height != 48 || bytes.Contains(jpg, []byte("ICC_PROFILE\x00")) {
+		t.Fatalf("kept as %s %dx%d (%v), profile kept %v", format, cfg.Width, cfg.Height, err, bytes.Contains(jpg, []byte("ICC_PROFILE\x00")))
 	}
 }
 
@@ -262,8 +324,20 @@ func TestSetCommunityCover(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg, format, err = image.DecodeConfig(bytes.NewReader(cv.Data)); err != nil || format != "jpeg" ||
-		cfg.Width != 400 || len(cv.Data) > catalog.MaxCoverBytes {
+		cfg.Width != 240 || cfg.Height != 400 || !bytes.Contains(cv.Data, []byte("ICC_PROFILE\x00\x01\x01")) || len(cv.Data) > catalog.MaxCoverBytes {
 		t.Fatalf("turned cover stored as %s %dx%d, %d bytes (%v)", format, cfg.Width, cfg.Height, len(cv.Data), err)
+	}
+	// A profile that alone keeps the re-encode past the cap: kept without it,
+	// not refused as too large.
+	if code, body := set(adminTok, url, host.URL+"/profiled.jpg"); code != http.StatusOK {
+		t.Fatalf("set profiled = %d %s", code, body)
+	}
+	if cv, err = e.cat.Cover(ctx, libID, p); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, format, err = image.DecodeConfig(bytes.NewReader(cv.Data)); err != nil || format != "jpeg" ||
+		cfg.Width != 400 || bytes.Contains(cv.Data, []byte("ICC_PROFILE\x00")) || len(cv.Data) > catalog.MaxCoverBytes {
+		t.Fatalf("profiled cover stored as %s %dx%d, %d bytes (%v)", format, cfg.Width, cfg.Height, len(cv.Data), err)
 	}
 }
 
