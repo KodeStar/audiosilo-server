@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -205,6 +206,44 @@ func TestCommunityCovers(t *testing.T) {
 		if resp, got := e.do(t, "POST", url, adminTok, body); resp.StatusCode != code {
 			t.Errorf("POST %.60s = %d %s, want %d", body, resp.StatusCode, got, code)
 		}
+	}
+}
+
+// A community cover over an upload's size whose colour profile no JPEG can
+// carry (an iCCP chunk inflating past 255 APP2 segments) is kept without it,
+// as one whose re-encode is too large with it is, not refused.
+func TestKeepableCoverWithoutAnUnkeepableProfile(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	var img bytes.Buffer
+	if err := png.Encode(&img, image.NewRGBA(image.Rect(0, 0, 64, 48))); err != nil {
+		t.Fatal(err)
+	}
+	chunk := func(tag string, data []byte) []byte {
+		payload := append([]byte(tag), data...)
+		out := binary.BigEndian.AppendUint32(nil, uint32(len(data)))
+		out = append(out, payload...)
+		return binary.BigEndian.AppendUint32(out, crc32.ChecksumIEEE(payload))
+	}
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	if _, err := zw.Write(make([]byte, 17<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	iccp := chunk("iCCP", append([]byte("big\x00\x00"), z.Bytes()...))
+	pad := chunk("tEXt", append([]byte("pad\x00"), make([]byte, catalog.MaxCoverBytes)...))
+	// After the signature and IHDR chunk.
+	src := bytes.Join([][]byte{img.Bytes()[:33], iccp, pad, img.Bytes()[33:]}, nil)
+	jpg, err := e.api.keepableCover(t.Context(), src, "https://covers.example/big.png")
+	if err != nil {
+		t.Fatalf("keepableCover = %v, want it kept without its profile", err)
+	}
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(jpg))
+	if err != nil || format != "jpeg" || cfg.Width != 64 || cfg.Height != 48 || bytes.Contains(jpg, []byte("ICC_PROFILE\x00")) {
+		t.Fatalf("kept as %s %dx%d (%v), profile kept %v", format, cfg.Width, cfg.Height, err, bytes.Contains(jpg, []byte("ICC_PROFILE\x00")))
 	}
 }
 

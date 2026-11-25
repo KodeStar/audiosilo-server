@@ -341,9 +341,10 @@ func (a *API) keepableCover(ctx context.Context, data []byte, rawURL string) ([]
 		return data, nil
 	}
 	jpg, err := a.decodeThumbnail(ctx, media.StoredCoverJPEG, data, storedCoverSide, "url", rawURL)
-	if err == nil && len(jpg) > catalog.MaxCoverBytes {
+	if err == nil && (jpg == nil || len(jpg) > catalog.MaxCoverBytes) {
 		// Still too large with its colour profile (a large one, or four CMYK
-		// planes): kept without it rather than refused.
+		// planes), or its profile could not be kept (one that inflates past what
+		// a JPEG carries): kept without it rather than refused.
 		jpg, err = a.decodeThumbnail(ctx, media.ThumbnailJPEG, data, storedCoverSide, "url", rawURL)
 	}
 	if err == nil && jpg == nil {
