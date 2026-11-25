@@ -81,6 +81,7 @@ func checkDirs(dataDir, backups string, dataFailed, backupFailed bool, table []m
 var networkFSTypes = map[string]bool{
 	"nfs": true, "nfs4": true, "cifs": true, "smb3": true, "smbfs": true, "ceph": true,
 	"fuse.sshfs": true, "fuse.rclone": true, "fuse.s3fs": true, "fuse.gcsfuse": true, "fuse.glusterfs": true,
+	"fuse.ceph-fuse": true, "fuse.juicefs": true,
 }
 
 // containingMount is the visible mount path is on, by its name: the nearest
