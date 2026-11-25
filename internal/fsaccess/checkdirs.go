@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -23,7 +24,12 @@ const DirCheckTimeout = 5 * time.Second
 // CheckDirs performs the image's startup checks as the server user. A warning
 // is advisory. The launcher decides whether it can start with the given data.
 func CheckDirs(dataDir, backups string, dataChownFailed, backupChownFailed bool, out io.Writer) {
-	table, _ := mounts.Table() // a table cut short checks what it read
+	// The image's mount table only: on a desktop OS every mounted volume (a
+	// network share among them) would be opened by a dev run or a test.
+	var table []mounts.Mount
+	if runtime.GOOS == "linux" {
+		table, _ = mounts.Table() // a table cut short checks what it read
+	}
 	checkDirs(dataDir, backups, dataChownFailed, backupChownFailed, table, out, DirCheckTimeout)
 }
 
