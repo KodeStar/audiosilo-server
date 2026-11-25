@@ -345,6 +345,30 @@ func TestStoredCoverKeepsInkChannels(t *testing.T) {
 	}
 }
 
+// A CMYK JPEG whose profile names RGB channels: the profile never applied to
+// its ink values, so the stored RGB cover is saved without it.
+func TestStoredCMYKCoverDropsAnRGBProfile(t *testing.T) {
+	t.Parallel()
+	data, err := base64.StdEncoding.DecodeString(cmykJPEG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := make([]byte, 128)
+	copy(p[16:], "RGB ")
+	icc := segment(0xE2, append([]byte("ICC_PROFILE\x00\x01\x01"), p...))
+	out, err := StoredCoverJPEG(jpegWith(data, icc), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := jpeg.Decode(bytes.NewReader(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, cmyk := got.(*image.CMYK); cmyk || bytes.Contains(out, []byte("ICC_PROFILE\x00")) {
+		t.Fatalf("stored as %T, profile kept %v; want RGB without the profile", got, bytes.Contains(out, []byte("ICC_PROFILE\x00")))
+	}
+}
+
 func TestCoverOrientation(t *testing.T) {
 	// Row order distinguishes a clockwise turn from a counter-clockwise one
 	// and checks both mirror axes. Gray is also used for CMYK's ink planes.

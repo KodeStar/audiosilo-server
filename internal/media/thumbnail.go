@@ -113,8 +113,13 @@ func thumbnail(src []byte, size int, mode thumbnailMode) ([]byte, error) {
 	w, h := fitWithin(cfg.Width, cfg.Height, size)
 	keepICC := mode == storedCover && len(render.icc) > 0
 	space := iccSpace(render.icc)
-	if cmyk, ok := img.(*image.CMYK); ok && keepICC && (space == "" || space == "CMYK") {
-		return encodeCMYKCover(cmyk, w, h, render.orientation, render.icc)
+	if cmyk, ok := img.(*image.CMYK); ok && keepICC {
+		if space == "" || space == "CMYK" {
+			return encodeCMYKCover(cmyk, w, h, render.orientation, render.icc)
+		}
+		// A profile naming other channels never applied to the ink values (a
+		// viewer drops it), so it is not attached to their RGB conversion.
+		keepICC = false
 	}
 	gray := cfg.ColorModel == color.GrayModel || cfg.ColorModel == color.Gray16Model
 	// A profile for other channels than the JPEG holds (a gray one on a gray
