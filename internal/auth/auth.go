@@ -94,6 +94,9 @@ var (
 	// has no uses left, so the transport can tell "the invite is spent" apart
 	// from a bogus token.
 	ErrCodeExhausted = errors.New("invite has no uses left")
+	// ErrInviteUsedByDevice means this pairing token already gave this device a
+	// session and its one retry is spent, too late, or the session has ended.
+	ErrInviteUsedByDevice = errors.New("invite already used by this device")
 	// ErrCodeExpired is returned by ConsumePairing when the parent invite
 	// expired between redeem and exchange.
 	ErrCodeExpired = errors.New("invite has expired")
@@ -775,10 +778,13 @@ func inPlaceholders(n int) string {
 	return "?" + strings.Repeat(",?", n-1)
 }
 
-// RevokeToken revokes a token by its secret.
-func (s *Service) RevokeToken(ctx context.Context, secret string) error {
-	_, err := s.db.ExecDurable(ctx, "RevokeToken",
-		`UPDATE tokens SET revoked = 1 WHERE token_hash = ?`, hashSecret(secret))
+// SignOut ends the session or API key that authenticated the request. An invite
+// replay can rotate a session's bearer between authentication and this write,
+// but its device row stays the same. Keep the browser's sign-in key remembered.
+func (s *Service) SignOut(ctx context.Context, userID, tokenID int64) error {
+	_, err := s.db.ExecDurable(ctx, "SignOut",
+		`UPDATE tokens SET revoked = 1 WHERE id = ? AND user_id = ? AND kind IN ('session', 'api')`,
+		tokenID, userID)
 	return err
 }
 
@@ -1318,7 +1324,8 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 // would otherwise pile up, one per QR shown; a code's own row, its uses and its
 // expiry are untouched. A single sign-on's token (KindOIDC) goes the same way,
 // spent or expired. Run by the daily retention beside PruneCastTokens. It
-// reports how many it deleted.
+// reports how many it deleted. A spent invite token with an open replay stays
+// through the minute in which the original device can recover its session.
 func (s *Service) PruneSingleUseTokens(ctx context.Context) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM tokens
 	  WHERE kind IN `+singleUseKindsSQL+`
@@ -1326,7 +1333,9 @@ func (s *Service) PruneSingleUseTokens(ctx context.Context) (int64, error) {
 	         OR (auth_code_id IS NOT NULL AND NOT EXISTS (
 	               SELECT 1 FROM auth_codes c WHERE c.id = tokens.auth_code_id
 	                  AND (c.max_uses = 0 OR c.uses < c.max_uses)
-	                  AND (c.expires_at IS NULL OR c.expires_at > ?1))))`, s.ts())
+	                  AND (c.expires_at IS NULL OR c.expires_at > ?1))
+	             AND NOT EXISTS (
+	               SELECT 1 FROM invite_exchanges e WHERE e.pairing_id = tokens.id AND e.retry_until >= ?1)))`, s.ts())
 	if err != nil {
 		return 0, err
 	}
@@ -1363,18 +1372,10 @@ func spendToken(ctx context.Context, tx *sql.Tx, hash, kind, now string, revoke 
 	return nil
 }
 
-// exchangeSession is the device's session for userID, minted in the one
-// durable transaction that spends the single-use token it is exchanged for
-// (spend, at the transaction's now), with the account as that transaction reads
-// it. A Sign out everywhere, a password change or a disabled account either
-// committed before it, and spend (spendableSQL) refuses the token, or commits
-// after it and ends the session with the rest (endSessions; a disabled
-// account's tokens are refused): never a session that change missed, as two
-// writes left one between the spend and the mint. admit (nil: any account
-// spendableSQL lets through) is asked of the account as the transaction reads
-// it, a refusal ErrInvalidToken with nothing spent. Nothing is read after the
-// commit, so a spent token always has its session answered.
-func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, deviceName string, spend func(tx *sql.Tx, now string) error, admit func(*User) bool) (*User, string, error) {
+// exchangeSession rechecks the account and spends the presented credential in one
+// durable writer transaction. exchange either issues a new session or rotates
+// the original session's bearer for one lost invite answer.
+func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, admit func(*User) bool, exchange func(*sql.Tx, string) (string, error)) (*User, string, error) {
 	if s.beforeSpend != nil {
 		s.beforeSpend()
 	}
@@ -1383,18 +1384,22 @@ func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, 
 		session string
 	)
 	err := s.db.WithDurableTx(ctx, op, func(tx *sql.Tx) error {
-		if err := spend(tx, s.ts()); err != nil {
-			return err
-		}
 		var err error
-		if u, err = getUser(ctx, tx, userID); err != nil {
+		session, err = exchange(tx, s.ts())
+		if err != nil {
 			return err
 		}
-		if admit != nil && !admit(u) {
+		u, err = getUser(ctx, tx, userID)
+		if errors.Is(err, ErrNotFound) {
 			return ErrInvalidToken
 		}
-		session, err = s.issueToken(ctx, tx, userID, KindSession, deviceName, 0)
-		return err
+		if err != nil {
+			return err
+		}
+		if u.Disabled || (admit != nil && !admit(u)) {
+			return ErrInvalidToken
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, "", err
@@ -1406,49 +1411,7 @@ func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, 
 // the token presented (unknown, spent, expired, signed out, or its invite used
 // up or expired), as opposed to a failure to answer it (the database).
 func Refused(err error) bool {
-	return errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrCodeExhausted) || errors.Is(err, ErrCodeExpired)
-}
-
-// ConsumePairing validates a pairing token, consumes it and mints the device's
-// session (named deviceName) in the same transaction (exchangeSession),
-// returning the account and the session's secret. An UNLINKED token (minted
-// by /auth/pair, the demo flow, or pre-migration) is revoked: strictly
-// single-use, and two racing exchanges cannot both win. A LINKED token instead
-// claims one use on its parent code, folding the cap check, the code-expiry
-// check, and the first-claim redeemed_at stamp into one UPDATE, and is NOT
-// revoked: the code's cap and expiry govern how many more devices may pair
-// with it. A disabled user, or a token signed out (a Sign out everywhere, a
-// password change) since the read, is rejected before any use is consumed. It
-// also returns the kind of code the token came from (CodeInvite or
-// CodeRecovery; "" for an unlinked token), so the server can report an invite
-// being used.
-func (s *Service) ConsumePairing(ctx context.Context, secret, deviceName string) (u *User, session, codeKind string, err error) {
-	hash := hashSecret(secret)
-	u, row, err := s.lookupToken(ctx, hash, KindPairing)
-	if err != nil {
-		return nil, "", "", err
-	}
-	codeID := row.codeID
-	u, session, err = s.exchangeSession(ctx, "ConsumePairing", u.ID, deviceName, func(tx *sql.Tx, now string) error {
-		if err := spendToken(ctx, tx, hash, KindPairing, now, !codeID.Valid); err != nil || !codeID.Valid {
-			return err
-		}
-		// Both stamps are RFC3339 UTC, so the lexical expires_at comparison is
-		// chronological (same convention as supersedeActiveInvites).
-		err := tx.QueryRowContext(ctx,
-			`UPDATE auth_codes SET uses = uses + 1, redeemed_at = COALESCE(redeemed_at, ?1)
-			   WHERE id = ?2 AND (max_uses = 0 OR uses < max_uses)
-			     AND (expires_at IS NULL OR expires_at > ?1)
-			 RETURNING kind`, now, codeID.Int64).Scan(&codeKind)
-		if errors.Is(err, sql.ErrNoRows) {
-			return s.claimRefused(ctx, tx, codeID.Int64)
-		}
-		return err
-	}, nil)
-	if err != nil {
-		return nil, "", "", err
-	}
-	return u, session, codeKind, nil
+	return errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrCodeExhausted) || errors.Is(err, ErrCodeExpired) || errors.Is(err, ErrInviteUsedByDevice)
 }
 
 // claimRefused says why ConsumePairing's claim on code id was refused, read in

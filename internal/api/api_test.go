@@ -680,6 +680,85 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 	}
 }
 
+func TestInviteExchangeRetries(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	code, err := e.auth.CreateAuthCode(t.Context(), e.adminID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, pair, _ := e.redeemCode(t, code)
+	if status != http.StatusOK {
+		t.Fatalf("redeem: %d", status)
+	}
+	body := `{"pairing_token":"` + pair + `","device_id":"device-random-key-0123456789","device_name":"phone"}`
+	for range 2 {
+		resp, b := e.do(t, "POST", "/api/v1/auth/exchange", "", body)
+		if resp.StatusCode != http.StatusOK || !strings.Contains(b, `"token":`) {
+			t.Fatalf("exchange: %d, want a session", resp.StatusCode)
+		}
+	}
+	resp, b := e.do(t, "POST", "/api/v1/auth/exchange", "", body)
+	if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get(headerUnauthorized) != codeInviteUsedByDevice ||
+		!strings.Contains(b, `"code":"invite_used_by_this_device"`) {
+		t.Fatalf("spent retry: %d, %q, %s", resp.StatusCode, resp.Header.Get(headerUnauthorized), b)
+	}
+}
+
+// A logout admitted by the middleware must sign out that device even when
+// an invite replay rotates its bearer before the handler's durable write.
+func TestLogoutAcrossInviteReplay(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := t.Context()
+	code, err := e.auth.CreateAuthCode(ctx, e.adminID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pair, _ := e.redeemCode(t, code)
+	exchange := func() string {
+		t.Helper()
+		res, err := e.auth.ConsumePairing(ctx, pair, "phone", "device-random-key-0123456789")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Token
+	}
+	first := exchange()
+	req := httptest.NewRequest("POST", "/api/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+first)
+	rec := httptest.NewRecorder()
+	var rotated string
+	e.api.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rotated = exchange()
+		e.api.handleLogout(w, r)
+	})).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || rotated == "" {
+		t.Fatalf("logout across rotation: %d", rec.Code)
+	}
+	for _, token := range []string{first, rotated} {
+		if resp, _ := e.do(t, "GET", "/api/v1/me", token, ""); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("signed out bearer: %d", resp.StatusCode)
+		}
+	}
+
+	// An API key can still log itself out, keeping the session that minted it.
+	other := e.session(t, e.adminID)
+	key, _, err := e.auth.IssueAPIToken(ctx, e.adminID, e.credentialID(t, other), "dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/logout", key, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("key logout: %d", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/me", key, ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("key after logout: %d", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/me", other, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("another session after logout: %d", resp.StatusCode)
+	}
+}
+
 // An exchange whose invite expired after its QR was opened says so with the
 // code redeem answers (server#255), so the player can say "ask for a new
 // invite"; an unknown pairing token carries no code.

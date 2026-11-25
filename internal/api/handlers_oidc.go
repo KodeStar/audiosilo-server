@@ -852,7 +852,8 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	dropHeld()
 	a.oidcLimiter.Reset(ip)
-	out := a.pairedSession(r, u, session, req.DeviceName, false)
+	a.reportSignIn(r, u, req.DeviceName, false)
+	out := a.sessionEnvelope(r, session, u)
 	if intent != "" {
 		out["intent"] = intent
 	}

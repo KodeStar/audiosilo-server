@@ -173,7 +173,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   stamp into one atomic UPDATE, in the transaction that mints the device's session,
   and rejects a disabled/deleted user or a signed-out token first, so a
   rejected attempt never burns a use or marks an invite accepted (`uses` counts
-  devices that actually paired). Linked pairing tokens die with their code: delete/
+  devices that actually paired). A client recovering a lost exchange answer can resend
+  the same invite-derived pairing token and optional `device_id` (the random per-server
+  sign-in key, `signInKeyPattern`). For 60 seconds the server can rotate the original
+  live session's bearer once, with its device row and invite use intact. It records
+  the hashed device key and retry deadline in `invite_exchanges` (0098) in the same
+  transaction as the claim. A further or late retry gets 401
+  `invite_used_by_this_device` while the pairing token and record still exist.
+  Linked pairing tokens die with their code: delete/
   supersede/recovery-regeneration cascade (`ON DELETE CASCADE`), rotate revokes
   them explicitly. Recovery decouples
   re-auth from invitation: a signed-out/password-less user mints a recovery code from

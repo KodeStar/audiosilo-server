@@ -252,9 +252,12 @@ func (s *Service) ConsumeOIDC(ctx context.Context, secret, deviceName string) (u
 	if !u.SSOAllowed() {
 		return nil, "", ErrInvalidToken
 	}
-	return s.exchangeSession(ctx, "ConsumeOIDC", u.ID, deviceName, func(tx *sql.Tx, now string) error {
-		return spendToken(ctx, tx, hash, KindOIDC, now, true)
-	}, (*User).SSOAllowed)
+	return s.exchangeSession(ctx, "ConsumeOIDC", u.ID, (*User).SSOAllowed, func(tx *sql.Tx, now string) (string, error) {
+		if err := spendToken(ctx, tx, hash, KindOIDC, now, true); err != nil {
+			return "", err
+		}
+		return s.issueToken(ctx, tx, u.ID, KindSession, deviceName, 0)
+	})
 }
 
 // matchEmail reads every account whose email is email (both trimmed; SQLite's
