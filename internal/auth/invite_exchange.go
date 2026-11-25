@@ -4,10 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 )
 
-// PairingSession is a successful exchange. Replayed answers the original
-// sign-in again, so it never needs a second sign-in notification.
+// inviteReplayWindow is how long after an invite exchange its device may
+// replay it once to recover a lost answer (replayInvite).
+const inviteReplayWindow = time.Minute
+
+// PairingSession is a successful exchange. CodeKind is the kind of code the
+// token came from (CodeInvite, CodeRecovery; "" for an unlinked token or a
+// replay). Replayed answers the original sign-in again, so it never needs a
+// second sign-in notification.
 type PairingSession struct {
 	User     *User
 	Token    string
@@ -36,10 +43,12 @@ func (s *Service) ConsumePairing(ctx context.Context, secret, deviceName, device
 		if signInKeyPattern.MatchString(deviceID) {
 			deviceHash = hashSecret(deviceID)
 			token, err := replayInvite(ctx, tx, u.ID, row, deviceHash, now)
-			if err != nil || token != "" {
-				result.Replayed = token != ""
-				result.CodeKind = CodeInvite
-				return token, err
+			if err != nil {
+				return "", err
+			}
+			if token != "" {
+				result.Replayed = true
+				return token, nil
 			}
 		}
 		// Both stamps are RFC3339 UTC, so their lexical order is chronological.
@@ -54,14 +63,13 @@ func (s *Service) ConsumePairing(ctx context.Context, secret, deviceName, device
 		if err != nil {
 			return "", err
 		}
-		token, err := s.issueToken(ctx, tx, u.ID, KindSession, deviceName, 0)
+		token, sessionID, err := s.issueTokenID(ctx, tx, u.ID, KindSession, deviceName, 0)
 		if err != nil || result.CodeKind != CodeInvite || deviceHash == "" {
 			return token, err
 		}
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO invite_exchanges(pairing_id, device_hash, session_id, retry_until)
-			 SELECT ?, ?, id, strftime('%Y-%m-%dT%H:%M:%SZ', ?, '+60 seconds') FROM tokens WHERE token_hash = ?`,
-			row.id, deviceHash, now, hashSecret(token))
+			`INSERT INTO invite_exchanges(pairing_id, device_hash, session_id, retry_until) VALUES(?, ?, ?, ?)`,
+			row.id, deviceHash, sessionID, s.expiresAt(inviteReplayWindow))
 		return token, err
 	})
 	if err != nil {

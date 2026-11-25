@@ -404,14 +404,25 @@ func (s *Service) IssueOwnPairingToken(ctx context.Context, userID, session int6
 
 // issueToken is IssueToken through ex (the database or a transaction).
 func (s *Service) issueToken(ctx context.Context, ex sqlExecer, userID int64, kind, deviceName string, ttl time.Duration) (string, error) {
+	secret, _, err := s.issueTokenID(ctx, ex, userID, kind, deviceName, ttl)
+	return secret, err
+}
+
+// issueTokenID is issueToken that also returns the new token's row id.
+func (s *Service) issueTokenID(ctx context.Context, ex sqlExecer, userID int64, kind, deviceName string, ttl time.Duration) (string, int64, error) {
 	secret, hash, err := generateToken()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	if _, err := s.insertToken(ctx, ex, userID, hash, kind, deviceName, s.expiresAt(ttl), nil, ""); err != nil {
-		return "", err
+	res, err := s.insertToken(ctx, ex, userID, hash, kind, deviceName, s.expiresAt(ttl), nil, "")
+	if err != nil {
+		return "", 0, err
 	}
-	return secret, nil
+	id, err := res.LastInsertId()
+	if err != nil {
+		return "", 0, err
+	}
+	return secret, id, nil
 }
 
 // signInKeyPattern bounds a browser's sign-in key: a random id the client made
@@ -780,7 +791,7 @@ func inPlaceholders(n int) string {
 
 // SignOut ends the session or API key that authenticated the request. An invite
 // replay can rotate a session's bearer between authentication and this write,
-// but its device row stays the same. Keep the browser's sign-in key remembered.
+// but its row id stays the same. The browser's sign-in key stays remembered.
 func (s *Service) SignOut(ctx context.Context, userID, tokenID int64) error {
 	_, err := s.db.ExecDurable(ctx, "SignOut",
 		`UPDATE tokens SET revoked = 1 WHERE id = ? AND user_id = ? AND kind IN ('session', 'api')`,
@@ -1372,9 +1383,17 @@ func spendToken(ctx context.Context, tx *sql.Tx, hash, kind, now string, revoke 
 	return nil
 }
 
-// exchangeSession rechecks the account and spends the presented credential in one
-// durable writer transaction. exchange either issues a new session or rotates
-// the original session's bearer for one lost invite answer.
+// exchangeSession is the device's session for userID, from exchange: the one
+// durable transaction that spends the single-use token presented (spendToken,
+// at the transaction's now) and mints the session, or rotates the original
+// session's bearer for a lost invite answer (replayInvite), with the account
+// as that transaction reads it. A Sign out everywhere, a password change or a
+// disabled account either committed before it, and the spend (spendableSQL)
+// refuses the token, or commits after it and ends the session with the rest
+// (endSessions): never a session that change missed. admit (nil: any account
+// spendableSQL lets through) is asked of the account as the transaction reads
+// it, a refusal ErrInvalidToken with nothing spent. Nothing is read after the
+// commit, so a spent token always has its session answered.
 func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, admit func(*User) bool, exchange func(*sql.Tx, string) (string, error)) (*User, string, error) {
 	if s.beforeSpend != nil {
 		s.beforeSpend()
@@ -1389,14 +1408,10 @@ func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, 
 		if err != nil {
 			return err
 		}
-		u, err = getUser(ctx, tx, userID)
-		if errors.Is(err, ErrNotFound) {
-			return ErrInvalidToken
-		}
-		if err != nil {
+		if u, err = getUser(ctx, tx, userID); err != nil {
 			return err
 		}
-		if u.Disabled || (admit != nil && !admit(u)) {
+		if admit != nil && !admit(u) {
 			return ErrInvalidToken
 		}
 		return nil

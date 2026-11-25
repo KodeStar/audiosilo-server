@@ -184,9 +184,16 @@ func (e *testEnv) redeemCode(t *testing.T, code string) (int, string, *int) {
 // session envelope, or the error message on refusal).
 func (e *testEnv) exchangeToken(t *testing.T, pairingToken, device string) (int, string) {
 	t.Helper()
-	resp, b := e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+pairingToken+`","device_name":"`+device+`"}`)
+	resp, b := e.exchangeAs(t, pairingToken, device, "")
 	return resp.StatusCode, b
+}
+
+// exchangeAs is exchangeToken with the device's sign-in key, answering the
+// whole response.
+func (e *testEnv) exchangeAs(t *testing.T, pairingToken, device, deviceID string) (*http.Response, string) {
+	t.Helper()
+	return e.do(t, "POST", "/api/v1/auth/exchange", "",
+		`{"pairing_token":"`+pairingToken+`","device_name":"`+device+`","device_id":"`+deviceID+`"}`)
 }
 
 func TestServerInfoPublic(t *testing.T) {
@@ -691,14 +698,28 @@ func TestInviteExchangeRetries(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("redeem: %d", status)
 	}
-	body := `{"pairing_token":"` + pair + `","device_id":"device-random-key-0123456789","device_name":"phone"}`
+	const device = "device-random-key-0123456789"
+	var bearers []string
 	for range 2 {
-		resp, b := e.do(t, "POST", "/api/v1/auth/exchange", "", body)
-		if resp.StatusCode != http.StatusOK || !strings.Contains(b, `"token":`) {
+		resp, b := e.exchangeAs(t, pair, "phone", device)
+		var got struct {
+			Token string `json:"token"`
+		}
+		if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(b), &got) != nil || got.Token == "" {
 			t.Fatalf("exchange: %d, want a session", resp.StatusCode)
 		}
+		bearers = append(bearers, got.Token)
 	}
-	resp, b := e.do(t, "POST", "/api/v1/auth/exchange", "", body)
+	if bearers[0] == bearers[1] {
+		t.Fatal("replay answered the same bearer")
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/me", bearers[0], ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("first bearer after replay: %d", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/me", bearers[1], ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("replayed bearer: %d", resp.StatusCode)
+	}
+	resp, b := e.exchangeAs(t, pair, "phone", device)
 	if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get(headerUnauthorized) != codeInviteUsedByDevice ||
 		!strings.Contains(b, `"code":"invite_used_by_this_device"`) {
 		t.Fatalf("spent retry: %d, %q, %s", resp.StatusCode, resp.Header.Get(headerUnauthorized), b)

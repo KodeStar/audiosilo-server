@@ -77,13 +77,13 @@ func TestInviteReplay(t *testing.T) {
 	if u, err := s.ResolveToken(ctx, replay, KindSession); err != nil || u.ID != user.ID {
 		t.Fatalf("rotated bearer did not authenticate the same account: %v", err)
 	}
-	var count, uses int
+	var count int
 	var name string
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), device_name FROM tokens WHERE user_id = ? AND kind = 'session'`, user.ID).Scan(&count, &name); err != nil || count != 1 || name != "phone" {
 		t.Fatalf("original device: %d sessions, name %q, %v", count, name, err)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT uses FROM auth_codes WHERE user_id = ?`, user.ID).Scan(&uses); err != nil || uses != 1 {
-		t.Fatalf("uses after replay: %d, %v", uses, err)
+	if codes, err := s.ListAuthCodes(ctx, user.ID); err != nil || len(codes) != 1 || codes[0].Uses != 1 {
+		t.Fatalf("uses after replay: %+v, %v", codes, err)
 	}
 }
 
