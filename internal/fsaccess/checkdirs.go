@@ -52,18 +52,17 @@ func checkDirs(dataDir, backups string, dataFailed, backupFailed bool, table []m
 	for _, m := range table {
 		visible[m.Point] = m
 	}
-	fsType := containingMount(data, visible).FSType
-	if fsType == "nfs" || fsType == "nfs4" || fsType == "cifs" || strings.HasPrefix(fsType, "smb") || strings.HasPrefix(fsType, "fuse.") {
-		_, _ = fmt.Fprintf(out, "audiosilo: WARNING: %s is on %s. Keep the SQLite database on a local disk. SQLite locking on SMB needs the nobrl mount option. An NFS outage can crash the server.\n", data, fsType)
-	}
 	var checks []check
-	write := func(path string, chownFailed bool) {
-		ro := containingMount(path, visible).ReadOnly
-		checks = append(checks, startCheck(path, func() string { return writeProblem(path, ro, chownFailed) }))
+	write := func(path string, m mounts.Mount, chownFailed bool) {
+		checks = append(checks, startCheck(path, func() string { return writeProblem(path, m.ReadOnly, chownFailed) }))
 	}
-	write(data, dataFailed)
+	dataMount := containingMount(data, visible)
+	if networkFSTypes[dataMount.FSType] {
+		_, _ = fmt.Fprintf(out, "audiosilo: WARNING: The data folder %s is on a network share (%s). Keep it on a local disk if you can: the server's database needs file locking a share may not give (an SMB share needs the nobrl mount option), and the server can crash when the share stops answering.\n", data, dataMount.FSType)
+	}
+	write(data, dataMount, dataFailed)
 	if backups != "" && backups != data {
-		write(backups, backupFailed)
+		write(backups, containingMount(backups, visible), backupFailed)
 	}
 	for _, path := range slices.Sorted(maps.Keys(visible)) {
 		if path == data || path == backups || mounts.SystemPath(path) {
@@ -77,6 +76,15 @@ func checkDirs(dataDir, backups string, dataFailed, backupFailed bool, table []m
 	report(out, checks, limit)
 }
 
+// networkFSTypes are the mountinfo types of a network share, the data folder's
+// notice. Not every FUSE type: Unraid's shfs and mergerfs pool local disks.
+var networkFSTypes = map[string]bool{
+	"nfs": true, "nfs4": true, "cifs": true, "smb3": true, "smbfs": true, "ceph": true,
+	"fuse.sshfs": true, "fuse.rclone": true, "fuse.s3fs": true, "fuse.gcsfuse": true, "fuse.glusterfs": true,
+}
+
+// containingMount is the visible mount path is on, by its name: the nearest
+// mount point at or above it (the zero Mount when none is).
 func containingMount(path string, table map[string]mounts.Mount) mounts.Mount {
 	for p := path; ; p = filepath.Dir(p) {
 		if m, ok := table[p]; ok {

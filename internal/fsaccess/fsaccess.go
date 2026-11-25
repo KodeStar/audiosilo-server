@@ -183,14 +183,15 @@ func hint(info fs.FileInfo, write bool) string {
 	ouid, ogid, known := ownerOf(info)
 	uid, _ := running()
 	switch {
-	case known && (unmappedID(ouid) || unmappedID(ogid)):
-		fmt.Fprintf(&b, "The %s's owner is unmapped. Check the NFS export's root_squash or all_squash settings and the user and group mappings on the client and server.", noun)
 	case known && ouid == uid:
 		// The right owner: the mode refuses it.
 		fmt.Fprintf(&b, "%s (its permissions refuse it).", giveFirst)
 	case known && ouid == 0:
 		// Never advise running the server as root.
 		fmt.Fprintf(&b, "%s, for example by making %s its owner on the host.", giveFirst, user)
+	case known && (unmappedID(ouid) || unmappedID(ogid)):
+		// Never advise running as nobody: the real owner is unknown.
+		fmt.Fprintf(&b, "Its owner or group is nobody, an ID that maps to no account. If the %s is on an NFS share, check the export's root_squash or all_squash setting and that the NAS and this computer map user IDs the same way. Otherwise %s.", noun, give)
 	case InContainer():
 		asUser := os.Getenv(EnvStartedAsUser) == "1"
 		switch {
@@ -209,7 +210,8 @@ func hint(info fs.FileInfo, write bool) string {
 	return b.String()
 }
 
-// NFS can report nobody as either the overflow ID or the unsigned UID/GID -2.
+// unmappedID is nobody: the overflow ID (65534), which NFS also shows for an
+// owner it could not map, or NFSv4's unmapped -2 (4294967294).
 func unmappedID(id int) bool {
 	return id == 65534 || uint32(id) == 4294967294
 }

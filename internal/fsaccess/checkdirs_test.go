@@ -75,6 +75,8 @@ func TestCheckDirsMountedFile(t *testing.T) {
 	}
 }
 
+// The data folder on a network share is named, by the visible mount nearest
+// it; a FUSE pool of local disks (Unraid's shfs) is not a share.
 func TestCheckDirsDatabaseMount(t *testing.T) {
 	parent := t.TempDir()
 	data := filepath.Join(parent, "server data")
@@ -89,9 +91,14 @@ func TestCheckDirsDatabaseMount(t *testing.T) {
 	}
 	for _, fsType := range []string{"nfs", "nfs4", "cifs", "smb3", "fuse.sshfs"} {
 		got := check(mounts.Mount{Point: parent, FSType: fsType})
-		want := "audiosilo: WARNING: " + data + " is on " + fsType + ". Keep the SQLite database on a local disk. SQLite locking on SMB needs the nobrl mount option. An NFS outage can crash the server.\n"
+		want := "audiosilo: WARNING: The data folder " + data + " is on a network share (" + fsType + "). Keep it on a local disk if you can: the server's database needs file locking a share may not give (an SMB share needs the nobrl mount option), and the server can crash when the share stops answering.\n"
 		if got != want {
 			t.Errorf("%s: got %q, want %q", fsType, got, want)
+		}
+	}
+	for _, fsType := range []string{"fuse.shfs", "fuse.mergerfs", "btrfs"} {
+		if got := check(mounts.Mount{Point: parent, FSType: fsType}); got != "" {
+			t.Errorf("%s: %q", fsType, got)
 		}
 	}
 	// The local mount at the data path hides both the network parent and an

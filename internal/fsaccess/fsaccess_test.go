@@ -81,27 +81,31 @@ func TestHintStartedAsUser(t *testing.T) {
 	}
 }
 
+// An unmapped NFS owner (nobody) is never named as the PUID or user: to use.
 func TestHintUnmappedOwner(t *testing.T) {
-	nobody := uint32(4294967294)
+	const nobody = 4294967294
+	advice := func(noun string) string {
+		return "Its owner or group is nobody, an ID that maps to no account. If the " + noun + " is on an NFS share, check the export's root_squash or all_squash setting and that the NAS and this computer map user IDs the same way. Otherwise give user 1000:1000 read and write access to the " + noun + "."
+	}
 	for _, tc := range []struct {
 		name     string
 		uid, gid int
 		asUser   bool
+		want     string
 	}{
-		{"unmapped owner and group", int(nobody), int(nobody), false},
-		{"only owner unmapped", 65534, 100, false},
-		{"only group unmapped under --user", 1026, int(nobody), true},
-		{"matching owner with unmapped group", 1000, 65534, false},
+		{"unmapped owner and group", nobody, nobody, false, "The server runs as user 1000:1000 and the folder belongs to 4294967294:4294967294. " + advice("folder")},
+		{"only owner unmapped", 65534, 100, false, "The server runs as user 1000:1000 and the folder belongs to 65534:100. " + advice("folder")},
+		{"only group unmapped under --user", 1026, nobody, true, "The server runs as user 1000:1000 and the folder belongs to 1026:4294967294. " + advice("folder")},
+		// The right owner: its permissions are the cause, whatever the group.
+		{"matching owner with unmapped group", 1000, 65534, false, "The server runs as user 1000:1000 and the folder belongs to 1000:65534. Give user 1000:1000 read and write access to the folder (its permissions refuse it)."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			as(t, 1000, 1000, tc.uid, tc.gid, true, true)
 			if tc.asUser {
 				t.Setenv(EnvStartedAsUser, "1")
 			}
-			got := hint(nil, true)
-			if !strings.Contains(got, "folder's owner is unmapped") || !strings.Contains(got, "root_squash or all_squash") ||
-				!strings.Contains(got, "user and group mappings") || strings.Contains(got, "PUID") || strings.Contains(got, "PGID") || strings.Contains(got, "user:") {
-				t.Errorf("unmapped owner advice: %s", got)
+			if got := hint(nil, true); got != tc.want {
+				t.Errorf("Hint =\n%s\nwant\n%s", got, tc.want)
 			}
 		})
 	}
