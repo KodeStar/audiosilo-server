@@ -185,7 +185,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`resolve`, `touchRowSQL`'s bearer hash; a failed touch is the 503 of a token not
   checked, a rotated bearer a 401), and the rotation is a compare-and-set on
   `last_seen IS NULL`, so nothing is minted by row id through a bearer a replay ends. It records
-  the hashed device key and retry deadline in `invite_exchanges` (0098) in the same
+  the hashed device key and retry deadline in `invite_exchanges` (0097) in the same
   transaction as the claim. A further or late retry gets 401
   `invite_used_by_this_device` while the pairing token and record still exist.
   Linked pairing tokens die with their code: delete/
