@@ -81,6 +81,32 @@ func TestHintStartedAsUser(t *testing.T) {
 	}
 }
 
+func TestHintUnmappedOwner(t *testing.T) {
+	nobody := uint32(4294967294)
+	for _, tc := range []struct {
+		name     string
+		uid, gid int
+		asUser   bool
+	}{
+		{"unmapped owner and group", int(nobody), int(nobody), false},
+		{"only owner unmapped", 65534, 100, false},
+		{"only group unmapped under --user", 1026, int(nobody), true},
+		{"matching owner with unmapped group", 1000, 65534, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			as(t, 1000, 1000, tc.uid, tc.gid, true, true)
+			if tc.asUser {
+				t.Setenv(EnvStartedAsUser, "1")
+			}
+			got := hint(nil, true)
+			if !strings.Contains(got, "folder's owner is unmapped") || !strings.Contains(got, "root_squash or all_squash") ||
+				!strings.Contains(got, "user and group mappings") || strings.Contains(got, "PUID") || strings.Contains(got, "PGID") || strings.Contains(got, "user:") {
+				t.Errorf("unmapped owner advice: %s", got)
+			}
+		})
+	}
+}
+
 // A read-only mount (docker's :ro) refuses every owner: it counts as refused (a
 // backup's permission_denied), with the mount fix, not owner advice (server#383).
 func TestReadOnlyMount(t *testing.T) {

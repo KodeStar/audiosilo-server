@@ -183,6 +183,8 @@ func hint(info fs.FileInfo, write bool) string {
 	ouid, ogid, known := ownerOf(info)
 	uid, _ := running()
 	switch {
+	case known && (unmappedID(ouid) || unmappedID(ogid)):
+		fmt.Fprintf(&b, "The %s's owner is unmapped. Check the NFS export's root_squash or all_squash settings and the user and group mappings on the client and server.", noun)
 	case known && ouid == uid:
 		// The right owner: the mode refuses it.
 		fmt.Fprintf(&b, "%s (its permissions refuse it).", giveFirst)
@@ -205,6 +207,11 @@ func hint(info fs.FileInfo, write bool) string {
 		fmt.Fprintf(&b, "Run the server as the %s's owner, or %s.", noun, give)
 	}
 	return b.String()
+}
+
+// NFS can report nobody as either the overflow ID or the unsigned UID/GID -2.
+func unmappedID(id int) bool {
+	return id == 65534 || uint32(id) == 4294967294
 }
 
 // writeCheck is the file CheckWrite creates and removes.

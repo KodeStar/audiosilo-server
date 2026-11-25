@@ -16,10 +16,8 @@
 # (server#368). It warns and carries on: the server's own start-up error says the
 # same about the data folder. The checks share one time limit
 # (fsaccess.DirCheckTimeout): a share whose server is gone is said not to answer,
-# and never holds the start. The root-only ownership steps on the data folder
-# itself and on the backups folder are each bounded by $WAIT seconds for the
-# same reason; the walk of the data folder's contents is not (a large folder may
-# need longer), and is skipped when the data folder itself didn't answer.
+# and never holds the start. Each root-only ownership step gets $WAIT seconds,
+# including the walk of the data folder's contents.
 #
 # If the container is started with an explicit non-root user (docker `--user` /
 # compose `user:`), we skip the chown/drop, run the same checks and exec as that
@@ -100,7 +98,14 @@ usable_path() {
 # folders, so the server's user, who can write in the data folder, cannot
 # swap in a link for root to follow.
 chown_data() {
-  audiosilo --data "$DATA" chowndata "$RUN_AS"
+  # A hard NFS request can ignore TERM. BusyBox returns 137 after SIGKILL.
+  timeout -s KILL "$WAIT" audiosilo --data "$DATA" chowndata "$RUN_AS" 2>/dev/null || {
+    case "$?" in
+      124 | 137)
+        printf "audiosilo: WARNING: The ownership walk of %s didn't finish within %ss. Check the network share if this folder is on one. Continuing startup.\n" "$DATA" "$WAIT" >&2
+        ;;
+    esac
+  }
 }
 
 # The status passed to checkdirs is about this folder alone. A failed chown
@@ -161,9 +166,8 @@ if [ "$(id -u)" = "0" ]; then
     rc=0
     chown_folder "$DATA" 2>/dev/null || rc=$?
     if [ "$rc" != 0 ]; then DATA_CHOWN_FAILED=1; fi
-    # A data folder that didn't answer in time isn't walked: the walk would hold
-    # the start on it.
-    case "$rc" in 124 | 143) ;; *) chown_data 2>/dev/null || true ;; esac
+    # Even when this check answers from cache, the walk has its own deadline.
+    case "$rc" in 124 | 143) ;; *) chown_data ;; esac
   fi
   if [ -n "$BACKUPS" ]; then
     # The folder and AudioSilo's own backup files in it, never the rest (it may be

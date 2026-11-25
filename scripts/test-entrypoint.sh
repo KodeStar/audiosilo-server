@@ -98,6 +98,12 @@ ROOT=$(vol root 0:0 755)
 out=$(run "$NOCHOWN" -v "$ROOT:/data")
 expect "root-owned data folder" "$out" "belongs to 0:0" "making 1000:1000 its owner" "!PUID=0"
 
+# NFS nobody IDs are useful diagnostics, but cannot identify the host account.
+UNMAPPED=$(vol unmapped 4294967294:65534 700)
+out=$(run "$NOCHOWN" -v "$UNMAPPED:/data")
+expect "unmapped data owner" "$out" "belongs to 4294967294:65534" "folder's owner is unmapped" \
+  "root_squash or all_squash" "user and group mappings" "!PUID=" "!PGID=" "ran as 1000:1000"
+
 # 5. AUDIOSILO_BACKUP_DIR: chowned with the data folder, so backups can be made.
 BK=$(vol backups 0:0 755)
 out=$(run -e AUDIOSILO_BACKUP_DIR=/backups -v "$DATA:/data" -v "$BK:/backups")
@@ -164,6 +170,26 @@ SLOW_FIND
   chmod +x /test-bin/find
   PATH=/test-bin:$PATH sh /usr/local/bin/docker-entrypoint.sh sh -c "cat /tmp/backup-walk && echo running" --data /data' 2>&1 || true)
 expect "slow backups ownership walk is bounded" "$out" "^started$" "^running$" "!^late$"
+
+# The data folder's attributes can be cached while its contents no longer
+# answer. Stall only chowndata and ignore TERM, as a hard NFS wait can do.
+out=$(docker run --rm -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '
+  mkdir -p "/nas data" /test-bin
+  cat >/test-bin/audiosilo << "SLOW_DATA"
+#!/bin/sh
+if [ "$3" = chowndata ]; then
+  trap "" TERM
+  echo started >/tmp/data-walk
+  sleep 9
+  echo late >>/tmp/data-walk
+fi
+exec /usr/local/bin/audiosilo "$@"
+SLOW_DATA
+  chmod +x /test-bin/audiosilo
+  PATH=/test-bin:$PATH sh /usr/local/bin/docker-entrypoint.sh sh -c \
+    "cat /tmp/data-walk && echo running as \$(id -u):\$(id -g)" --data "/nas data"' 2>&1 || true)
+expect "slow data ownership walk warns and hands off" "$out" \
+  "WARNING: The ownership walk of /nas data didn't finish within 5s" "^started$" "!^late$" "^running as 1000:1000$"
 
 # 5d. A trailing slash names the same folder: chowned, and not read again as a
 #     folder of books.

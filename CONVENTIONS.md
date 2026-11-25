@@ -5002,8 +5002,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`fsaccess.User`, "uid:gid"; none on Windows), the folder's owner (`syscall.Stat_t`, unix only) and the
   fix (`fsaccess.Wrap`'s hint: in a container `PUID`/`PGID` set to the owner; never `PUID=0` for a root-owned
   folder, then "make the server's user its owner"; the right owner refused by the mode: "give it access";
-  outside a container: run as the owner). Never classify by `os.ErrPermission` on SQLite's error (its
-  "unable to open database file" wraps none): probe with a file of our own first (`CheckWrite`: create and
+  outside a container: run as the owner). An unmapped UID or GID (65534 or 4294967294) gets advice to
+  check the NFS export's squash settings and the client and server ID mappings.
+  Never classify by `os.ErrPermission` on SQLite's error (its "unable to open database file" wraps none):
+  probe with a file of our own first (`CheckWrite`: create and
   remove `.audiosilo-write-check-*`, and open each named file that exists read-write). Uses: the launcher
   checks the data folder and `audiosilo.db`, `-wal`, `-shm` before `config.Load` and `store.Open`, and
   words a `config.yaml` it may not read (start-up error "the data folder isn't usable: ..."; a read-only
@@ -5042,11 +5044,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a private temp file. It opens mounted regular files for reading and lists mounted library folders.
   Each probe gets five seconds, including the owner lookup. A permission failure uses the same
   `fsaccess` explanation as startup, including `user:` under an explicit user and read-write mount
-  advice for a read-only filesystem. A timeout reports an unresponsive share. The data folder's own
-  chown and the explicit backups folder's ownership steps are also bounded by the shell's
-  five-second timeout; the walk of the data folder's contents (`audiosilo chowndata`,
-  `fsaccess.ChownTree`) is not, as a large folder may need longer, and is skipped when the data
-  folder's own chown timed out. BusyBox's `timeout`
+  advice for a read-only filesystem. For data on NFS, SMB or a `fuse.*` mount, the check prints
+  a local-disk recommendation using the mount table. A probe timeout reports an unresponsive share.
+  Each ownership step gets five seconds. If the data folder's own chown times out, the entrypoint
+  skips the walk of its contents (`audiosilo chowndata`, `fsaccess.ChownTree`). If the walk itself
+  times out, the entrypoint warns with the folder name and continues startup. BusyBox's `timeout`
   leaves a watcher behind each command: `reap_watchers` ends them before the hand-over, or each would
   stay a zombie under the server. `scripts/test-entrypoint.sh` (Docker) is its test, not run in CI.
 - **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):

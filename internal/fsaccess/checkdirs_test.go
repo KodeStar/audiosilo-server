@@ -75,6 +75,32 @@ func TestCheckDirsMountedFile(t *testing.T) {
 	}
 }
 
+func TestCheckDirsDatabaseMount(t *testing.T) {
+	parent := t.TempDir()
+	data := filepath.Join(parent, "server data")
+	if err := os.Mkdir(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	check := func(table ...mounts.Mount) string {
+		t.Helper()
+		var out bytes.Buffer
+		checkDirs(data, "", false, false, table, &out, time.Second)
+		return out.String()
+	}
+	for _, fsType := range []string{"nfs", "nfs4", "cifs", "smb3", "fuse.sshfs"} {
+		got := check(mounts.Mount{Point: parent, FSType: fsType})
+		want := "audiosilo: WARNING: " + data + " is on " + fsType + ". Keep the SQLite database on a local disk. SQLite locking on SMB needs the nobrl mount option. An NFS outage can crash the server.\n"
+		if got != want {
+			t.Errorf("%s: got %q, want %q", fsType, got, want)
+		}
+	}
+	// The local mount at the data path hides both the network parent and an
+	// earlier record at the same point.
+	if got := check(mounts.Mount{Point: parent, FSType: "nfs"}, mounts.Mount{Point: data, FSType: "cifs"}, mounts.Mount{Point: data, FSType: "ext4"}); got != "" {
+		t.Errorf("local data mount: %q", got)
+	}
+}
+
 // A shared folder can already contain a symlink with the write probe's prefix.
 // The probe uses an exclusive temporary file and removes only its own file.
 func TestCheckDirsWriteProbe(t *testing.T) {

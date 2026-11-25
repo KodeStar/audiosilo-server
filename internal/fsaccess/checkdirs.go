@@ -52,9 +52,13 @@ func checkDirs(dataDir, backups string, dataFailed, backupFailed bool, table []m
 	for _, m := range table {
 		visible[m.Point] = m
 	}
+	fsType := containingMount(data, visible).FSType
+	if fsType == "nfs" || fsType == "nfs4" || fsType == "cifs" || strings.HasPrefix(fsType, "smb") || strings.HasPrefix(fsType, "fuse.") {
+		_, _ = fmt.Fprintf(out, "audiosilo: WARNING: %s is on %s. Keep the SQLite database on a local disk. SQLite locking on SMB needs the nobrl mount option. An NFS outage can crash the server.\n", data, fsType)
+	}
 	var checks []check
 	write := func(path string, chownFailed bool) {
-		ro := onReadOnlyMount(path, visible)
+		ro := containingMount(path, visible).ReadOnly
 		checks = append(checks, startCheck(path, func() string { return writeProblem(path, ro, chownFailed) }))
 	}
 	write(data, dataFailed)
@@ -73,13 +77,13 @@ func checkDirs(dataDir, backups string, dataFailed, backupFailed bool, table []m
 	report(out, checks, limit)
 }
 
-func onReadOnlyMount(path string, table map[string]mounts.Mount) bool {
+func containingMount(path string, table map[string]mounts.Mount) mounts.Mount {
 	for p := path; ; p = filepath.Dir(p) {
 		if m, ok := table[p]; ok {
-			return m.ReadOnly
+			return m
 		}
 		if p == filepath.Dir(p) {
-			return false
+			return mounts.Mount{}
 		}
 	}
 }
