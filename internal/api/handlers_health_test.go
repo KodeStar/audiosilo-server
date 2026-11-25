@@ -795,6 +795,9 @@ func TestWaitMediaCachesLeavesAHeldBookRead(t *testing.T) {
 	go func() { a.WaitMediaCaches(wait); close(ended) }()
 	select {
 	case <-ended:
+		if wait.Err() == nil {
+			t.Error("WaitMediaCaches returned before its wait ended, with a book read under way")
+		}
 	case <-time.After(testwait.Scaled(5 * time.Second)):
 		t.Fatal("WaitMediaCaches waited on a held book read past its wait")
 	}

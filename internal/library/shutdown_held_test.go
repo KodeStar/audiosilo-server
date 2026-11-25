@@ -69,6 +69,9 @@ func TestWaitReadsLeavesAHeldRead(t *testing.T) {
 		if n != 1 {
 			t.Errorf("WaitReads left %d reads under way, want the held one", n)
 		}
+		if wait.Err() == nil {
+			t.Error("WaitReads returned before its wait ended, with a read under way")
+		}
 	case <-time.After(testwait.Scaled(5 * time.Second)):
 		t.Fatal("WaitReads waited on the held read past its 100ms wait")
 	}
