@@ -251,34 +251,36 @@ func (c *Catalog) markResolve(ctx context.Context, tx *sql.Tx, id int64) error {
 // the pass returns its errors rather than starting again (it would fail the
 // same way).
 func (c *Catalog) ResolveSources(ctx context.Context) error {
+	// A library's failure is kept with the generation it failed at: one
+	// switched again since starts over, and its earlier failure is no longer
+	// the pass's error.
 	type cursor struct {
 		generation, after int64
-		failed            bool
+		err               error
 	}
 	progress := map[int64]cursor{}
-	var errs []error
 	for {
 		due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey)
 		if err != nil {
-			return errors.Join(append(errs, err)...)
+			return err
 		}
+		var errs []error
 		ran := false
 		for lib, gen := range due {
 			at := progress[lib]
 			if at.generation != gen {
 				at = cursor{generation: gen}
 			}
-			if at.failed {
+			if at.err != nil {
+				errs = append(errs, fmt.Errorf("library %d: %w", lib, at.err))
 				continue
 			}
 			ran = true
-			at.after, err = c.resolveLibraryBatch(ctx, lib, gen, at.after)
-			if err != nil {
+			if at.after, err = c.resolveLibraryBatch(ctx, lib, gen, at.after); err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				at.failed = true
-				errs = append(errs, fmt.Errorf("library %d: %w", lib, err))
+				at.err = err
 			}
 			progress[lib] = at
 		}
