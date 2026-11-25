@@ -36,7 +36,15 @@ self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
+      // Only this worker's own older caches: the web player shares the origin, and
+      // its build caches and saved downloads (audiosilo-media-v1) must survive.
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((k) => k.startsWith("audiosilo-admin-") && k !== VERSION)
+            .map((k) => caches.delete(k)),
+        ),
+      )
       .then(() => self.clients.claim()),
   );
 });
