@@ -108,6 +108,11 @@ func TestIndexSearchText(t *testing.T) {
 		ftsText("吾輩は猫である")); err != nil {
 		t.Fatal(err)
 	}
+	// An older tokenizer split this Latin word as well. Reapplying the
+	// current rule to the FTS value alone cannot put it back together.
+	if _, err := c.db.ExecContext(ctx, `UPDATE books_fts SET title = 'Soul smith' WHERE title = 'Soulsmith'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := c.db.ExecContext(ctx, `DELETE FROM server_state WHERE key = ?`, searchTextKey); err != nil {
 		t.Fatal(err)
 	}
@@ -117,10 +122,10 @@ func TestIndexSearchText(t *testing.T) {
 	}
 
 	n, err := c.IndexSearchText(ctx)
-	if err != nil || n != 1 {
-		t.Fatalf("IndexSearchText = %d (err %v), want the 1 CJK row", n, err)
+	if err != nil || n != 2 {
+		t.Fatalf("IndexSearchText = %d (err %v), want both outdated rows", n, err)
 	}
-	for _, q := range []string{"猫", "吾輩", "漱石", "soul"} {
+	for _, q := range []string{"猫", "吾輩", "漱石", "soulsmith"} {
 		if res, _ := c.Search(ctx, q, all, 10); len(res) != 1 {
 			t.Errorf("after the rewrite: search %q = %d books, want 1", q, len(res))
 		}

@@ -15,10 +15,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // Phase 3: the Health and Jobs endpoints.
@@ -734,7 +736,7 @@ func TestLogLateReread(t *testing.T) {
 // TestStartReread: a Re-read on its own goroutine answers its request through
 // done, a panic in it as the read's failure rather than the server's end; one
 // its request left (the 202 still_reading) logs its own failure, counted in
-// rereads, so the log is written before WaitMediaCaches returns.
+// bookReads, so the log is written before WaitMediaCaches returns.
 func TestStartReread(t *testing.T) {
 	t.Parallel()
 	var logs syncBuffer
@@ -755,9 +757,9 @@ func TestStartReread(t *testing.T) {
 		t.Fatal("a read still going was not left")
 	}
 	close(hold)
-	a.rereads.Wait()
+	a.bookReads.Wait()
 	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "A/Slow") {
-		t.Errorf("a left read's failure was not logged by the time rereads ended: %q", out)
+		t.Errorf("a left read's failure was not logged by the time book reads ended: %q", out)
 	}
 	if len(rr.done) != 0 {
 		t.Error("a left read sent its outcome to nobody")
@@ -765,5 +767,38 @@ func TestStartReread(t *testing.T) {
 	ended := a.startReread(lib, "A/Quick", func() error { return nil })
 	if err := <-ended.done; err != nil || ended.leave() {
 		t.Errorf("an ended read: %v, left %v; want nil and not left", err, ended.leave())
+	}
+	a.WaitMediaCaches(context.Background())
+	late := a.startReread(lib, "A/Late", func() error {
+		t.Error("started a detached read after shutdown")
+		return nil
+	})
+	if err := <-late.done; !errors.Is(err, library.ErrStopping) {
+		t.Errorf("read after shutdown = %v", err)
+	}
+}
+
+// TestWaitMediaCachesLeavesAHeldBookRead: a detached book read that never
+// returns (held on a share that stopped answering, where no context reaches
+// it) holds WaitMediaCaches only until its wait ends, so shutdown goes on.
+func TestWaitMediaCachesLeavesAHeldBookRead(t *testing.T) {
+	t.Parallel()
+	a := &API{log: slog.Default()}
+	hold := make(chan struct{})
+	defer close(hold)
+	if !a.startBookRead(func() { <-hold }) {
+		t.Fatal("the read was not started")
+	}
+	wait, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	ended := make(chan struct{})
+	go func() { a.WaitMediaCaches(wait); close(ended) }()
+	select {
+	case <-ended:
+		if wait.Err() == nil {
+			t.Error("WaitMediaCaches returned before its wait ended, with a book read under way")
+		}
+	case <-time.After(testwait.Scaled(5 * time.Second)):
+		t.Fatal("WaitMediaCaches waited on a held book read past its wait")
 	}
 }

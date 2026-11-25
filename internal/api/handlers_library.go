@@ -471,7 +471,7 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 		if lib.Kind == catalog.KindPodcasts {
 			return nil, library.ErrNotIndexable
 		}
-		return a.indexOnDemand(ctx, lib, path, scope.Allows)
+		return a.indexOnDemand(ctx, lib, path, scope.Allows, false)
 	case err != nil:
 		return nil, err
 	case !scope.Allows(b.RelPath):
@@ -497,7 +497,7 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 // through a link out of the root (library.ErrOutsideRoot: path is cleaned, so
 // its names never climb out) is a path with nothing there too, the 404 the
 // stream and /fs answer it with, never a 400 that would tell the link is one.
-func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path string, allow func(string) bool) (*catalog.Book, error) {
+func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path string, allow func(string) bool, background bool) (*catalog.Book, error) {
 	_, there, err := library.SafeJoinListed(ctx, lib.Root, path, a.fileWait, a.listed.Names)
 	switch {
 	case errors.Is(err, library.ErrOutsideRoot):
@@ -507,7 +507,7 @@ func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path stri
 	case !there:
 		return nil, library.ErrNotIndexable
 	}
-	b, err := a.indexPath(a.lookCtx(ctx), *lib, path, allow)
+	b, err := a.indexPath(a.lookCtx(ctx), *lib, path, allow, background)
 	if errors.Is(err, library.ErrOutsideRoot) { // a link put there since the look above
 		return nil, library.ErrNotIndexable
 	}

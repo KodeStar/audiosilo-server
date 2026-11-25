@@ -264,9 +264,9 @@ func TestJoinedDiscPathScope(t *testing.T) {
 	}
 	reads := 0
 	index := e.api.indexPath
-	e.api.indexPath = func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool) (*catalog.Book, error) {
+	e.api.indexPath = func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool, background bool) (*catalog.Book, error) {
 		reads++
-		return index(ctx, lib, rel, allow)
+		return index(ctx, lib, rel, allow, background)
 	}
 	indexed := func() bool {
 		t.Helper()

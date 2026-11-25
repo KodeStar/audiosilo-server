@@ -84,6 +84,21 @@ const (
 // outside a test.
 var heldOpens atomic.Pointer[func(path string, look bool)]
 
+// heldCloses is HoldClosesForTests's hook, called before closeBlockFile
+// closes a file; nil outside a test.
+var heldCloses atomic.Pointer[func(path string)]
+
+// closeBlockFile closes f, the file openBlockFile opened at path. On a FUSE
+// share (rclone, mergerfs, shfs, sshfs) the close waits for a read given up
+// on to return, however long the share takes, so the read's caller does too:
+// HoldClosesForTests holds it as such a share does.
+func closeBlockFile(f *os.File, path string) {
+	if hook := heldCloses.Load(); hook != nil {
+		(*hook)(path)
+	}
+	_ = f.Close()
+}
+
 // OpenRegular is openRegular for the files a request or a scan opens outside
 // the audio reads (a stream, a cover): a FIFO named as one is turned away at
 // once (ErrNotRegular) rather than waited on for a writer that may never come,
@@ -201,7 +216,7 @@ func FingerprintErr(ctx context.Context, root, path string, timeout time.Duratio
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer closeBlockFile(f, path)
 	h := sha256.New()
 	fmt.Fprintf(h, "%d:", b.size)
 	if why := b.bounded(ctx, func() {

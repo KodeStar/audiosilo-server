@@ -292,14 +292,14 @@ const (
 )
 
 // startReread runs read, a Re-read of what is at p in lib, counted in
-// a.rereads, so one that outlives its answer ends before the database closes
+// a.bookReads, so one that outlives its answer ends before the database closes
 // (WaitMediaCaches; the base context ends it), and its outcome logged on that
 // goroutine too. A panic is the read's failure, as when it ran on the
 // request's goroutine (net/http recovered it there): unrecovered off it, it
 // would end the server.
 func (a *API) startReread(lib *catalog.Library, p string, read func() error) *reread {
 	rr := &reread{done: make(chan error, 1)}
-	a.rereads.Go(func() {
+	if !a.startBookRead(func() {
 		var err error
 		defer func() {
 			if v := recover(); v != nil {
@@ -313,7 +313,10 @@ func (a *API) startReread(lib *catalog.Library, p string, read func() error) *re
 			rr.done <- err
 		}()
 		err = read()
-	})
+	}) {
+		rr.state.Store(rereadEnded)
+		rr.done <- library.ErrStopping
+	}
 	return rr
 }
 

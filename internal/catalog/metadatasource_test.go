@@ -19,7 +19,7 @@ func setMetadataSource(t *testing.T, c *Catalog, ctx context.Context, libID int6
 	t.Helper()
 	if _, stale, err := c.UpdateLibrary(ctx, libID, LibraryPatch{MetadataSource: &source}); err != nil {
 		t.Fatal(err)
-	} else if stale {
+	} else if stale.Scan {
 		t.Fatal("a new metadata source asked for a rescan")
 	}
 	if err := c.ResolveSources(ctx); err != nil {
@@ -99,7 +99,7 @@ func TestResolveSourcesOvertaken(t *testing.T) {
 	if err != nil || due[lib.ID] != 3 {
 		t.Fatalf("due = %v, %v, want generation 3", due, err)
 	}
-	if err := c.resolveLibrary(ctx, lib.ID, 2); err != nil {
+	if _, err := c.resolveLibraryBatch(ctx, lib.ID, 2, 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := mustBook(t, c, ctx, lib.ID, p).Title; got != "Tagged" {
@@ -553,5 +553,91 @@ func TestBatchBackfillsSkipAnUnreadableBook(t *testing.T) {
 	}
 	if err := c.SetPathReading(ctx, lib.ID, map[string]*metadata.Metadata{"Author/One": nil, broken: nil}); err != nil {
 		t.Errorf("SetPathReading with one unreadable book: %v, want the rest written", err)
+	}
+}
+
+func TestResolveSourcesInterleavesNewlyDueLibrary(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	big, _ := c.CreateLibrary(ctx, Library{Name: "Big", Root: t.TempDir()})
+	small, _ := c.CreateLibrary(ctx, Library{Name: "Small", Root: t.TempDir()})
+	for i := range 2*resolveBatch + 1 {
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: big.ID, RelPath: fmt.Sprintf("%04d.m4b", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := MetadataFromPath
+	if _, _, err := c.UpdateLibrary(ctx, big.ID, LibraryPatch{MetadataSource: &source}); err != nil {
+		t.Fatal(err)
+	}
+	// The first book's resolve makes the small library due mid-pass.
+	trigger := fmt.Sprintf(`CREATE TRIGGER queue_small AFTER UPDATE OF title ON books
+		WHEN OLD.rel_path = '0000.m4b' BEGIN
+		UPDATE server_state SET value = json_set(value, '$."%d"', 1) WHERE key = '%s'; END`, small.ID, resolveKey)
+	if _, err := c.db.ExecContext(ctx, trigger); err != nil {
+		t.Fatal(err)
+	}
+	var remaining []int
+	c.OnBookChange(func() {
+		due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := due[big.ID]; ok {
+			remaining = append(remaining, len(due))
+		}
+	})
+	if err := c.ResolveSources(ctx); err != nil || !slices.Equal(remaining, []int{1}) {
+		t.Fatalf("remaining when small finished = %v, %v", remaining, err)
+	}
+}
+
+// TestResolveSourcesForgetsAnOvertakenFailure: a library that failed at one
+// generation and was switched again during the same pass is run again at the
+// new one, and once that succeeds its earlier failure is not the pass's error.
+func TestResolveSourcesForgetsAnOvertakenFailure(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	const p = "Author/Series/01 - Book"
+	bad, _ := c.CreateLibrary(ctx, Library{Name: "Bad", Root: t.TempDir()})
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: bad.ID, RelPath: p, IsFolder: true, Title: "Tagged"}); err != nil {
+		t.Fatal(err)
+	}
+	big, _ := c.CreateLibrary(ctx, Library{Name: "Big", Root: t.TempDir()})
+	for i := range 2*resolveBatch + 1 {
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: big.ID, RelPath: fmt.Sprintf("%04d.m4b", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := MetadataFromPath
+	for _, lib := range []*Library{bad, big} {
+		if _, _, err := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{MetadataSource: &source}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The bad library fails until the big one's second batch clears the fault
+	// and switches it again (a new generation), as an admin's edit would.
+	if _, err := c.db.ExecContext(ctx, `CREATE TABLE fail_once(x); INSERT INTO fail_once VALUES (1)`); err != nil {
+		t.Fatal(err)
+	}
+	triggers := fmt.Sprintf(`CREATE TRIGGER fail_bad BEFORE UPDATE OF title ON books
+		WHEN OLD.library_id = %[1]d AND EXISTS (SELECT 1 FROM fail_once) BEGIN SELECT RAISE(ABORT, 'disk says no'); END;
+		CREATE TRIGGER switch_bad AFTER UPDATE OF title ON books
+		WHEN OLD.library_id = %[2]d AND OLD.rel_path = '%04[3]d.m4b' BEGIN
+		DELETE FROM fail_once;
+		UPDATE server_state SET value = json_set(value, '$."%[1]d"', 2) WHERE key = '%[4]s'; END`,
+		bad.ID, big.ID, resolveBatch, resolveKey)
+	if _, err := c.db.ExecContext(ctx, triggers); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ResolveSources(ctx); err != nil {
+		t.Fatalf("a failure overtaken by a later switch that succeeded: %v", err)
+	}
+	if got := mustBook(t, c, ctx, bad.ID, p).Title; got != "Book" {
+		t.Fatalf("the switched library's book = %q, want the path's title", got)
+	}
+	due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey)
+	if err != nil || len(due) != 0 {
+		t.Fatalf("due = %v, %v, want none", due, err)
 	}
 }

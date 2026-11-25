@@ -296,7 +296,10 @@ func TestIndexPathEndsWithTheServer(t *testing.T) {
 		t.Fatalf("IndexPath: %v, want context.Canceled", err)
 	}
 	stop() // then the server stops
-	waitFlight(t, s, lib, "A/Book", false)
+	s.WaitReads(context.Background())
+	if f := flightOf(s, lib, "A/Book"); f != nil {
+		t.Fatal("shutdown returned with the detached read still running")
+	}
 	if _, err := s.cat.GetBookByPath(ctx, lib.ID, "A/Book"); !errors.Is(err, catalog.ErrNotFound) {
 		t.Fatalf("a read the server stopped was written: %v", err)
 	}
@@ -357,18 +360,36 @@ func TestScanSharesTheFlight(t *testing.T) {
 	})
 	t.Run("scan during an on-demand index", func(t *testing.T) {
 		t.Parallel()
-		s, lib, ctx, _ := newSlowProbeEnv(t)
+		s, lib, ctx, count, hold := newProbeEnv(t, 0)
+		release := hold()
 		read := make(chan error, 1)
 		go func() {
 			_, err := s.IndexPath(ctx, lib, "A/Book")
 			read <- err
 		}()
 		waitFlight(t, s, lib, "A/Book", true)
-		if _, err := s.Scan(ctx, lib); err != nil {
-			t.Fatal(err)
-		}
+		scanned := make(chan error, 1)
+		var res *ScanResult
+		go func() {
+			var err error
+			res, err = s.Scan(ctx, lib)
+			scanned <- err
+		}()
+		waitJoined(t, s, lib, "A/Book", 1)
+		release()
 		if err := <-read; err != nil {
 			t.Fatal(err)
+		}
+		if err := <-scanned; err != nil {
+			t.Fatal(err)
+		}
+		if got := count(); got != 4 {
+			t.Errorf("two two-part books probed %d times, want one probe per part", got)
+		}
+		// The book new to the scan, its row the on-demand read's, is still
+		// new content: counted as added, as a book the scan wrote is.
+		if res.Added != 2 || len(res.AddedTitles) != 2 {
+			t.Errorf("scan beside an on-demand index added %d (%q), want both new books", res.Added, res.AddedTitles)
 		}
 	})
 }
@@ -774,5 +795,66 @@ func TestRequestWaitsOutAnotherReadsProbe(t *testing.T) {
 	}
 	if err := <-read; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPlayerCanPublishFinishedScanRead(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFile(t, root, "A/First/01.mp3", []byte("first"))
+	writeFile(t, root, "B/Next/01.mp3", []byte("next"))
+	s, cat, lib, _ := newTestScanner(t, root, "", 2)
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	defer release()
+	next := make(chan struct{})
+	s.readFile = func(_ context.Context, _, p, _ string, _ time.Duration) *metadata.Metadata {
+		if filepath.Base(filepath.Dir(p)) == "First" {
+			<-hold
+		} else {
+			close(next)
+		}
+		return &metadata.Metadata{Duration: 10, Codec: "mp3"}
+	}
+	scanDone := make(chan error, 1)
+	go func() {
+		r, err := s.Scan(t.Context(), *lib)
+		if err == nil && r.Added != 2 {
+			err = fmt.Errorf("added %d, want 2", r.Added)
+		}
+		scanDone <- err
+	}()
+	<-next
+	ctx, cancel := context.WithTimeout(t.Context(), testwait.Scaled(5*time.Second))
+	defer cancel()
+	b, err := s.IndexPath(ctx, *lib, "B/Next")
+	if err != nil || b.Duration != 10 {
+		t.Errorf("book opened behind held read = %+v, %v", b, err)
+	}
+	if _, err := cat.GetBookByPath(ctx, lib.ID, "A/First"); !errors.Is(err, catalog.ErrNotFound) {
+		t.Errorf("earlier book before release = %v", err)
+	}
+	release()
+	if err := <-scanDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIndexSharedReturnsDetachedReadTimeout(t *testing.T) {
+	t.Parallel()
+	s, lib, ctx, count := newSlowProbeEnv(t)
+	f, err := s.startFlight(ctx, bookKey{lib.ID, "A/Book"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := s.IndexPath(ctx, lib, "A/Book")
+		result <- err
+	}()
+	waitJoined(t, s, lib, "A/Book", 1)
+	s.endFlight(f, context.DeadlineExceeded)
+	if err := <-result; !metadata.GaveUp(err) || count() != 0 {
+		t.Fatalf("joined timed-out read: %v, %d additional probes", err, count())
 	}
 }
