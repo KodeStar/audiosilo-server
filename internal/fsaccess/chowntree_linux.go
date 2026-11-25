@@ -166,10 +166,11 @@ func (w *walker) entry(dirfd int, dir string, parent *unix.Statx_t, name string)
 // mount by its id. A btrfs subvolume has its own device number but the same
 // mount, so it is walked. A kernel older than 5.8 tells no mount id: there a
 // device number other than the parent folder's is another mount, unless the
-// filesystem is btrfs.
+// filesystem is btrfs. The attributes are read unmasked: before 5.8 the
+// kernel set STATX_ATTR_AUTOMOUNT without naming it in stx_attributes_mask, and
+// a set bit is the kernel's own word either way.
 func (w *walker) elsewhere(st, parent *unix.Statx_t) bool {
-	attrs := st.Attributes & st.Attributes_mask
-	if attrs&(unix.STATX_ATTR_MOUNT_ROOT|unix.STATX_ATTR_AUTOMOUNT) != 0 {
+	if st.Attributes&(unix.STATX_ATTR_MOUNT_ROOT|unix.STATX_ATTR_AUTOMOUNT) != 0 {
 		return true
 	}
 	if w.known && st.Mask&unix.STATX_MNT_ID != 0 {
@@ -188,11 +189,13 @@ func (w *walker) chown(st *unix.Statx_t, path string, change func() error) {
 	}
 }
 
-// statAt is statx, or fstatat on a kernel without it (before 4.11), whose
-// answer carries no mount id and no attributes.
+// statAt is statx, or fstatat on a kernel without it (before 4.11) or where a
+// seccomp profile refuses it (EPERM, an older container runtime's default
+// answer; this runs as root, so statx gives EACCES, not EPERM, for a real
+// refusal), whose answer carries no mount id and no attributes.
 func statAt(dirfd int, name string, flags int, st *unix.Statx_t) error {
 	err := unix.Statx(dirfd, name, flags, statMask, st)
-	if !errors.Is(err, unix.ENOSYS) {
+	if !errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EPERM) {
 		return err
 	}
 	var s unix.Stat_t

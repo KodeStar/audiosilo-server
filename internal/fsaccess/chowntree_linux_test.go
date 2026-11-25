@@ -135,12 +135,14 @@ func TestChownTreeElsewhere(t *testing.T) {
 		st   unix.Statx_t
 		want bool
 	}{
-		"same mount":     {unix.Statx_t{Mask: unix.STATX_MNT_ID, Mnt_id: 7, Dev_major: 0, Dev_minor: 40}, false},
-		"other mount":    {unix.Statx_t{Mask: unix.STATX_MNT_ID, Mnt_id: 8, Dev_major: 8, Dev_minor: 1}, true},
-		"mount root":     {unix.Statx_t{Mask: unix.STATX_MNT_ID, Mnt_id: 7, Attributes: unix.STATX_ATTR_MOUNT_ROOT, Attributes_mask: unix.STATX_ATTR_MOUNT_ROOT}, true},
-		"automount":      {unix.Statx_t{Mask: unix.STATX_MNT_ID, Mnt_id: 7, Attributes: unix.STATX_ATTR_AUTOMOUNT, Attributes_mask: unix.STATX_ATTR_AUTOMOUNT}, true},
-		"old kernel dev": {unix.Statx_t{Dev_major: 0, Dev_minor: 40}, true},
-		"old kernel":     {unix.Statx_t{Dev_major: 8, Dev_minor: 1}, false},
+		"same mount":  {unix.Statx_t{Mask: unix.STATX_MNT_ID, Mnt_id: 7, Dev_major: 0, Dev_minor: 40}, false},
+		"other mount": {unix.Statx_t{Mask: unix.STATX_MNT_ID, Mnt_id: 8, Dev_major: 8, Dev_minor: 1}, true},
+		"mount root":  {unix.Statx_t{Mask: unix.STATX_MNT_ID, Mnt_id: 7, Attributes: unix.STATX_ATTR_MOUNT_ROOT, Attributes_mask: unix.STATX_ATTR_MOUNT_ROOT}, true},
+		"automount":   {unix.Statx_t{Mask: unix.STATX_MNT_ID, Mnt_id: 7, Attributes: unix.STATX_ATTR_AUTOMOUNT, Attributes_mask: unix.STATX_ATTR_AUTOMOUNT}, true},
+		// Before 5.8 the kernel set the bit but left it out of the mask.
+		"automount, unmasked": {unix.Statx_t{Dev_major: 8, Dev_minor: 1, Attributes: unix.STATX_ATTR_AUTOMOUNT}, true},
+		"old kernel dev":      {unix.Statx_t{Dev_major: 0, Dev_minor: 40}, true},
+		"old kernel":          {unix.Statx_t{Dev_major: 8, Dev_minor: 1}, false},
 	}
 	for name, c := range cases {
 		if got := w.elsewhere(&c.st, &parent); got != c.want {
