@@ -32,6 +32,8 @@ func TestCommand(t *testing.T) {
 		{args: []string{"chowndata", "1000"}, code: 2, done: true, errOut: "chowndata UID:GID"},
 		{args: []string{"chowndata", "x:1000"}, code: 2, done: true, errOut: "chowndata UID:GID"},
 		{args: []string{"chowndata", "1000:-1"}, code: 2, done: true, errOut: "chowndata UID:GID"},
+		{args: []string{"chowndata", "4294967296:1000"}, code: 2, done: true, errOut: "chowndata UID:GID"},
+		{args: []string{"chowndata", "1000:4294967295"}, code: 2, done: true, errOut: "chowndata UID:GID"},
 		{args: []string{"chowndata", "1000:1000", "extra"}, code: 2, done: true, errOut: "chowndata UID:GID"},
 		{args: []string{"version", "extra"}, code: 2, done: true, errOut: `"version" takes no arguments`},
 		{args: []string{"reset-admin", "a", "b"}, code: 2, done: true, errOut: "usage: audiosilo [--data <folder>] reset-admin [username]"},

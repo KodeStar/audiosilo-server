@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"strconv"
@@ -107,19 +108,16 @@ func checkDirs(args []string, dataDir string, stderr io.Writer) int {
 // UID:GID (the entrypoint's PUID:PGID), 0 when all changed, 1 when some could
 // not be (on stderr), 2 when asked wrongly.
 func chownData(args []string, dataDir string, stderr io.Writer) int {
-	uid, gid, ok := -1, -1, len(args) == 1
-	if ok {
-		u, g, found := strings.Cut(args[0], ":")
-		var errU, errG error
-		uid, errU = strconv.Atoi(u)
-		gid, errG = strconv.Atoi(g)
-		ok = found && errU == nil && errG == nil && uid >= 0 && gid >= 0
-	}
-	if !ok {
+	// 32 bits, as the kernel's uid_t: a larger number would wrap (to root at
+	// 4294967296), and 4294967295 is chown's "leave it as it is".
+	u, g, found := strings.Cut(strings.Join(args, " "), ":")
+	uid, errU := strconv.ParseUint(u, 10, 32)
+	gid, errG := strconv.ParseUint(g, 10, 32)
+	if len(args) != 1 || !found || errU != nil || errG != nil || uid == math.MaxUint32 || gid == math.MaxUint32 {
 		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] chowndata UID:GID")
 		return 2
 	}
-	if err := fsaccess.ChownTree(dataDir, uid, gid); err != nil {
+	if err := fsaccess.ChownTree(dataDir, int(uid), int(gid)); err != nil {
 		_, _ = fmt.Fprintln(stderr, "audiosilo: chowndata:", err)
 		return 1
 	}
