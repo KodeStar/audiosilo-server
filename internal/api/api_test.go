@@ -700,7 +700,7 @@ func TestInviteExchangeRetries(t *testing.T) {
 	}
 	const device = "device-random-key-0123456789"
 	var bearers []string
-	for range 2 {
+	for i := range 2 {
 		resp, b := e.exchangeAs(t, pair, "phone", device)
 		var got struct {
 			Token string `json:"token"`
@@ -709,6 +709,19 @@ func TestInviteExchangeRetries(t *testing.T) {
 			t.Fatalf("exchange: %d, want a session", resp.StatusCode)
 		}
 		bearers = append(bearers, got.Token)
+		if i > 0 {
+			continue
+		}
+		// Within the retry's minute, another device holding the same pairing
+		// token is told only that the invite is used, never that a device used
+		// it, and gets no session.
+		for _, other := range []string{"another-device-key-0123", ""} {
+			resp, b := e.exchangeAs(t, pair, "laptop", other)
+			if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get(headerUnauthorized) != codeInviteUsed ||
+				strings.Contains(b, codeInviteUsedByDevice) || strings.Contains(b, `"token"`) {
+				t.Fatalf("other device %q: %d, %q, %s", other, resp.StatusCode, resp.Header.Get(headerUnauthorized), b)
+			}
+		}
 	}
 	if bearers[0] == bearers[1] {
 		t.Fatal("replay answered the same bearer")
@@ -751,6 +764,11 @@ func TestLogoutAcrossInviteReplay(t *testing.T) {
 	rec := httptest.NewRecorder()
 	var rotated string
 	e.api.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The replay committed after the middleware read the token and before
+		// its touch (a used bearer is never rotated): clear the touch it left.
+		if _, err := e.db.ExecContext(ctx, `UPDATE tokens SET last_seen = NULL WHERE id = ?`, credentialFrom(r.Context()).ID); err != nil {
+			t.Fatal(err)
+		}
 		rotated = exchange()
 		e.api.handleLogout(w, r)
 	})).ServeHTTP(rec, req)

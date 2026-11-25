@@ -81,16 +81,20 @@ func (s *Service) ConsumePairing(ctx context.Context, secret, deviceName, device
 // replayInvite rotates the bearer on the original session row. The caller has
 // rechecked the pairing credential in this transaction. An empty answer with
 // no error means this device has never used this particular pairing token.
+// Only a bearer never presented is rotated (last_seen NULL: an authenticated
+// request's touch sets it): a lost answer was never used, and a session already
+// in use is neither taken from its device nor left with credentials minted
+// through the old bearer (an API key, a cast or pairing token).
 func replayInvite(ctx context.Context, tx *sql.Tx, userID int64, pair tokenRow, deviceHash, now string) (string, error) {
 	var sessionID int64
 	var canReplay bool
 	err := tx.QueryRowContext(ctx,
 		`SELECT s.id, e.retry_until IS NOT NULL AND ?3 BETWEEN s.created_at AND e.retry_until
-		        AND s.revoked = 0 AND (s.expires_at IS NULL OR s.expires_at > ?3)
+		        AND s.revoked = 0 AND s.last_seen IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?3)
 		        AND (c.expires_at IS NULL OR c.expires_at > ?3)
 		   FROM invite_exchanges e JOIN tokens s ON s.id = e.session_id JOIN auth_codes c ON c.id = ?4
-		  WHERE e.pairing_id = ?1 AND e.device_hash = ?2 AND s.user_id = ?5 AND s.kind = 'session'`,
-		pair.id, deviceHash, now, pair.codeID.Int64, userID).Scan(&sessionID, &canReplay)
+		  WHERE e.pairing_id = ?1 AND e.device_hash = ?2 AND s.user_id = ?5 AND s.kind = ?6`,
+		pair.id, deviceHash, now, pair.codeID.Int64, userID, KindSession).Scan(&sessionID, &canReplay)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

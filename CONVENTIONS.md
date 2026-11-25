@@ -175,8 +175,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rejected attempt never burns a use or marks an invite accepted (`uses` counts
   devices that actually paired). A client recovering a lost exchange answer can resend
   the same invite-derived pairing token and optional `device_id` (the random per-server
-  sign-in key, `signInKeyPattern`). For 60 seconds the server can rotate the original
-  live session's bearer once, with its device row and invite use intact. It records
+  sign-in key, `signInKeyPattern`; an older server's strict decoder refuses the field
+  with 400 before spending anything, and the player resends without it). For 60
+  seconds the server can rotate the original live session's bearer once, with its
+  device row and invite use intact, while that bearer has never been presented
+  (`last_seen` NULL: a lost answer was never used, so a session in use is never taken
+  from its device). It records
   the hashed device key and retry deadline in `invite_exchanges` (0098) in the same
   transaction as the claim. A further or late retry gets 401
   `invite_used_by_this_device` while the pairing token and record still exist.

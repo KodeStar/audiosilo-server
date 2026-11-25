@@ -43,7 +43,16 @@ func TestInviteReplay(t *testing.T) {
 	// A server restart between replies keeps the recovery. Two simultaneous
 	// retries compete for the same allowance.
 	s = New(s.db, func() time.Time { return *now })
+	// A cached bearer is one a request presented, which a replay never rotates;
+	// clearing its touch (a user-state write: the cache stays warm) stands for
+	// a replay landing between a request's lookup and its touch.
 	warm(t, s, first.Token, KindSession)
+	if _, err := s.db.ExecUserState(ctx, `UPDATE tokens SET last_seen = NULL WHERE token_hash = ?`, hashSecret(first.Token)); err != nil {
+		t.Fatal(err)
+	}
+	if !cached(s, first.Token) {
+		t.Fatal("clearing the touch emptied the token cache")
+	}
 	type answer struct {
 		session PairingSession
 		err     error
@@ -92,12 +101,15 @@ func TestInviteReplayRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
 		elapsed, inviteTTL time.Duration
-		revoke             bool
+		revoke, used       bool
 	}{
 		{name: "after the minute", elapsed: 61 * time.Second},
 		{name: "clock moved before the first exchange", elapsed: -time.Second},
 		{name: "invite expired", elapsed: 30 * time.Second, inviteTTL: 30 * time.Second},
 		{name: "original session signed out", revoke: true},
+		// The answer was not lost: its bearer authenticated a request, so a
+		// replay (another holder of the token and device key) takes nothing.
+		{name: "original bearer already used", used: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, ctx, now := newTestServiceWithClock(t)
@@ -116,11 +128,104 @@ func TestInviteReplayRefused(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if tc.used {
+				if _, err := s.ResolveToken(ctx, first.Token, KindSession); err != nil {
+					t.Fatal(err)
+				}
+			}
 			*now = now.Add(tc.elapsed)
 			if got, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice); !errors.Is(err, ErrInviteUsedByDevice) || got.Token != "" {
 				t.Fatalf("replay: %v, want refused and no bearer", err)
 			}
+			if tc.used {
+				if _, err := s.ResolveToken(ctx, first.Token, KindSession); err != nil {
+					t.Fatalf("refused replay ended the bearer in use: %v", err)
+				}
+			}
 		})
+	}
+}
+
+// A retry racing its own first exchange: the writer orders them, so one claims
+// the invite's only use and the other rotates that session's bearer. One use,
+// one device row, and only the later answer's bearer works.
+func TestInviteReplayRacingFirstExchange(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u := mustUser(t, s, ctx, "listener", "", RoleUser)
+	code, err := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := pairThrough(t, s, ctx, code)
+	type answer struct {
+		session PairingSession
+		err     error
+	}
+	ch := make(chan answer, 2)
+	for range 2 {
+		go func() {
+			result, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice)
+			ch <- answer{result, err}
+		}()
+	}
+	var first, replay PairingSession
+	for range 2 {
+		a := <-ch
+		switch {
+		case a.err != nil:
+			t.Fatalf("racing exchange: %v", a.err)
+		case a.session.Replayed:
+			replay = a.session
+		default:
+			first = a.session
+		}
+	}
+	if first.Token == "" || replay.Token == "" || first.CodeKind != CodeInvite {
+		t.Fatalf("want one exchange and one replay: first %+v, replay %+v", first, replay)
+	}
+	if _, err := s.ResolveToken(ctx, first.Token, KindSession); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("the earlier answer's bearer still works: %v", err)
+	}
+	if _, err := s.ResolveToken(ctx, replay.Token, KindSession); err != nil {
+		t.Fatalf("the later answer's bearer: %v", err)
+	}
+	var sessions int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE user_id = ? AND kind = 'session'`, u.ID).Scan(&sessions); err != nil || sessions != 1 {
+		t.Fatalf("sessions: %d, %v", sessions, err)
+	}
+	if codes, err := s.ListAuthCodes(ctx, u.ID); err != nil || len(codes) != 1 || codes[0].Uses != 1 {
+		t.Fatalf("uses: %+v, %v", codes, err)
+	}
+}
+
+// The daily retention keeps a spent invite's pairing token through its open
+// retry and deletes it, with its exchange record, once the minute is over.
+func TestPruneAfterInviteReplayWindow(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	u := mustUser(t, s, ctx, "listener", "", RoleUser)
+	code, err := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := pairThrough(t, s, ctx, code)
+	if _, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.PruneSingleUseTokens(ctx); err != nil || n != 0 {
+		t.Fatalf("prune inside the minute: %d, %v", n, err)
+	}
+	*now = now.Add(61 * time.Second)
+	if n, err := s.PruneSingleUseTokens(ctx); err != nil || n != 1 {
+		t.Fatalf("prune after the minute: %d, %v", n, err)
+	}
+	var rows int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM invite_exchanges`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("exchange records after prune: %d, %v", rows, err)
+	}
+	if _, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("pruned token: %v", err)
 	}
 }
 
@@ -144,7 +249,8 @@ func TestMultiUseInviteReplayRollback(t *testing.T) {
 	if got, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice); err == nil || Refused(err) || got.Token != "" {
 		t.Fatalf("failed write: %v, want internal error with no bearer", err)
 	}
-	if _, err := s.ResolveToken(ctx, first.Token, KindSession); err != nil {
+	// Peek: checking it without the touch that would make it a used bearer.
+	if _, err := s.Peek(ctx, first.Token, KindSession); err != nil {
 		t.Fatalf("failed replay invalidated original: %v", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `DROP TRIGGER fail_replay`); err != nil {
