@@ -560,9 +560,11 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// problem or the failure.
 	recordWrite := func(r *bookRead) {
 		b, err := r.book, r.err
-		if r.reused || errors.Is(err, errReadDropped) {
+		if (r.reused && r.existed) || errors.Is(err, errReadDropped) {
 			// The on-demand read's row stands, or the read was dropped at a
 			// Stop (bookRead.drop, publish): no write of the scan's, no failure.
+			// A book new to this scan whose row an on-demand read stored
+			// meanwhile is still new content, counted as added below.
 			return
 		}
 		if err != nil {
@@ -903,6 +905,15 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			if s.openedSinceScan(lib, b) {
 				sig, err := s.cat.SignatureAt(ctx, lib.ID, b.RelPath)
 				if err == nil && matchesOpenedBook(b, sig) {
+					if !existed {
+						// Counted as added (recordWrite), under the title stored
+						// (else the path's).
+						if stored, err := s.cat.GetBookByPath(ctx, lib.ID, b.RelPath); err == nil {
+							b.Title = stored.Title
+						} else {
+							setNames(b, nil, nil)
+						}
+					}
 					r.reused = true
 					r.claimed.Store(true)
 					r.finishWrite(s, nil)
@@ -2831,6 +2842,12 @@ func sameFiles(b *catalog.Book, sig catalog.Signature) bool {
 	return sig.MTime == b.MTime && sig.Size == b.Size && (!b.IsFolder || sig.FileOrder == catalog.FileOrderKey(b.Files))
 }
 
+// matchesOpenedBook reports whether the row an on-demand read stored since the
+// scan began (sig) is a whole reading of book b as discovery found it: no read
+// problem (a read cut short always records one, so a Re-read that kept the row
+// as stored is read again), the same files, its lengths of today's revision,
+// and its cover and side files as the walk lists them. The scan keeps that row
+// rather than read the book again with the same tools.
 func matchesOpenedBook(b *catalog.Book, sig catalog.Signature) bool {
 	return sig.IndexedAt != "" && sig.ScanError == "" && sig.ContentHash != "" && !sig.DurationStale &&
 		sameFiles(b, sig) && sig.IsFolder == b.IsFolder && sig.SplitParent == b.SplitParent &&

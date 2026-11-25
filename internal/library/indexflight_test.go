@@ -369,8 +369,10 @@ func TestScanSharesTheFlight(t *testing.T) {
 		}()
 		waitFlight(t, s, lib, "A/Book", true)
 		scanned := make(chan error, 1)
+		var res *ScanResult
 		go func() {
-			_, err := s.Scan(ctx, lib)
+			var err error
+			res, err = s.Scan(ctx, lib)
 			scanned <- err
 		}()
 		waitJoined(t, s, lib, "A/Book", 1)
@@ -383,6 +385,11 @@ func TestScanSharesTheFlight(t *testing.T) {
 		}
 		if got := count(); got != 4 {
 			t.Errorf("two two-part books probed %d times, want one probe per part", got)
+		}
+		// The book new to the scan, its row the on-demand read's, is still
+		// new content: counted as added, as a book the scan wrote is.
+		if res.Added != 2 || len(res.AddedTitles) != 2 {
+			t.Errorf("scan beside an on-demand index added %d (%q), want both new books", res.Added, res.AddedTitles)
 		}
 	})
 }

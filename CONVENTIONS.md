@@ -1157,7 +1157,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`Scanner.SetBaseContext`, from the API's base context), writing nothing then, and a request still
   waiting on it answers 503 `stopping` with `Retry-After` (`library.ErrStopping`, `indexShared`; an admin's Re-read too, `readAt`, and the Bridge's rescan, `rescanAt`), not a 500. A scan's read of a book and the Bridge's
   `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
-  index asked for during a scan's read can publish the finished book ahead of the batch. A scan reaching a book indexed on demand since it started checks the stored signature against discovery before reading it again. An admin's Re-read
+  index asked for during a scan's read can publish the finished book ahead of the batch. A scan reaching a book indexed on demand since it started checks the stored signature against discovery before reading it again (`matchesOpenedBook`); one it keeps that was new to the scan still counts as added, so the scan's new-books notice names it. An admin's Re-read
   (`handleRescanBook`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that
   read stored may be older than the change the admin wants picked up; one that kept the book as stored because a file
   did not answer (a look given up on, or its audio's read cut short: `ReadCutShort` with an `unreadable` problem,
