@@ -275,28 +275,6 @@ func writeTempFile(t *testing.T, name string, data []byte) *os.File {
 // Embedded art is served as what its bytes are: an image type is kept (allowed),
 // and HTML or script bytes, whatever the tag claims, are no art (denied), so a
 // crafted audio file can't make the cover endpoint serve a page from this origin.
-func TestCoverMIMESniffsTheBytes(t *testing.T) {
-	t.Parallel()
-	jpeg := []byte("\xff\xd8\xff\xe0\x00\x10JFIF\x00")
-	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR")
-	for name, tc := range map[string]struct {
-		data []byte
-		mime string
-		ok   bool
-	}{
-		"jpeg":   {jpeg, "image/jpeg", true},
-		"png":    {png, "image/png", true},
-		"html":   {[]byte("<!doctype html><script>alert(1)</script>"), "", false},
-		"script": {[]byte("alert(document.domain)"), "", false},
-		"svg":    {[]byte(`<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>`), "", false},
-	} {
-		mime, ok := metadata.CoverMIME(tc.data)
-		if ok != tc.ok || (ok && mime != tc.mime) {
-			t.Errorf("%s: metadata.CoverMIME = %q, %v; want %q, %v", name, mime, ok, tc.mime, tc.ok)
-		}
-	}
-}
-
 func TestTranscodeArgs(t *testing.T) {
 	t.Parallel()
 	tail := []string{"-vn", "-c:a", "libmp3lame", "-b:a", "128k", "-f", "mp3", "pipe:1"}

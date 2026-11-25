@@ -30,8 +30,7 @@ func CoverMIME(data []byte) (string, bool) {
 // MatroskaAudioCodec reads the first audio track from the opened file. An
 // unknown or incomplete header leaves the decision to the remuxer.
 func MatroskaAudioCodec(ctx context.Context, f *os.File, size int64) (string, error) {
-	b := newBlockFile(f, size)
-	b.stuck = stuckByMount.For(f.Name())
+	b := newNamedBlockFile(f, size)
 	s := newMKVState(b)
 	why := b.boundedBy(ctx, 2<<20, func() {
 		_ = s.headers(func(c ebmlElem, pos int64) bool {
@@ -53,8 +52,7 @@ func MatroskaAudioCodec(ctx context.Context, f *os.File, size int64) (string, er
 
 // MatroskaCover reads one image attachment from an opened library file.
 func MatroskaCover(ctx context.Context, f *os.File, size int64) ([]byte, error) {
-	b := newBlockFile(f, size)
-	b.stuck = stuckByMount.For(f.Name())
+	b := newNamedBlockFile(f, size)
 	var data []byte
 	why := b.bounded(ctx, func() {
 		pic := mkvPicture(b)

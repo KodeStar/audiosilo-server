@@ -111,7 +111,8 @@ func thumbnail(src []byte, size int, mode thumbnailMode) ([]byte, error) {
 		return nil, err
 	}
 	w, h := fitWithin(cfg.Width, cfg.Height, size)
-	if cmyk, ok := img.(*image.CMYK); ok && mode == storedCover && len(render.icc) > 0 {
+	keepICC := mode == storedCover && len(render.icc) > 0
+	if cmyk, ok := img.(*image.CMYK); ok && keepICC {
 		return encodeCMYKCover(cmyk, w, h, render.orientation, render.icc)
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -125,13 +126,13 @@ func thumbnail(src []byte, size int, mode thumbnailMode) ([]byte, error) {
 	// factor, so a large downscale averages its source pixels instead of aliasing.
 	draw.BiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), op, nil)
 	pixels := orientCover(dst, render.orientation)
-	if mode == storedCover && len(render.icc) > 0 && (cfg.ColorModel == color.GrayModel || cfg.ColorModel == color.Gray16Model) {
+	if keepICC && (cfg.ColorModel == color.GrayModel || cfg.ColorModel == color.Gray16Model) {
 		gray := image.NewGray(pixels.Bounds())
 		draw.Draw(gray, gray.Bounds(), pixels, image.Point{}, draw.Src)
 		pixels = gray
 	}
 	out, err := encodeQuality(pixels)
-	if err == nil && mode == storedCover && len(render.icc) > 0 {
+	if err == nil && keepICC {
 		withProfile := append([]byte{0xff, 0xd8}, render.icc...)
 		out = append(withProfile, out[2:]...)
 	}
