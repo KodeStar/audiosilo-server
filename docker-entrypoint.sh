@@ -4,10 +4,10 @@
 # container starts as root only to chown /data (and AUDIOSILO_BACKUP_DIR's folder
 # and the backups in it, when it is set) and drop privileges; the server itself
 # never runs as root. The chown of /data stops at a folder mounted inside it (a
-# backups share at /data/backups keeps its owner, server#382); a file mounted
-# inside it (a config.yaml) is chowned. On NAS setups set PUID/PGID to the owner
-# of your appdata (Unraid: PUID=99 PGID=100; Synology: often 1026:100; or run
-# `id` for your user).
+# backups share at /data/backups keeps its owner, server#382) and at any other
+# mount or filesystem; a file mounted inside it (a config.yaml) is chowned. On
+# NAS setups set PUID/PGID to the owner of your appdata (Unraid: PUID=99
+# PGID=100; Synology: often 1026:100; or run `id` for your user).
 #
 # A chown can fail without saying so (a NAS share with ACLs, a read-only mount), so
 # the entrypoint runs audiosilo checkdirs as the server user. It checks for write
@@ -89,42 +89,16 @@ usable_path() {
   if timeout "$WAIT" test "$1" -ef /; then return 1; else [ "$?" = 1 ]; fi
 }
 
-# Prune real nested mounts by name. An unmounted btrfs subvolume in /data is
-# part of the data tree even though it has its own device number. A writable
-# mounted regular file (config.yaml) is the only mount we change ownership on.
+# What is under the data folder goes to the server's user (audiosilo chowndata,
+# fsaccess.ChownTree): never through a link, never into a folder mounted inside
+# it, a mount the walk itself would set off (an NFS export's child filesystem,
+# an automount, a NAS's snapshot folder) or another filesystem, while a btrfs
+# subvolume of the data folder is walked. A writable mounted regular file
+# (config.yaml) is the only mount whose owner it changes. It works from open
+# folders, so the server's user, who can write in the data folder, cannot
+# swap in a link for root to follow.
 chown_data() {
-  # Compare the mount table's physical paths even for --data /alias or /data/.
-  # The marker keeps trailing newlines in the name through command substitution.
-  [ ! -L "$DATA" ] || return 0
-  physical=$(CDPATH='' cd -P "$DATA" && printf '%s.' "$PWD") || return 1
-  physical=${physical%.}
-  [ "$physical" != / ] || return 1
-  # Keep the table escaped until each record has been read. If it can't be
-  # read, don't walk a tree whose boundaries we can't establish.
-  points=$(awk '{ for (i = 7; i <= NF; i++) if ($i == "-") {
-    print (($6 ~ /(^|,)ro(,|$)/ || $(i+3) ~ /(^|,)ro(,|$)/) ? "ro" : "rw"), $5; break
-  } }' /proc/self/mountinfo) || return 1
-  [ -n "$points" ] || return 1
-  set -- "$physical" -mindepth 1
-  while read -r mode encoded; do
-    # POSIX/BusyBox printf %b takes exactly the mountinfo octal after an
-    # extra zero. Decode once, so a literal backslash followed by digits stays literal.
-    case "$encoded" in
-      *\\*)
-        point=$(printf '%b.' "$(printf '%s' "$encoded" | sed 's/\\/\\0/g')") || return 1
-        point=${point%.}
-        ;;
-      *) point=$encoded ;;
-    esac
-    case "$point" in "$physical"/*) ;; *) continue ;; esac
-    glob=$(printf '%s.' "$point" | sed 's/[][*?\\]/\\&/g')
-    set -- "$@" -path "${glob%.}"
-    if [ "$mode" != ro ]; then set -- "$@" ! -type f; fi
-    set -- "$@" -prune -o
-  done <<EOF
-$points
-EOF
-  find "$@" \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$RUN_AS" {} +
+  audiosilo --data "$DATA" chowndata "$RUN_AS"
 }
 
 # The status passed to checkdirs is about this folder alone. A failed chown

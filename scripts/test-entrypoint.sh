@@ -24,7 +24,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Exercise the real checkdirs command. Only the long-running server and the
+# Exercise the real checkdirs and chowndata commands. Only the long-running server and the
 # healthcheck are replaced with a recorder of their arguments and identity.
 arch=$(docker version --format '{{.Server.Arch}}')
 CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$context/checkdirs-bin" ./cmd/audiosilo
@@ -33,7 +33,7 @@ ARG IMG
 FROM $IMG
 RUN apk add --no-cache su-exec btrfs-progs
 COPY checkdirs-bin /usr/local/bin/checkdirs-bin
-RUN printf '#!/bin/sh\nif [ "$3" = checkdirs ]; then exec /usr/local/bin/checkdirs-bin "$@"; fi\necho "audiosilo $* as $(id -u):$(id -g)"\n' >/usr/local/bin/audiosilo && chmod 755 /usr/local/bin/audiosilo
+RUN printf '#!/bin/sh\ncase "$3" in checkdirs | chowndata) exec /usr/local/bin/checkdirs-bin "$@" ;; esac\necho "audiosilo $* as $(id -u):$(id -g)"\n' >/usr/local/bin/audiosilo && chmod 755 /usr/local/bin/audiosilo
 DOCKERFILE
 
 # vol NAME OWNER MODE: a volume whose root belongs to OWNER with MODE.
@@ -257,19 +257,39 @@ owner=$(docker run --rm -v "$ODD:/v" "$RUN_ID" stat -c '%u:%g' /v/x)
 expect "tab and octal digits in a nested mount name" "$owner" "^1026:100$"
 
 # On kernels with btrfs and loop devices, check that a nested subvolume's
-# distinct device number does not keep its own data files from being prepared.
+# distinct device number does not keep its own data files from being prepared,
+# while snapper's .snapshots (a subvolume holding snapshots) and a second btrfs
+# mounted inside keep their owner: the walk never leaves the data folder's own
+# mount, whatever the filesystem type.
 out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '
   if ! grep -qw btrfs /proc/filesystems || ! losetup -f >/dev/null 2>&1; then
     echo "skip: kernel has no btrfs or loop device"; exit
   fi
-  truncate -s 160M /disk && mkfs.btrfs -q /disk && mkdir /data &&
+  truncate -s 160M /disk && truncate -s 160M /disk2 && mkfs.btrfs -q /disk && mkfs.btrfs -q /disk2 && mkdir /data &&
     mount -t btrfs -o loop /disk /data && btrfs subvolume create /data/nested &&
-    touch /data/nested/ours && sh /usr/local/bin/docker-entrypoint.sh true --data /data &&
-    stat -c "%n %u:%g" /data/nested/ours && umount /data' 2>&1 || true)
+    touch /data/nested/ours && btrfs subvolume create /data/.snapshots >/dev/null &&
+    btrfs subvolume snapshot /data/nested /data/.snapshots/1 >/dev/null && mkdir /data/other &&
+    mount -t btrfs -o loop /disk2 /data/other && touch /data/other/theirs &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data &&
+    stat -c "%n %u:%g" /data/nested/ours /data/.snapshots/1/ours /data/other /data/other/theirs &&
+    umount /data/other && umount /data' 2>&1 || true)
 case "$out" in
   "skip: "*) echo "$out" ;;
-  *) expect "data in a btrfs subvolume" "$out" "^/data/nested/ours 1000:1000$" ;;
+  *) expect "data in a btrfs subvolume" "$out" "^/data/nested/ours 1000:1000$" "^/data/.snapshots/1/ours 0:0$" \
+    "^/data/other 0:0$" "^/data/other/theirs 0:0$" ;;
 esac
+
+# 12b. A NAS's snapshot folder (Synology's #snapshot, NetApp's .snapshot) holds
+#      copies, never the data: left as it is. A link to a system folder is
+#      changed itself, never what it points at, wherever it is in the tree.
+out=$(docker run --rm -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" -v "$DATA:/data" "$RUN_ID" sh -ec '
+  mkdir -p "/data/#snapshot/daily" /data/.snapshot /data/sub && touch "/data/#snapshot/daily/x" /data/.snapshot/y &&
+    chown -R 0:0 "/data/#snapshot" /data/.snapshot && ln -sfn /etc /data/sub/etc && chown -h 0:0 /data/sub/etc &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data &&
+    stat -c "%n %u:%g" "/data/#snapshot/daily/x" /data/.snapshot/y /etc /etc/passwd && stat -c "link %u:%g" /data/sub/etc &&
+    rm -rf "/data/#snapshot" /data/.snapshot /data/sub' 2>&1 || true)
+expect "snapshot folders and links in the data folder" "$out" "^/data/#snapshot/daily/x 0:0$" "^/data/.snapshot/y 0:0$" \
+  "^/etc 0:0$" "^/etc/passwd 0:0$" "^link 1000:1000$"
 
 # 13. A file mounted inside the data folder (-v ./config.yaml:/data/config.yaml,
 #     root's and 600 on the host) is chowned as it always was, so the server can

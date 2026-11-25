@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -59,6 +60,7 @@ func main() {
 // error (exit 2, as the flag package exits on a bad flag). "healthcheck" asks the
 // server running from dataDir whether it is healthy (launcher.Healthcheck) and
 // exits 0 when it is, 1 when it is not. "checkdirs" prints folder warnings as the server user.
+// "chowndata UID:GID" is the image's root ownership walk of dataDir (fsaccess.ChownTree).
 func command(args []string, dataDir string, stdout, stderr io.Writer) (code int, done bool) {
 	switch {
 	case len(args) == 0:
@@ -75,11 +77,13 @@ func command(args []string, dataDir string, stdout, stderr io.Writer) (code int,
 		return healthcheck(dataDir, stdout, stderr), true
 	case args[0] == "checkdirs":
 		return checkDirs(args[1:], dataDir, stderr), true
+	case args[0] == "chowndata":
+		return chownData(args[1:], dataDir, stderr), true
 	case args[0] == "healthcheck":
 		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] healthcheck (flags go before the command)")
 		return 2, true
 	default:
-		_, _ = fmt.Fprintf(stderr, "audiosilo: unknown command %q (the commands are \"version\", \"reset-admin\", \"healthcheck\" and \"checkdirs\"; run with -h for the flags)\n", args[0])
+		_, _ = fmt.Fprintf(stderr, "audiosilo: unknown command %q (the commands are \"version\", \"reset-admin\", \"healthcheck\", \"checkdirs\" and \"chowndata\"; run with -h for the flags)\n", args[0])
 		return 2, true
 	}
 }
@@ -96,6 +100,29 @@ func checkDirs(args []string, dataDir string, stderr io.Writer) int {
 		return 2
 	}
 	fsaccess.CheckDirs(dataDir, configuredBackups(dataDir), *dataFailed, *backupFailed, stderr)
+	return 0
+}
+
+// chownData runs the chowndata command: the data folder's contents given to
+// UID:GID (the entrypoint's PUID:PGID), 0 when all changed, 1 when some could
+// not be (on stderr), 2 when asked wrongly.
+func chownData(args []string, dataDir string, stderr io.Writer) int {
+	uid, gid, ok := -1, -1, len(args) == 1
+	if ok {
+		u, g, found := strings.Cut(args[0], ":")
+		var errU, errG error
+		uid, errU = strconv.Atoi(u)
+		gid, errG = strconv.Atoi(g)
+		ok = found && errU == nil && errG == nil && uid >= 0 && gid >= 0
+	}
+	if !ok {
+		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] chowndata UID:GID")
+		return 2
+	}
+	if err := fsaccess.ChownTree(dataDir, uid, gid); err != nil {
+		_, _ = fmt.Fprintln(stderr, "audiosilo: chowndata:", err)
+		return 1
+	}
 	return 0
 }
 
