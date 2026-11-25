@@ -3325,6 +3325,7 @@
   "bridge.progress.book_lookup": "Buch wird beim Server abgefragt",
   "bridge.progress.book_files_lookup": "Dateien des Buchs werden beim Server abgefragt",
   "bridge.progress.mapping_wait": "Wartet auf die Prüfung der Zuordnung der Bibliothek",
+  "bridge.progress.asr_turn_wait": "Wartet, bis die Spracherkennung frei ist",
   "bridge.progress.earlier_job_wait": "Wartet auf das Ende des früheren Auftrags für das Buch",
   "bridge.progress.engine_release_wait": "Wartet, bis die Engine den früheren Lauf des Buchs freigibt",
   "bridge.progress.chapters_job_wait": "Wartet, bis der Kapitelauftrag des Buchs Platz macht",
