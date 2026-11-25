@@ -41,13 +41,15 @@ func MatroskaAudioCodec(ctx context.Context, f *os.File, size int64) (string, er
 			return true
 		})
 	})
+	// A walk that ended on its own read everything it needed: its answer
+	// stands even when ctx ends just after.
+	if why == "" && b.err == nil {
+		return s.codec, nil
+	}
 	if err := context.Cause(ctx); err != nil {
 		return "", err
 	}
-	if why != "" || b.err != nil {
-		return "", b.err
-	}
-	return s.codec, nil
+	return "", b.err
 }
 
 // MatroskaCover reads one image attachment from an opened library file.
@@ -60,26 +62,27 @@ func MatroskaCover(ctx context.Context, f *os.File, size int64) ([]byte, error) 
 			data, _ = b.bytesAt(pic.data, int(pic.size))
 		}
 	})
+	if why == "" && b.err == nil {
+		return data, nil
+	}
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	if b.err != nil {
-		return nil, b.err
-	}
-	if why != "" {
-		return nil, nil
-	}
-	return data, nil
+	// A read that failed is an error; a bound passed (a hostile layout) is no
+	// cover.
+	return nil, b.err
 }
 
 // mkvPicture finds the full-size cover by name, or the first image when the
 // muxer used another name. A scan reads only the signature of the picture.
 func mkvPicture(b *blockFile) (pic ebmlElem) {
 	s := newMKVState(b)
-	_ = s.headers(func(c ebmlElem, _ int64) bool {
+	_ = s.headers(func(c ebmlElem, pos int64) bool {
 		if c.id != mkvAttachments {
 			return false
 		}
+		// Walked once: the SeekHead's entry for the same element is skipped.
+		s.parsed[pos] = true
 		for file := range mkvFields(b, c) {
 			if file.id != mkvAttachedFile {
 				continue

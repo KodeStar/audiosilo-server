@@ -345,7 +345,8 @@ func (m *FileCache) openOf(ctx, runCtx context.Context, ffmpegPath, root, abs st
 // Cached is Open for a request that is to start nothing (a HEAD): abs's copy
 // and its ETag when it is cached (marked used), Open's errors for a source
 // that is no regular file or a known refusal, else ErrUnavailable, with no
-// run started and none waited for.
+// run started and none waited for. A spec with a source check (the remux's
+// codec) reads the source's header on a miss and remembers its refusal.
 func (m *FileCache) Cached(ctx context.Context, root, abs string) (*os.File, string, error) {
 	info, err := openSource(ctx, root, abs)
 	if err != nil {
