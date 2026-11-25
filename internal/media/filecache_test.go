@@ -31,6 +31,37 @@ func needFFmpeg(t *testing.T) string {
 	return ffprobe
 }
 
+// A HEAD's look (Cached) whose header read fails for a reason other than the
+// codec answers ErrUnavailable, as its contract says, and remembers nothing; a
+// refusal it finds is remembered.
+func TestCachedHeaderReadFailureIsNoRefusal(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "book.mka")
+	if err := os.WriteFile(src, []byte("header"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, runs := countingRemuxer(t, nil)
+	m.spec.checkSource = func(context.Context, *os.File, int64) error { return errors.New("read failed") }
+	ctx := context.Background()
+	if _, _, err := m.Cached(ctx, dir, src); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cached = %v, want ErrUnavailable", err)
+	}
+	if left := m.RefusedFor(dir, src); left != 0 {
+		t.Fatalf("a failed header read was remembered as a refusal (%v)", left)
+	}
+	m.spec.checkSource = func(context.Context, *os.File, int64) error { return ErrRefused }
+	if _, _, err := m.Cached(ctx, dir, src); !errors.Is(err, ErrRefused) {
+		t.Fatalf("cached = %v, want ErrRefused", err)
+	}
+	if left := m.RefusedFor(dir, src); left <= 0 {
+		t.Fatal("a refusal found by a HEAD was not remembered")
+	}
+	if n := runs.Load(); n != 0 {
+		t.Fatalf("a HEAD ran ffmpeg %d times", n)
+	}
+}
+
 // writeMKA writes a 4-second Matroska audio file of codec ("mp3" or "aac")
 // with two chapters (Opening 0-2 s, Closing 2-4 s) at path, or skips.
 func writeMKA(t *testing.T, path, codec string) {

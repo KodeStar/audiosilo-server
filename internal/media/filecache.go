@@ -353,15 +353,20 @@ func (m *FileCache) Cached(ctx context.Context, root, abs string) (*os.File, str
 		return nil, "", err
 	}
 	key := m.key(abs, info)
-	f, _, err := m.begin(ctx, "", key, root, abs, info, false)
+	f, fl, err := m.begin(ctx, "", key, root, abs, info, false)
 	if f == nil && err == nil {
-		if m.spec.checkSource != nil {
+		// A run under way has passed (or will make) the check itself.
+		if m.spec.checkSource != nil && fl == nil {
 			src, err := m.openSourceForCopy(ctx, root, abs, info)
-			if err != nil {
+			if errors.Is(err, ErrRefused) {
 				m.remember(key, err)
 				return nil, "", err
 			}
-			src.Close()
+			if err == nil {
+				src.Close()
+			}
+			// A header that could not be read now (a share slow to answer, a
+			// read error) is no refusal: the GET finds out.
 		}
 		return nil, "", ErrUnavailable
 	}
