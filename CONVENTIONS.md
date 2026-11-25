@@ -4975,7 +4975,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **Folder permissions (server#368, `internal/fsaccess`, `docker-entrypoint.sh`)**: a folder the server's
   user may not use is said once, the same way everywhere: the path, the user the server runs as
   (`fsaccess.User`, "uid:gid"; none on Windows), the folder's owner (`syscall.Stat_t`, unix only) and the
-  fix (`fsaccess.Hint`: in a container `PUID`/`PGID` set to the owner; never `PUID=0` for a root-owned
+  fix (`fsaccess.Wrap`'s hint: in a container `PUID`/`PGID` set to the owner; never `PUID=0` for a root-owned
   folder, then "make the server's user its owner"; the right owner refused by the mode: "give it access";
   outside a container: run as the owner). Never classify by `os.ErrPermission` on SQLite's error (its
   "unable to open database file" wraps none): probe with a file of our own first (`CheckWrite`: create and

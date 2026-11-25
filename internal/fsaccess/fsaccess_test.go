@@ -47,7 +47,7 @@ func TestHint(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			as(t, c.uid, c.gid, c.ouid, c.ogid, c.known, c.container)
-			if got := Hint("/data", c.write); got != c.want {
+			if got := hint(nil, c.write); got != c.want {
 				t.Fatalf("Hint =\n%s\nwant\n%s", got, c.want)
 			}
 		})
@@ -60,23 +60,23 @@ func TestHintStartedAsUser(t *testing.T) {
 	as(t, 1000, 1000, 1026, 100, true, true)
 	t.Setenv(EnvStartedAsUser, "1")
 	want := `The server runs as user 1000:1000 and the folder belongs to 1026:100. Run the container as the folder's owner (user: "1026:100"), or give user 1000:1000 read and write access to the folder.`
-	if got := Hint("/data", true); got != want {
+	if got := hint(nil, true); got != want {
 		t.Fatalf("Hint =\n%s\nwant\n%s", got, want)
 	}
 	ownerOf = func(os.FileInfo) (int, int, bool) { return 0, 0, false }
 	want = "The server runs as user 1000:1000. Run the container as the folder's owner (user: in compose, --user with docker run), or give user 1000:1000 read access to the folder."
-	if got := Hint("/data", false); got != want {
+	if got := hint(nil, false); got != want {
 		t.Fatalf("Hint =\n%s\nwant\n%s", got, want)
 	}
 	// Never PUID=0 advice, nor user: "0:0", for a root-owned folder.
 	ownerOf = func(os.FileInfo) (int, int, bool) { return 0, 0, true }
-	if got := Hint("/data", true); strings.Contains(got, "user: ") || strings.Contains(got, "PUID") {
+	if got := hint(nil, true); strings.Contains(got, "user: ") || strings.Contains(got, "PUID") {
 		t.Fatalf("root-owned folder: %s", got)
 	}
 	// Without the entrypoint's word (root dropping to PUID, or the lsio image), PUID it stays.
 	t.Setenv(EnvStartedAsUser, "")
 	ownerOf = func(os.FileInfo) (int, int, bool) { return 1026, 100, true }
-	if got := Hint("/data", true); !strings.Contains(got, "Set PUID=1026 and PGID=100") {
+	if got := hint(nil, true); !strings.Contains(got, "Set PUID=1026 and PGID=100") {
 		t.Fatalf("root-started container: %s", got)
 	}
 }

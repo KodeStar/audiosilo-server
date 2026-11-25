@@ -98,7 +98,7 @@ func Wrap(path string, write bool, err error) error {
 	if errors.Is(err, fs.ErrPermission) {
 		info, _ := os.Stat(path)
 		failure.Access = IdentityOf(info)
-		failure.hint = hint(info, write, failure.Access)
+		failure.hint = hint(info, write)
 	}
 	return failure
 }
@@ -156,17 +156,12 @@ func (id *Identity) Description(noun string) string {
 	return text + "."
 }
 
-// Hint is the fix for a folder (or file) at path the server isn't allowed to
-// read or write: who the server runs as, who owns it, and, in a container, PUID
-// and PGID set to the owner (or, in one started with --user, the owner as that
-// user, as the entrypoint says). The path itself is the caller's to name (Error
-// does).
-func Hint(path string, write bool) string {
-	info, _ := os.Stat(path)
-	return hint(info, write, IdentityOf(info))
-}
-
-func hint(info fs.FileInfo, write bool, id *Identity) string {
+// hint is the fix for a folder (or file) the server isn't allowed to read or
+// write, from the stat Wrap took (nil when it failed): who the server runs as,
+// who owns it, and, in a container, PUID and PGID set to the owner (or, in one
+// started with --user, the owner as that user, as the entrypoint says). The path
+// itself is the caller's to name (Error does).
+func hint(info fs.FileInfo, write bool) string {
 	access := "read"
 	if write {
 		access = "read and write"
@@ -175,6 +170,7 @@ func hint(info fs.FileInfo, write bool, id *Identity) string {
 	if info != nil && !info.IsDir() {
 		noun = "file"
 	}
+	id := IdentityOf(info)
 	if id == nil {
 		return fmt.Sprintf("Give the account the server runs as %s access to the %s.", access, noun)
 	}
@@ -184,24 +180,24 @@ func hint(info fs.FileInfo, write bool, id *Identity) string {
 	var b strings.Builder
 	b.WriteString(id.Description(noun))
 	b.WriteByte(' ')
-	ouid, ogid, known := strings.Cut(id.Owner, ":")
-	uid, _, _ := strings.Cut(user, ":")
+	ouid, ogid, known := ownerOf(info)
+	uid, _ := running()
 	switch {
 	case known && ouid == uid:
 		// The right owner: the mode refuses it.
 		fmt.Fprintf(&b, "%s (its permissions refuse it).", giveFirst)
-	case known && ouid == "0":
+	case known && ouid == 0:
 		// Never advise running the server as root.
 		fmt.Fprintf(&b, "%s, for example by making %s its owner on the host.", giveFirst, user)
 	case InContainer():
 		asUser := os.Getenv(EnvStartedAsUser) == "1"
 		switch {
 		case asUser && known:
-			fmt.Fprintf(&b, "Run the container as the %s's owner (user: \"%s:%s\"), or %s.", noun, ouid, ogid, give)
+			fmt.Fprintf(&b, "Run the container as the %s's owner (user: \"%d:%d\"), or %s.", noun, ouid, ogid, give)
 		case asUser:
 			fmt.Fprintf(&b, "Run the container as the %s's owner (user: in compose, --user with docker run), or %s.", noun, give)
 		case known:
-			fmt.Fprintf(&b, "Set PUID=%s and PGID=%s (the %s's owner) on the container, or %s.", ouid, ogid, noun, give)
+			fmt.Fprintf(&b, "Set PUID=%d and PGID=%d (the %s's owner) on the container, or %s.", ouid, ogid, noun, give)
 		default:
 			fmt.Fprintf(&b, "Set PUID and PGID on the container to the %s's owner, or %s.", noun, give)
 		}
