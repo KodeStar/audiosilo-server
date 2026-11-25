@@ -283,12 +283,7 @@ func (b *blockFile) boundedBy(ctx context.Context, budget int64, fn func()) (why
 // VBR guess, so one file can be held to another's (a watch rendition to its
 // source).
 func ExactDuration(ctx context.Context, r io.ReaderAt, size int64, format string) (float64, bool) {
-	b := newBlockFile(r, size)
-	if f, ok := r.(interface{ Name() string }); ok {
-		// A named file's reads given up on count on its mount (a rendition's
-		// source on a share that stopped answering), as a scan's do.
-		b.stuck = stuckByMount.For(f.Name())
-	}
+	b := newNamedBlockFile(r, size)
 	b.ff = ff8
 	p, reason, _ := fastProbe(ctx, b, strings.ToLower(format), maxProbeTime)
 	if reason != "" {
@@ -965,4 +960,15 @@ func result(durUS int64, codec string, d *avDict, chaps []Chapter) *probeResult 
 		p.Duration = printTime(durUS, 1, 1000000)
 	}
 	return p
+}
+
+// newNamedBlockFile is newBlockFile for a request's read of r: a named file's
+// reads given up on count on its mount (a rendition's source on a share that
+// stopped answering), as a scan's do.
+func newNamedBlockFile(r io.ReaderAt, size int64) *blockFile {
+	b := newBlockFile(r, size)
+	if f, ok := r.(interface{ Name() string }); ok {
+		b.stuck = stuckByMount.For(f.Name())
+	}
+	return b
 }

@@ -1,9 +1,13 @@
 package media
 
 import (
+	"context"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // The remux cache's bounds (server#174): the total its copies may hold, how
@@ -31,13 +35,23 @@ func NewRemuxer(dir string, log *slog.Logger) (*FileCache, error) {
 	return newFileCache(dir, cacheSpec{
 		ext: ".mp3", maxBytes: remuxCacheBytes, concurrent: remuxConcurrent, timeout: remuxTimeout,
 		args: remuxArgs, etag: remuxETag,
+		checkSource: func(ctx context.Context, f *os.File, size int64) error {
+			codec, err := metadata.MatroskaAudioCodec(ctx, f, size)
+			if err != nil {
+				return err
+			}
+			if codec != "" && codec != "mp3" {
+				return ErrRefused
+			}
+			return nil
+		},
 		refused: "not remuxed: serving Matroska as stored",
 		lowDisk: "remux skipped: too little free disk for the remux cache; transcoding Matroska live",
 	}, log)
 }
 
 // remuxETag is the strong validator of key's copy: the key names the source's
-// path, size and mtime, and the remux is bitexact, so the same key is always
+// identity, path, size and mtime, and the remux is bitexact, so the same key is always
 // the same bytes, across a re-remux after an eviction too.
 func remuxETag(key string, _ int64) string { return `"remux-` + key + `"` }
 

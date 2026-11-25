@@ -70,29 +70,53 @@ const digestReadSize = 1 << 20
 // stat; the index's ebook_sig is only as new as the last scan, so an EPUB
 // replaced since is never answered with the old file's digest), else hashed
 // now (EbookDigest) and recorded with the new file's signature, only while the
-// index still names that ebook and holds the digest idx read
-// (catalog.SetEbookDigest: a slow hash never overwrites a newer one recorded
-// meanwhile). A failure to record it is logged, never the answer's. ErrNoEbook
+// index still names that ebook. A competing write prompts a fresh check of
+// the signature on disk before retrying catalog.SetEbookDigest. A failure to record it is logged, never the answer's. ErrNoEbook
 // (or fs.ErrNotExist) when there is no such file now. The look is a
 // metadata.Bounded call (ctx, at most wait), and so are the hash's open and
 // each of its reads (EbookDigest): on a share that stopped answering one is
 // given up on (metadata.GaveUp).
 func (s *Scanner) EbookDigestNow(ctx context.Context, lib catalog.Library, idx catalog.ReadalongIndexed, bookPath, ebookPath string, folder bool, wait time.Duration) (string, error) {
-	info, err := metadata.Bounded(ctx, absOf(lib, ebookPath), wait, func() (fs.FileInfo, error) {
-		_, info, err := lookEbook(lib.Root, ebookPath, folder)
-		return info, err
-	}, nil)
+	liveSig := func() (string, error) {
+		return metadata.Bounded(ctx, absOf(lib, ebookPath), wait, func() (string, error) {
+			_, info, err := lookEbook(lib.Root, ebookPath, folder)
+			if err != nil {
+				return "", err
+			}
+			return catalog.EbookSig(path.Base(ebookPath), info), nil
+		}, nil)
+	}
+	current, err := liveSig()
 	if err != nil {
 		return "", err
 	}
-	if idx.HashedSig == catalog.EbookSig(path.Base(ebookPath), info) {
+	if idx.HashedSig == current {
 		return idx.EbookSHA256, nil
 	}
 	sha, sig, err := EbookDigest(ctx, lib.Root, ebookPath, folder, wait)
 	if err != nil {
 		return "", err
 	}
-	if err := s.cat.SetEbookDigest(ctx, lib.ID, bookPath, ebookPath, idx.HashedSig, sig, sha); err != nil {
+	// Both the scan and a request can start from the same stale digest. If the
+	// first writer hashed a different file, retry only while ours is on disk.
+	for was := idx.HashedSig; ; {
+		var saved bool
+		saved, err = s.cat.SetEbookDigest(ctx, lib.ID, bookPath, ebookPath, was, sig, sha)
+		if err != nil || saved {
+			break
+		}
+		idx, err = s.cat.BookReadalongAt(ctx, lib.ID, bookPath)
+		if err != nil || idx.HashedSig == was || idx.HashedSig == sig {
+			break
+		}
+		// The file gone or changed since the hash (or its look given up on): the
+		// competing digest stands, and nothing failed to record.
+		if now, lerr := liveSig(); lerr != nil || now != sig {
+			break
+		}
+		was = idx.HashedSig
+	}
+	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
 		s.log.Warn("record ebook digest failed", "library", lib.Name, "path", bookPath, "err", err)
 	}
 	return sha, nil
@@ -119,8 +143,7 @@ func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, 
 		// EbookDigestNow hashes only when the stored digest isn't the file's on
 		// disk: a request may have recorded one for a file newer than the index
 		// (an attachments rescan before the next scan records its ebook_sig).
-		// It records only over the digest read as due here, so one a request
-		// records while this hash runs stands.
+		// A competing digest is replaced only after checking the live file again.
 		idx := catalog.ReadalongIndexed{HashedSig: d.HashedSig}
 		if _, err := s.EbookDigestNow(ctx, lib, idx, d.BookPath, d.EbookPath, d.IsFolder, s.lookTimeout(ctx)); err != nil {
 			s.log.Warn("hash ebook failed", "library", lib.Name, "path", d.EbookPath, "err", err)

@@ -76,6 +76,15 @@ func TestMetaCoverServesAHandedOutCover(t *testing.T) {
 	e := newMetaCoverEnv(t, true)
 	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 	e.countFetches()
+	fetch := e.api.fetchCover
+	e.api.fetchCover = func(ctx context.Context, u string, limit int64) ([]byte, error) {
+		raw, err := fetch(ctx, u, limit)
+		// A small oriented JPEG is served verbatim by the local thumbnail path.
+		if err == nil {
+			raw = append(turnedJPEGOver(raw, 0), []byte("upstream trailer")...)
+		}
+		return raw, err
+	}
 	artemis := e.coverPath("Andy Weir/The Martian", e.host+"/small.jpg", "size=160")
 
 	// Allowed: the media path, token in the query as an <img> sends it.
@@ -83,8 +92,11 @@ func TestMetaCoverServesAHandedOutCover(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "image/jpeg" {
 		t.Fatalf("cover = %d %q %.80s", resp.StatusCode, resp.Header.Get("Content-Type"), body)
 	}
+	if strings.Contains(body, "upstream trailer") {
+		t.Fatal("community thumbnail kept upstream trailer")
+	}
 	cfg, err := jpeg.DecodeConfig(strings.NewReader(body))
-	if err != nil || cfg.Width > 160 || cfg.Height > 160 {
+	if err != nil || cfg.Width != 60 || cfg.Height != 40 {
 		t.Fatalf("cover is not a 160 px JPEG thumbnail: %+v %v", cfg, err)
 	}
 	if cc := resp.Header.Get("Cache-Control"); cc != coverCache {

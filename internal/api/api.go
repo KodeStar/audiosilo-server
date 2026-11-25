@@ -395,7 +395,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		matcher = metaSvc
 		// Its first pass waits for a mirror's local copy (server#282), so a
 		// start sends no lookups to the service while the copy loads.
-		a.chapterChecks = chaptercheck.New(cat, metaSvc, ffmpeg, a.metadataOn, a.mirrorReady, log)
+		a.chapterChecks = chaptercheck.New(cat, metaSvc, ffmpeg, a.metadataOn, a.mirrorLoaded, log)
 		// Every book indexed or edited (a scan, a match applied, an ASIN typed) may
 		// be due a chapter check now: wake the background pass.
 		cat.OnBookChange(a.chapterChecks.Kick)
@@ -413,15 +413,15 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 			},
 			// Its first run waits for a mirror's local copy, as the chapter
 			// checks do (server#454).
-			Ready: a.mirrorReady,
-			Log:   log,
+			Loaded: a.mirrorLoaded,
+			Log:    log,
 		})
 		a.kickUpcoming = a.upcoming.Kick
 		cat.OnBookChange(a.upcoming.Kick)
 		// The unknown-ASIN report: opt-in, daily, never on a demo server (its
 		// books are the demo's, not anyone's library).
 		if !cfg.Demo.Enabled {
-			a.coverage = coverage.New(cat, metaSvc, coverage.Options{On: a.reportUnknownOn, Ready: a.mirrorReady, Log: log})
+			a.coverage = coverage.New(cat, metaSvc, coverage.Options{On: a.reportUnknownOn, Loaded: a.mirrorLoaded, Log: log})
 		}
 	}
 	// And a cover colour (a new book, a new cover).

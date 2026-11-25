@@ -156,7 +156,7 @@ func TestReportMirrorModeStaysLocal(t *testing.T) {
 
 			e := newEnv(t)
 			unknown := e.unknowns(t, 3)
-			r := New(e.cat, svc, Options{On: e.on.Load, Now: e.clock.now, Ready: cp.Ready})
+			r := New(e.cat, svc, Options{On: e.on.Load, Now: e.clock.now, Loaded: loadedMirror})
 			if err := r.RunOnce(context.Background()); err == nil {
 				t.Fatal("RunOnce = nil, want the failed lookup")
 			}
@@ -198,7 +198,7 @@ func TestReportMirrorMode(t *testing.T) {
 	e.book(t, "known", querytest.ASIN, false)
 	e.book(t, "missing", querytest.MissingASIN, false)
 	e.book(t, "other", "B0NOTINDB1", true)
-	r := New(e.cat, svc, Options{On: e.on.Load, Now: e.clock.now, Ready: func() bool { return true }})
+	r := New(e.cat, svc, Options{On: e.on.Load, Now: e.clock.now, Loaded: loadedMirror})
 	if err := r.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}

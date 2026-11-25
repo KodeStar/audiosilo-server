@@ -349,6 +349,15 @@ func TestMatroskaRemuxUnavailableTranscodes(t *testing.T) {
 	if n := m.cachedFiles(t); n != 0 {
 		t.Fatalf("%d cached files under the disk guard, want none", n)
 	}
+	if resp, _ := m.do(t, "HEAD", m.url("stream", mkaAACFile), m.token, ""); resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "audio/x-matroska" {
+		t.Fatalf("cold AAC HEAD: %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	for _, tc := range []struct{ query, mime string }{{"", "audio/x-matroska"}, {"&transcode=1", "audio/mpeg"}} {
+		resp, _ := m.do(t, "GET", m.url("stream", mkaAACFile)+tc.query, m.token, "")
+		if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != tc.mime {
+			t.Fatalf("cold AAC%s: %d %s", tc.query, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	}
 	stored, err := os.ReadFile(filepath.Join(m.lib.Root, filepath.FromSlash(mkaFile)))
 	if err != nil {
 		t.Fatal(err)
@@ -842,6 +851,8 @@ func TestItemOfARemuxableBookOnAHeldShareGivesUpOnce(t *testing.T) {
 func TestMatroskaRefusedPastTheStreamBound(t *testing.T) {
 	t.Parallel()
 	m := newMKAEnv(t)
+	// PCM has no codec shortcut, so ffmpeg still makes the late refusal.
+	mkaFixtureOf(t, m.lib.Root, mkaAACFile, "pcm_s16le")
 	m.api.ffmpeg = "ffmpeg"
 	m.api.remuxWait = 20 * time.Millisecond
 	// The bound must outlast the looks before the remux (the join, the source's

@@ -134,7 +134,7 @@ func TestReadalongIndex(t *testing.T) {
 		t.Errorf("due for NoMap = %+v", due)
 	}
 	// A digest of an ebook the row no longer names is never recorded.
-	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/old.epub", "", "10:1:old.epub", shaB); err != nil {
+	if _, err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/old.epub", "", "10:1:old.epub", shaB); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.HashedSig != "" || got.EbookSHA256 != "" {
@@ -142,7 +142,7 @@ func TestReadalongIndex(t *testing.T) {
 	}
 	// One of the file on disk newer than the last scan is kept with its own
 	// signature: current for a request that finds that file, not for the index.
-	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "", "11:1:b.epub", shaB); err != nil {
+	if _, err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "", "11:1:b.epub", shaB); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.HashedSig != "11:1:b.epub" || got.EbookSHA256 != shaB {
@@ -150,7 +150,7 @@ func TestReadalongIndex(t *testing.T) {
 	}
 	// A slow hash of the older file, started when no digest was stored (the
 	// scan's due read), is not recorded over it (server#265).
-	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "", "10:1:b.epub", shaA); err != nil {
+	if _, err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "", "10:1:b.epub", shaA); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.HashedSig != "11:1:b.epub" || got.EbookSHA256 != shaB {
@@ -161,7 +161,7 @@ func TestReadalongIndex(t *testing.T) {
 	if due, _ := c.ReadalongEbooksDue(ctx, lib.ID, "Mapped"); len(due) != 1 || due[0].HashedSig != "11:1:b.epub" {
 		t.Errorf("due after a newer file's digest = %+v", due)
 	}
-	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "11:1:b.epub", "10:1:b.epub", shaA); err != nil {
+	if _, err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "11:1:b.epub", "10:1:b.epub", shaA); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.EbookSHA256 != shaA || got.HashedSig != "10:1:b.epub" {

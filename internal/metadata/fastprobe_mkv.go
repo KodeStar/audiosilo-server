@@ -181,34 +181,44 @@ const (
 	maxSimpleTagDepth = 8
 )
 
-func probeMKV(b *blockFile) (*probeResult, error) {
+func newMKVState(b *blockFile) *mkvState {
+	return &mkvState{b: b, timescale: 1000000, parsed: map[int64]bool{}, parsedID: map[uint32]bool{}}
+}
+
+// headers visits the segment headers and any indexed after the first cluster.
+// The visitor can stop as soon as it has the header it needs.
+func (s *mkvState) headers(visit func(ebmlElem, int64) bool) error {
+	b := s.b
 	e, ok := elemAt(b, 0)
-	if !ok || e.id != mkvEBML || e.size < 0 {
-		return nil, unsure("mkv: no EBML header")
+	if !ok || e.id != mkvEBML || e.size < 0 || e.size > 64<<10 {
+		return unsure("mkv: no EBML header")
 	}
 	hdr, ok := b.bytesAt(e.data, int(e.size))
 	if !ok {
-		return nil, unsure("mkv: EBML header")
+		return unsure("mkv: EBML header")
 	}
 	for _, c := range children(hdr) {
 		if c.id == 0x4282 && string(c.data) != "matroska" && string(c.data) != "webm" {
-			return nil, unsure("mkv: doctype " + string(c.data))
+			return unsure("mkv: doctype " + string(c.data))
 		}
 		if c.id == 0x4285 && ebmlUint(c.data) > 3 {
-			return nil, unsure("mkv: doctype version")
+			return unsure("mkv: doctype version")
 		}
 	}
 	seg, ok := elemAt(b, e.data+e.size)
 	if !ok || seg.id != mkvSegment {
-		return nil, unsure("mkv: no Segment after the header")
+		return unsure("mkv: no Segment after the header")
 	}
 	segEnd := b.size
 	if seg.size >= 0 {
 		segEnd = min(seg.data+seg.size, b.size)
 	}
-	s := &mkvState{b: b, timescale: 1000000, parsed: map[int64]bool{}, parsedID: map[uint32]bool{}}
 	var seeks []seekEntry
 	at := seg.data
+	// An element running past the Segment's end is still visited, as the probe
+	// always did: its payload read (bytesAt, mkvFields) is bounded by the file,
+	// and one past the file's end makes the probe unsure (ffprobe answers)
+	// rather than answering without it.
 	for at < segEnd {
 		c, ok := elemAt(b, at)
 		if !ok {
@@ -218,11 +228,14 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 			break
 		}
 		if c.size < 0 {
-			return nil, unsure("mkv: unknown-size element before the first cluster")
+			return unsure("mkv: unknown-size element before the first cluster")
 		}
 		switch c.id {
 		case mkvSeekHead:
 			s.parsed[at] = true
+			if c.size > 64<<10 {
+				return unsure("mkv: oversized SeekHead")
+			}
 			p := s.payload(c)
 			for _, sk := range children(p) {
 				if sk.id != 0x4DBB {
@@ -243,10 +256,12 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 				}
 			}
 		default:
-			s.level1(c, at)
+			if visit(c, at) {
+				return s.err
+			}
 		}
 		if s.err != nil {
-			return nil, s.err
+			return s.err
 		}
 		at = c.data + c.size
 	}
@@ -262,16 +277,26 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 		}
 		if sk.id == mkvSeekHead {
 			// FFmpeg follows a second SeekHead's entries too: not modelled.
-			return nil, unsure("mkv: a second SeekHead")
+			return unsure("mkv: a second SeekHead")
 		}
 		c, ok := elemAt(b, pos)
 		if !ok || c.id != sk.id || c.size < 0 {
 			continue
 		}
-		s.level1(c, pos)
-		if s.err != nil {
-			return nil, s.err
+		if visit(c, pos) {
+			return s.err
 		}
+		if s.err != nil {
+			return s.err
+		}
+	}
+	return nil
+}
+
+func probeMKV(b *blockFile) (*probeResult, error) {
+	s := newMKVState(b)
+	if err := s.headers(func(c ebmlElem, pos int64) bool { s.level1(c, pos); return false }); err != nil {
+		return nil, err
 	}
 	if s.codec == "" { // an audio track's unknown codec returned above
 		return nil, unsure("mkv: no audio track")

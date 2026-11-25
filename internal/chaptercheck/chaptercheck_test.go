@@ -586,24 +586,23 @@ func TestRunWaitsForReady(t *testing.T) {
 		return func() { cancel(); <-done }
 	}
 
-	var ready atomic.Bool
-	r := New(e.cat, e.src, "", on, ready.Load, nil)
-	r.readyPoll = time.Millisecond
+	ready := make(chan struct{})
+	r := New(e.cat, e.src, "", on, func() <-chan struct{} { return ready }, nil)
 	stop := run(r)
 	r.Kick()
 	time.Sleep(100 * time.Millisecond)
 	if n := e.src.calls.Load(); n != 0 {
 		t.Fatalf("%d lookups before the metadata answered locally, want none", n)
 	}
-	ready.Store(true)
+	close(ready)
 	waitFor("the check once ready", func() bool { return e.src.calls.Load() == 1 })
 	stop()
 
 	// Never ready: checked anyway once readyWait is up.
 	e.book(t, "A/Other.m4b", "B000000002", 3600)
 	e.src.calls.Store(0)
-	never := New(e.cat, e.src, "", on, func() bool { return false }, nil)
-	never.readyWait, never.readyPoll = 50*time.Millisecond, time.Millisecond
+	never := New(e.cat, e.src, "", on, func() <-chan struct{} { return make(chan struct{}) }, nil)
+	never.readyWait = 50 * time.Millisecond
 	stop = run(never)
 	waitFor("the check past readyWait", func() bool { return e.src.calls.Load() > 0 })
 	stop()
@@ -611,9 +610,9 @@ func TestRunWaitsForReady(t *testing.T) {
 	// Metadata off: no copy loads, so nothing is waited for (and nothing said
 	// about a copy that isn't ready) until the checks are on.
 	var logged bytes.Buffer
-	off := New(e.cat, e.src, "", func() bool { return false }, func() bool { return false },
+	off := New(e.cat, e.src, "", func() bool { return false }, func() <-chan struct{} { return make(chan struct{}) },
 		slog.New(slog.NewTextHandler(&logged, nil)))
-	off.readyWait, off.readyPoll = 10*time.Millisecond, time.Millisecond
+	off.readyWait = 10 * time.Millisecond
 	stop = run(off)
 	time.Sleep(100 * time.Millisecond)
 	stop()

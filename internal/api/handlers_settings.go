@@ -142,10 +142,15 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if a.rt.Backups != nil && next.Backups != cur.Backups {
 		a.rt.Backups.SetSettings(next.Backups.Schedule, next.Backups.Keep)
 	}
+	metadataOn := next.Metadata.Enabled && !cur.Metadata.Enabled
 	// Metadata back on: the mirror's runner sleeps a minute between looks while
-	// it is off, so wake it now for a check that came due meanwhile.
-	if a.mirror != nil && next.Metadata.Enabled && !cur.Metadata.Enabled {
+	// it is off, so wake it now for a check that came due meanwhile, and the
+	// chapter checks pass at once rather than at their next interval.
+	if a.mirror != nil && metadataOn {
 		a.mirror.Wake()
+	}
+	if a.chapterChecks != nil && metadataOn {
+		a.chapterChecks.Kick()
 	}
 	// Upcoming releases switched on (or metadata back on): run soon when no
 	// run has succeeded for a day.
@@ -156,7 +161,7 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// Metadata back on, the job switched on or not: a light run resolves the
 	// works of the books indexed or retagged meanwhile (their other recordings
 	// and /next ride on them, server#412) rather than up to a day later.
-	if a.kickUpcoming != nil && next.Metadata.Enabled && !cur.Metadata.Enabled {
+	if a.kickUpcoming != nil && metadataOn {
 		a.kickUpcoming()
 	}
 	// The unknown-ASIN report switched on (or metadata back on): run now unless

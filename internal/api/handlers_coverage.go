@@ -58,9 +58,13 @@ func (a *API) unknownASINListed(ctx context.Context) bool {
 	return answered
 }
 
-// mirrorReady reports whether the report's lookups may start: no mirror
-// (remote mode), or its local copy loaded (mirror mode).
-func (a *API) mirrorReady() bool { return a.mirror == nil || a.mirror.Ready() }
+// mirrorLoaded returns the mirror's first-load signal, or nil in remote mode.
+func (a *API) mirrorLoaded() <-chan struct{} {
+	if a.mirror == nil {
+		return nil
+	}
+	return a.mirror.Loaded()
+}
 
 // reportStatus is the report's last run for the settings envelope
 // (metadata.report_status), nil without the job.

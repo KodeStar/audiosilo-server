@@ -31,6 +31,37 @@ func needFFmpeg(t *testing.T) string {
 	return ffprobe
 }
 
+// A HEAD's look (Cached) whose header read fails for a reason other than the
+// codec answers ErrUnavailable, as its contract says, and remembers nothing; a
+// refusal it finds is remembered.
+func TestCachedHeaderReadFailureIsNoRefusal(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "book.mka")
+	if err := os.WriteFile(src, []byte("header"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, runs := countingRemuxer(t, nil)
+	m.spec.checkSource = func(context.Context, *os.File, int64) error { return errors.New("read failed") }
+	ctx := context.Background()
+	if _, _, err := m.Cached(ctx, dir, src); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cached = %v, want ErrUnavailable", err)
+	}
+	if left := m.RefusedFor(dir, src); left != 0 {
+		t.Fatalf("a failed header read was remembered as a refusal (%v)", left)
+	}
+	m.spec.checkSource = func(context.Context, *os.File, int64) error { return ErrRefused }
+	if _, _, err := m.Cached(ctx, dir, src); !errors.Is(err, ErrRefused) {
+		t.Fatalf("cached = %v, want ErrRefused", err)
+	}
+	if left := m.RefusedFor(dir, src); left <= 0 {
+		t.Fatal("a refusal found by a HEAD was not remembered")
+	}
+	if n := runs.Load(); n != 0 {
+		t.Fatalf("a HEAD ran ffmpeg %d times", n)
+	}
+}
+
 // writeMKA writes a 4-second Matroska audio file of codec ("mp3" or "aac")
 // with two chapters (Opening 0-2 s, Closing 2-4 s) at path, or skips.
 func writeMKA(t *testing.T, path, codec string) {
@@ -274,13 +305,22 @@ func TestRemuxerRefusesOtherCodecs(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "aac.mka")
 	writeMKA(t, src, "aac")
 	m, runs := countingRemuxer(t, nil)
+	m.freeSpace = func(string) (uint64, bool) { t.Error("checked disk space for AAC"); return 0, true }
 	ctx := context.Background()
+	// A HEAD's look (Cached) finds the codec too, and remembers the refusal
+	// as a run's would be, so the next request reads no header again.
+	if _, _, err := m.Cached(ctx, filepath.Dir(src), src); !errors.Is(err, ErrRefused) {
+		t.Fatalf("cached = %v, want ErrRefused", err)
+	}
+	if left := m.RefusedFor(filepath.Dir(src), src); left <= 0 {
+		t.Fatalf("refusal after a HEAD left %v, want it remembered", left)
+	}
 	for range 2 {
 		if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) {
 			t.Fatalf("open = %v, want ErrRefused", err)
 		}
 	}
-	if n := runs.Load(); n != 1 {
+	if n := runs.Load(); n != 0 {
 		t.Fatalf("%d runs, want the refusal remembered", n)
 	}
 	if entries, _ := os.ReadDir(m.dir); len(entries) != 0 {
@@ -288,7 +328,7 @@ func TestRemuxerRefusesOtherCodecs(t *testing.T) {
 	}
 	later := time.Now().Add(time.Hour)
 	_ = os.Chtimes(src, later, later)
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) || runs.Load() != 2 {
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) || runs.Load() != 0 {
 		t.Fatalf("changed file: %v after %d runs, want a retry", err, runs.Load())
 	}
 }
@@ -529,20 +569,20 @@ func TestRemuxerWarmAll(t *testing.T) {
 	ctx := context.Background()
 	m.WarmAll(ctx, "ffmpeg", dir, []string{one, aac, two})
 	m.Wait()
-	if n := runs.Load(); n != 3 || most.Load() != 1 {
-		t.Fatalf("%d runs, at most %d at once; want 3, one at a time", n, most.Load())
+	if n := runs.Load(); n != 2 || most.Load() != 1 {
+		t.Fatalf("%d runs, at most %d at once; want two MP3 copies, one at a time", n, most.Load())
 	}
 	m.WarmAll(ctx, "ffmpeg", dir, []string{one, aac, two, filepath.Join(dir, "missing.mka")})
 	m.Wait()
-	if n := runs.Load(); n != 3 {
-		t.Fatalf("second warm ran ffmpeg %d more times, want none", n-3)
+	if n := runs.Load(); n != 2 {
+		t.Fatalf("second warm ran ffmpeg %d more times, want none", n-2)
 	}
 	f, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(two), two)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
-	if n := runs.Load(); n != 3 {
+	if n := runs.Load(); n != 2 {
 		t.Fatalf("open after the warm ran ffmpeg again (%d runs)", n)
 	}
 }
