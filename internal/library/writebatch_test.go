@@ -157,11 +157,11 @@ func TestTagBackfillPublishesBatchedBooksFirst(t *testing.T) {
 	}
 }
 
-// TestPublishCutShortByAStopIsDropped: a request's early write of a scan's
-// finished read that the scan's Stop cuts short drops the read (the scan
-// neither writes it nor counts a failure), while one the scan still runs
-// stores the book.
-func TestPublishCutShortByAStopIsDropped(t *testing.T) {
+// TestPublishRunsPastAStop: a request's early write of a scan's finished read
+// (taken while the scan ran, so the read was whole) still stores the book when
+// the scan's Stop lands during the write, as the scan's own batch write does:
+// a stopped scan keeps what it read, whether or not a request asked first.
+func TestPublishRunsPastAStop(t *testing.T) {
 	t.Parallel()
 	s, cat, lib, _ := newTestScanner(t, t.TempDir(), "", 1)
 	read := func(ctx context.Context, rel string) *bookRead {
@@ -176,20 +176,15 @@ func TestPublishCutShortByAStopIsDropped(t *testing.T) {
 
 	stoppedCtx, stop := context.WithCancel(t.Context())
 	stop()
-	cut := read(stoppedCtx, "Author/Cut")
-	cut.publish(s)
-	<-cut.stored
-	if !errors.Is(cut.err, errReadDropped) {
-		t.Errorf("a write the Stop cut short: %v, want errReadDropped", cut.err)
-	}
-
-	kept := read(t.Context(), "Author/Kept")
-	kept.publish(s)
-	<-kept.stored
-	if kept.err != nil {
-		t.Fatalf("a write while the scan runs: %v", kept.err)
-	}
-	if _, err := cat.GetBookByPath(t.Context(), lib.ID, "Author/Kept"); err != nil {
-		t.Errorf("the published book is not stored: %v", err)
+	for _, r := range []*bookRead{read(stoppedCtx, "Author/Stopped"), read(t.Context(), "Author/Running")} {
+		r.publish(s)
+		<-r.stored
+		if r.err != nil {
+			t.Errorf("%s: write = %v, want the book stored", r.book.RelPath, r.err)
+			continue
+		}
+		if _, err := cat.GetBookByPath(t.Context(), lib.ID, r.book.RelPath); err != nil {
+			t.Errorf("the published %s is not stored: %v", r.book.RelPath, err)
+		}
 	}
 }

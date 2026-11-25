@@ -248,7 +248,7 @@ type bookRead struct {
 	existed bool // indexed before this scan
 	done    chan struct{}
 	root    string          // checked by a request publishing this scan read
-	ctx     context.Context // the scan's: a request publishes the read only before a Stop, which drops one cut short (publish)
+	ctx     context.Context // the scan's: a request takes the write only before a Stop (waitFlight)
 	claimed atomic.Bool     // either the scan batch or a waiting reader owns the write
 	stored  chan struct{}
 	err     error // the write's outcome, read after stored closes
@@ -275,15 +275,13 @@ func (r *bookRead) finishWrite(s *Scanner, err error) {
 }
 
 // publish writes the scan's finished read for a request waiting on it (its
-// waitFlight claimed it), ahead of the scan's batch. A Stop that cuts the
-// write short drops the read (errReadDropped), as stopped drops one never
-// written: neither the scan's failure nor its write.
+// waitFlight claimed it, only while the scan ran: the read was whole), ahead
+// of the scan's batch. Like flush it runs past a Stop that lands during the
+// write: a stopped scan keeps what it read, whether or not a request asked for
+// it first, and the stopped scan waits for this write (bookRead.drop, flush).
 func (r *bookRead) publish(s *Scanner) {
 	r.book.ReadRoot = r.root
-	_, err := s.cat.UpsertBook(r.ctx, r.book)
-	if err != nil && r.ctx.Err() != nil {
-		err = errReadDropped
-	}
+	_, err := s.cat.UpsertBook(context.WithoutCancel(r.ctx), r.book)
 	r.finishWrite(s, err)
 }
 

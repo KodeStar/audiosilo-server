@@ -562,7 +562,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		b, err := r.book, r.err
 		if (r.reused && r.existed) || errors.Is(err, errReadDropped) {
 			// The on-demand read's row stands, or the read was dropped at a
-			// Stop (bookRead.drop, publish): no write of the scan's, no failure.
+			// Stop (bookRead.drop): no write of the scan's, no failure.
 			// A book new to this scan whose row an on-demand read stored
 			// meanwhile is still new content, counted as added below.
 			return
