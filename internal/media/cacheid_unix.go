@@ -10,9 +10,13 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
+// cacheIdentity is the source's inode number. The device number is left out:
+// a btrfs subvolume, a ZFS dataset or a network mount is given a new one at
+// each mount, which would make every copy and ETag new after a restart. The
+// key's path already scopes the inode to one place.
 func cacheIdentity(info os.FileInfo) string {
 	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Ino != 0 {
-		return fmt.Sprintf("%x:%x", st.Dev, st.Ino)
+		return fmt.Sprintf("%x", st.Ino)
 	}
 	return ""
 }

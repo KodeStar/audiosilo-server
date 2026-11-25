@@ -1568,7 +1568,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   spliced range), `download=1` named `<stem>.mp3`; `original=1`
   serves the stored bytes. Old native builds stream it with no change (an old iOS build saves a
   download under `.mka`, which AVFoundation won't open offline). The cache key hashes the case-folded NFC
-  absolute path and filesystem object ID, or the exact path on a filesystem without an ID, plus size and mtime.
+  absolute path and filesystem object ID (on Unix the inode number alone: a btrfs subvolume, a ZFS dataset or a
+  network mount gets a new device number at each mount), or the exact path on a filesystem without an ID, plus size and mtime.
   The first request after the key change builds a fresh copy. Older entries age out under the usual cap.
   Copies live in `<data>/cache/remux/<key>.mp3` (0700, made again if it went; `.part` synced then
   renamed, never under the key when the source changed while read; `.part` swept at
