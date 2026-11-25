@@ -171,7 +171,7 @@ if [ "$(id -u)" = "0" ]; then
     if [ "$rc" != 0 ]; then DATA_CHOWN_FAILED=1; fi
     # A data folder that didn't answer in time isn't walked. One whose answer
     # came from a network share's cache is stopped by the walk's stall watch.
-    case "$rc" in 124 | 143) ;; *) chown_data ;; esac
+    case "$rc" in 124 | 143) ;; *) chown_data || true ;; esac
   fi
   if [ -n "$BACKUPS" ]; then
     # The folder and AudioSilo's own backup files in it, never the rest (it may be

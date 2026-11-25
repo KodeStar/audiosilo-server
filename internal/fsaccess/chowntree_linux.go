@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -52,10 +53,13 @@ func ChownTree(dir string, uid, gid int, stall time.Duration, stalled func()) er
 	return chownTree(dir, uid, gid, table, progressed)
 }
 
-// watchStall calls stalled once progressed has not been called for stall.
+// watchStall calls stalled once progressed has not been called for stall, at
+// most once (a Reset after the timer fired would schedule it again) and never
+// once stop has returned, so a walk that ends as the timer fires isn't reported.
 func watchStall(stall time.Duration, stalled func()) (progressed, stop func()) {
-	t := time.AfterFunc(stall, stalled)
-	return func() { t.Reset(stall) }, func() { t.Stop() }
+	var once sync.Once
+	t := time.AfterFunc(stall, func() { once.Do(stalled) })
+	return func() { t.Reset(stall) }, func() { t.Stop(); once.Do(func() {}) }
 }
 
 func chownTree(dir string, uid, gid int, table []mounts.Mount, progressed func()) error {

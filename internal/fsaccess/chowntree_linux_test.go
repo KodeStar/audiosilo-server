@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/kodestar/audiosilo-server/internal/mounts"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // The walk's choices, with the changes recorded instead of made (a test runs
@@ -123,14 +124,15 @@ func TestChownTreeStall(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	walk := func(chown func() error) (stalled bool) {
+	stall := testwait.Scaled(200 * time.Millisecond)
+	walk := func(chown func(fired *atomic.Bool) error) (stalled bool) {
 		t.Helper()
 		var fired atomic.Bool
-		progressed, stop := watchStall(200*time.Millisecond, func() { fired.Store(true) })
+		progressed, stop := watchStall(stall, func() { fired.Store(true) })
 		defer stop()
 		w := walker{
 			uid: os.Getuid() + 1, gid: os.Getgid() + 1,
-			chownAt:    func(int, string) error { return chown() },
+			chownAt:    func(int, string) error { return chown(&fired) },
 			chownFd:    func(int) error { return nil },
 			progressed: progressed,
 		}
@@ -139,14 +141,16 @@ func TestChownTreeStall(t *testing.T) {
 		}
 		return fired.Load()
 	}
-	if walk(func() error { time.Sleep(2 * time.Millisecond); return nil }) {
+	if walk(func(*atomic.Bool) error { time.Sleep(stall / 100); return nil }) {
 		t.Error("a slow walk that kept moving was given up on")
 	}
 	first := true
-	if !walk(func() error {
+	if !walk(func(fired *atomic.Bool) error {
 		if first {
 			first = false
-			time.Sleep(time.Second) // released here, as an answering share would be
+			// Held until the watch gives up, then released, as an answering
+			// share would be.
+			testwait.Eventually(t, "the stall watch", 10*time.Second, fired.Load)
 		}
 		return nil
 	}) {
