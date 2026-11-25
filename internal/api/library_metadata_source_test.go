@@ -180,3 +180,38 @@ func TestResolveSourcesPanic(t *testing.T) {
 		t.Fatalf("the re-resolve ran %d times, want the panic and one more", got)
 	}
 }
+
+func TestUnchangedSourceSaveSkipsResolver(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	admin, _, _ := adminAndMember(t, e)
+	lib, _ := e.cat.CreateLibrary(t.Context(), catalog.Library{Name: "Main", Root: t.TempDir()})
+	var calls atomic.Int32
+	e.api.resolveRun = func(context.Context) error { calls.Add(1); return nil }
+	resp, body := e.do(t, "PATCH", "/api/v1/admin/libraries/"+strconv.FormatInt(lib.ID, 10), admin, `{"metadata_source":"tags"}`)
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, `"resolving"`) || calls.Load() != 0 {
+		t.Fatalf("unchanged save = %d %s, %d resolve runs", resp.StatusCode, body, calls.Load())
+	}
+	// A re-save while this library is due reports it without requesting
+	// another pass or waiting on the one already under way.
+	started, release := make(chan struct{}), make(chan struct{})
+	source := catalog.MetadataFromPath
+	if _, _, err := e.cat.UpdateLibrary(t.Context(), lib.ID, catalog.LibraryPatch{MetadataSource: &source}); err != nil {
+		t.Fatal(err)
+	}
+	e.api.resolveRun = func(ctx context.Context) error {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return e.cat.ResolveSources(ctx)
+	}
+	done := e.api.resolveSources()
+	<-started
+	resp, body = e.do(t, "PATCH", "/api/v1/admin/libraries/"+strconv.FormatInt(lib.ID, 10), admin, `{"metadata_source":"path"}`)
+	close(release)
+	<-done
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"resolving":true`) || calls.Load() != 1 {
+		t.Fatalf("pending save = %d %s, %d resolve runs", resp.StatusCode, body, calls.Load())
+	}
+}

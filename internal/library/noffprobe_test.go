@@ -18,9 +18,7 @@ import (
 // With no ffprobe the in-process probe still reads durations (SCAN-SPIKE
 // decision 2, server#269): a book gets its length. A file it is unsure of
 // (here, no audio at all) has none, and a rescan by the same server leaves it
-// be rather than re-indexing it every time; a restarted server (a new Scanner)
-// reads it once more, so a server that ran without ffprobe before gets its
-// existing books' lengths from its first scan.
+// be across restarts. A server upgrading from an older scan still gets one read.
 func TestScanWithoutFFprobeReadsDurations(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -48,13 +46,25 @@ func TestScanWithoutFFprobeReadsDurations(t *testing.T) {
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 0 {
 		t.Fatalf("rescan = %+v, %v: want nothing re-indexed", res, err)
 	}
-	// A restart: the book with no length is read once more, then left be.
+	// A restart keeps the recorded inconclusive read.
 	again := NewScanner(cat, "", slog.Default())
-	if res, err := again.Scan(ctx, *lib); err != nil || res.Updated != 1 {
-		t.Fatalf("first scan after a restart = %+v, %v: want the unsure book read again", res, err)
+	if res, err := again.Scan(ctx, *lib); err != nil || res.Updated != 0 {
+		t.Fatalf("first scan after a restart = %+v, %v: want the unsure book kept", res, err)
 	}
 	if res, err := again.Scan(ctx, *lib); err != nil || res.Updated != 0 {
 		t.Fatalf("second scan after a restart = %+v, %v: want nothing re-indexed", res, err)
+	}
+	// Changed bytes and a newly available ffprobe both get a fresh read.
+	writeFile(t, root, "Unsure.m4b", []byte("a different unrecognised file"))
+	if res, err := again.Scan(ctx, *lib); err != nil || res.Updated != 1 {
+		t.Fatalf("changed file = %+v, %v", res, err)
+	}
+	withProbe := NewScanner(cat, "ffprobe", slog.Default())
+	withProbe.readFile = func(context.Context, string, string, string, time.Duration) *metadata.Metadata {
+		return &metadata.Metadata{Duration: 12, Codec: "aac"}
+	}
+	if res, err := withProbe.Scan(ctx, *lib); err != nil || res.Updated != 1 {
+		t.Fatalf("ffprobe available = %+v, %v", res, err)
 	}
 	// A book an older server indexed with no length (it ran without ffprobe)
 	// gets it from the first scan.

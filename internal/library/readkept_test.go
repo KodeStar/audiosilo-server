@@ -87,11 +87,23 @@ func TestReindexWithOnlyTagsCutShortKeepsTheLengthsRead(t *testing.T) {
 		t.Errorf("lengths taken: stale %t, %v; want today's revision recorded", sigs[book].DurationStale, err)
 	}
 	got := read()
-	if got.title != first.title || got.mtime != first.mtime || got.problem != problemUnreadable || got.detail != tagsUnreadDetail {
-		t.Errorf("re-index with a part's tags cut short = %+v, want the names and signature kept, the problem recorded", got)
+	if got.title != first.title || got.mtime != later.Unix() || got.problem != problemUnreadable || got.detail != tagsUnreadDetail {
+		t.Errorf("re-index with a part's tags cut short = %+v, want the names kept and new signature recorded, the problem recorded", got)
 	}
 	if got.part2 < 2.5 || got.duration < 3.5 || got.lastEnd < 3.5 || res.Updated != 1 {
 		t.Errorf("re-index with a part's tags cut short = %+v, %d updated; want the new part's length taken (about 4 s)", got, res.Updated)
+	}
+
+	// While the share is still slow, only the file with unread tags is checked.
+	reader := s.readFile
+	s.readFile = func(ctx context.Context, root, p, ff string, d time.Duration) *metadata.Metadata {
+		if filepath.Base(p) != "02.mp3" {
+			t.Errorf("repeated read of healthy part %s", p)
+		}
+		return reader(ctx, root, p, ff, d)
+	}
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 0 {
+		t.Fatalf("second scan on slow share = %+v, %v", res, err)
 	}
 
 	// Its tags answer again: read whole, the problem gone.

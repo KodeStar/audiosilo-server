@@ -755,7 +755,7 @@ func TestStartReread(t *testing.T) {
 		t.Fatal("a read still going was not left")
 	}
 	close(hold)
-	a.rereads.Wait()
+	a.bookReads.Wait()
 	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "A/Slow") {
 		t.Errorf("a left read's failure was not logged by the time rereads ended: %q", out)
 	}
@@ -765,5 +765,13 @@ func TestStartReread(t *testing.T) {
 	ended := a.startReread(lib, "A/Quick", func() error { return nil })
 	if err := <-ended.done; err != nil || ended.leave() {
 		t.Errorf("an ended read: %v, left %v; want nil and not left", err, ended.leave())
+	}
+	a.WaitMediaCaches()
+	late := a.startReread(lib, "A/Late", func() error {
+		t.Error("started a detached read after shutdown")
+		return nil
+	})
+	if err := <-late.done; !errors.Is(err, library.ErrStopping) {
+		t.Errorf("read after shutdown = %v", err)
 	}
 }

@@ -126,25 +126,31 @@ func (p LibraryPatch) Apply(l *Library) {
 	}
 }
 
-// UpdateLibrary applies an edit and returns the result, and whether it made the
-// index stale (a new root or new ignore rules), in which case the caller should
+// LibraryChanges describes the work due after a successful library edit.
+type LibraryChanges struct {
+	Scan, SourceChanged, ResolvePending bool
+}
+
+// UpdateLibrary applies an edit and returns the result and the background work due. A stale
+// index (a new root or new ignore rules) means the caller should
 // rescan. A new metadata source is no reason to: the library's books are
 // re-resolved from what the scan stored, by ResolveSources, which the edit's own
 // transaction marks due (a large library takes longer than a request may,
 // server#213). Whether the source changed is read inside that transaction, not
 // from the earlier read: an edit that raced this one may have switched it since.
-func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) (*Library, bool, error) {
+func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) (*Library, LibraryChanges, error) {
+	var changes LibraryChanges
 	existing, err := c.GetLibrary(ctx, id)
 	if err != nil {
-		return nil, false, err
+		return nil, LibraryChanges{}, err
 	}
 	if in.Kind != nil && *in.Kind != existing.Kind {
-		return nil, false, ErrKindImmutable
+		return nil, LibraryChanges{}, ErrKindImmutable
 	}
 	before := *existing
 	in.Apply(existing)
 	if err := checkMetadataSource(existing); err != nil {
-		return nil, false, err
+		return nil, LibraryChanges{}, err
 	}
 	// Only a new root is checked for overlaps: the kind never changes, so an
 	// edit keeping its root (a rename, a setting, config sync's every start)
@@ -157,7 +163,7 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	var resolved map[string]string
 	if existing.Root != before.Root {
 		if resolved, err = c.resolveRoots(ctx, *existing); err != nil {
-			return nil, false, err
+			return nil, LibraryChanges{}, err
 		}
 	}
 	err = c.db.WithTx(ctx, "UpdateLibrary", func(tx *sql.Tx) error {
@@ -187,19 +193,28 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 		// A podcast library's episodes come from feed.json, never from tags or
 		// the path, and have no scanned snapshot: re-resolving them would blank
 		// what IndexPodcastShow wrote (their descriptions among it).
-		if existing.MetadataSource == stored || existing.Kind == KindPodcasts {
+		if existing.Kind == KindPodcasts {
 			return nil
 		}
+		if existing.MetadataSource == stored {
+			if in.MetadataSource != nil {
+				due, err := getServerState[map[int64]int64](ctx, tx, resolveKey)
+				_, changes.ResolvePending = due[id]
+				return err
+			}
+			return nil
+		}
+		changes.SourceChanged = true
 		return c.markResolve(ctx, tx, id)
 	})
 	if err != nil {
 		if store.IsUniqueViolation(err) {
-			return nil, false, ErrNameTaken
+			return nil, LibraryChanges{}, ErrNameTaken
 		}
-		return nil, false, err
+		return nil, LibraryChanges{}, err
 	}
-	stale := existing.Root != before.Root || !slices.Equal(existing.IgnorePatterns, before.IgnorePatterns)
-	return existing, stale, nil
+	changes.Scan = existing.Root != before.Root || !slices.Equal(existing.IgnorePatterns, before.IgnorePatterns)
+	return existing, changes, nil
 }
 
 // resolveKey is the server_state row of the libraries whose books are due a
@@ -236,69 +251,80 @@ func (c *Catalog) markResolve(ctx context.Context, tx *sql.Tx, id int64) error {
 // the pass returns its errors rather than starting again (it would fail the
 // same way).
 func (c *Catalog) ResolveSources(ctx context.Context) error {
+	type cursor struct{ generation, after int64 }
+	progress := map[int64]cursor{}
+	failed := map[int64]int64{}
+	var errs []error
 	for {
 		due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey)
-		if err != nil || len(due) == 0 {
-			return err
+		if err != nil {
+			return errors.Join(append(errs, err)...)
 		}
-		var errs []error
+		ran := false
 		for lib, gen := range due {
-			if err := c.resolveLibrary(ctx, lib, gen); err != nil {
+			if failed[lib] == gen {
+				continue
+			}
+			ran = true
+			at := progress[lib]
+			if at.generation != gen {
+				at = cursor{generation: gen}
+			}
+			next, err := c.resolveLibraryBatch(ctx, lib, gen, at.after)
+			if err != nil {
 				if ctx.Err() != nil {
-					return err
+					return ctx.Err()
 				}
+				failed[lib] = gen
 				errs = append(errs, fmt.Errorf("library %d: %w", lib, err))
+			} else {
+				progress[lib] = cursor{gen, next}
 			}
 		}
-		if len(errs) > 0 {
+		if !ran {
 			return errors.Join(errs...)
 		}
 	}
 }
 
-// resolveLibrary re-resolves library lib's books (refreshEffective) for the
-// change of generation gen, then marks it done and tells the OnBookChange
-// listeners, unless a later change has come meanwhile (ResolveSources then
-// starts it again).
-func (c *Catalog) resolveLibrary(ctx context.Context, lib, gen int64) error {
-	for after := int64(0); ; {
-		var ids []int64
-		done := false
-		err := c.db.WithTx(ctx, "ResolveSources", func(tx *sql.Tx) error {
-			due, err := getServerState[map[int64]int64](ctx, tx, resolveKey)
-			if err != nil || due[lib] != gen {
-				return err // overtaken: ids stays empty
-			}
-			ids, err = queryRows(ctx, tx, func(r *sql.Rows, id *int64) error { return r.Scan(id) },
-				`SELECT id FROM books WHERE library_id = ? AND id > ? ORDER BY id LIMIT ?`, lib, after, resolveBatch)
-			if err != nil {
-				return err
-			}
-			for _, id := range ids {
-				if _, err := refreshOrSkip(ctx, tx, id); err != nil {
-					return err
-				}
-			}
-			if len(ids) < resolveBatch {
-				// The last batch: the library is done, in the same transaction.
-				done = true
-				delete(due, lib)
-				return putServerState(ctx, tx, resolveKey, due, c.stamp())
-			}
-			return nil
-		})
+// resolveLibraryBatch gives this library one transaction before the others
+// take their turns. A new generation starts again at the first book.
+func (c *Catalog) resolveLibraryBatch(ctx context.Context, lib, gen, after int64) (int64, error) {
+	var ids []int64
+	done := false
+	err := c.db.WithTx(ctx, "ResolveSources", func(tx *sql.Tx) error {
+		due, err := getServerState[map[int64]int64](ctx, tx, resolveKey)
+		if err != nil || due[lib] != gen {
+			return err // a later pass picks up the new generation
+		}
+		ids, err = queryRows(ctx, tx, func(r *sql.Rows, id *int64) error { return r.Scan(id) },
+			`SELECT id FROM books WHERE library_id = ? AND id > ? ORDER BY id LIMIT ?`, lib, after, resolveBatch)
 		if err != nil {
 			return err
 		}
-		if done {
-			c.changed()
-			return nil
+		for _, id := range ids {
+			if _, err := refreshOrSkip(ctx, tx, id); err != nil {
+				return err
+			}
 		}
-		if len(ids) == 0 {
-			return nil // overtaken by a later change
+		if len(ids) < resolveBatch {
+			// The last batch: the library is done, in the same transaction.
+			done = true
+			delete(due, lib)
+			return putServerState(ctx, tx, resolveKey, due, c.stamp())
 		}
-		after = ids[len(ids)-1]
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
+	if done {
+		c.changed()
+	}
+	if done || len(ids) == 0 {
+		return 0, nil
+	}
+	return ids[len(ids)-1], nil
 }
 
 // scannedUnreadableDetail is the detail of a book's read problem when its

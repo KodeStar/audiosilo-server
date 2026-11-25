@@ -270,6 +270,10 @@ func ParseSeriesPosition(s string) (start, end float64) {
 // stale. loadLayers then takes the snapshot from the row, as migration 0016 did.
 const scannedStampKey = "@indexed_at"
 
+// probeUnsureKey belongs to a full scan without ffprobe that found no duration
+// or codec. Backfills that edit individual snapshot fields preserve it.
+const probeUnsureKey = "@probe_unsure"
+
 // scannedRevKey is the `scanned` key holding the revision of the scan's reading
 // of the names (the path baseline, metadata.DeriveFromPath, and the tags over it:
 // library's readNames) the snapshot was read with, scannedRev today. A snapshot
@@ -320,6 +324,9 @@ func revNumber(rev string) int {
 func scannedJSON(b *Book, indexedAt string) (string, error) {
 	vals := fieldsOf(b)
 	vals[scannedRevKey] = scannedRev
+	if b.ProbeUnsure {
+		vals[probeUnsureKey] = "1"
+	}
 	return encodeScanned(vals, indexedAt)
 }
 
@@ -765,8 +772,8 @@ func refreshBook(ctx context.Context, tx *sql.Tx, bookID int64, scan *Book) erro
 	// the genres and tags columns a label a line, so a search finds a book by its
 	// labels too (the genre= and tag= filters go by book_labels). Every column is
 	// in ftsText's form, a Chinese or Japanese character a token (writeFTSRow).
-	return writeFTSRow(ctx, tx, bookID, [6]string{v(FieldTitle), v(FieldAuthor), ftsSeries(v(FieldSeries), v(FieldMoreSeries)),
-		v(FieldNarrator), ftsLabels(v(FieldGenres)), ftsLabels(v(FieldTags))})
+	return writeFTSRow(ctx, tx, bookID, searchColumns(v(FieldTitle), v(FieldAuthor), v(FieldSeries), v(FieldMoreSeries),
+		v(FieldNarrator), v(FieldGenres), v(FieldTags)))
 }
 
 // recordScanned writes snap as book id's scanned snapshot, stamped with the

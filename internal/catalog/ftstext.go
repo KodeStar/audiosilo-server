@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"database/sql"
-	"slices"
 	"strings"
 	"unicode"
 )
@@ -58,12 +57,9 @@ const searchTextKey = "search_text"
 // Unicode tables behind ftsSplitRune.
 var searchTextVersion = "1/" + unicode.Version
 
-// IndexSearchText rewrites the full-text index's rows that ftsText reads
-// otherwise: once per database for the rows written before it (server#178), and
-// again whenever searchTextVersion changes. Only a row with a character it sets
-// apart changes, so a library with none is read and left as it is. One
-// transaction, before the server answers; it returns how many rows it rewrote,
-// 0 while the index is current (server_state searchTextKey).
+// IndexSearchText rebuilds outdated search text from each book's effective
+// fields when the tokenizer version changes. Comparing against the index
+// first avoids rewriting rows whose tokens are already current.
 func (c *Catalog) IndexSearchText(ctx context.Context) (int, error) {
 	if v, err := getServerState[string](ctx, c.db, searchTextKey); err != nil || v == searchTextVersion {
 		return 0, err
@@ -74,23 +70,31 @@ func (c *Catalog) IndexSearchText(ctx context.Context) (int, error) {
 			id   int64
 			cols [6]string
 		}
-		rows, err := queryRows(ctx, tx, func(r *sql.Rows, w *row) error {
-			var cols [6]sql.NullString
-			if err := r.Scan(&w.id, &cols[0], &cols[1], &cols[2], &cols[3], &cols[4], &cols[5]); err != nil {
-				return err
-			}
-			for i, col := range cols {
-				w.cols[i] = col.String
-			}
-			return nil
-		}, `SELECT rowid, title, author, series, narrator, genres, tags FROM books_fts`)
+		rows, err := tx.QueryContext(ctx, `SELECT b.id, b.title, b.author, b.series, b.more_series, b.narrator, b.genres, b.tags,
+			COALESCE(f.title,''), COALESCE(f.author,''), COALESCE(f.series,''), COALESCE(f.narrator,''), COALESCE(f.genres,''), COALESCE(f.tags,'')
+			FROM books_fts f JOIN books b ON b.id = f.rowid`)
 		if err != nil {
 			return err
 		}
-		for _, w := range rows {
-			if !slices.ContainsFunc(w.cols[:], func(col string) bool { return ftsText(col) != col }) {
-				continue
+		defer rows.Close()
+		var changed []row
+		for rows.Next() {
+			var w row
+			var old [6]string
+			var title, author, series, more, narrator, genres, tags string
+			if err := rows.Scan(&w.id, &title, &author, &series, &more, &narrator, &genres, &tags,
+				&old[0], &old[1], &old[2], &old[3], &old[4], &old[5]); err != nil {
+				return err
 			}
+			w.cols = searchColumns(title, author, series, more, narrator, genres, tags)
+			if w.cols != old {
+				changed = append(changed, w)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, w := range changed {
 			if err := writeFTSRow(ctx, tx, w.id, w.cols); err != nil {
 				return err
 			}
@@ -99,6 +103,11 @@ func (c *Catalog) IndexSearchText(ctx context.Context) (int, error) {
 		return putServerState(ctx, tx, searchTextKey, searchTextVersion, c.stamp())
 	})
 	return rewritten, err
+}
+
+func searchColumns(title, author, series, more, narrator, genres, tags string) [6]string {
+	return [6]string{ftsText(title), ftsText(author), ftsText(ftsSeries(series, more)),
+		ftsText(narrator), ftsText(ftsLabels(genres)), ftsText(ftsLabels(tags))}
 }
 
 // writeFTSRow writes book id's full-text index row (delete-then-insert, keyed
@@ -110,7 +119,7 @@ func writeFTSRow(ctx context.Context, tx *sql.Tx, id int64, cols [6]string) erro
 	}
 	args := []any{id}
 	for _, c := range cols {
-		args = append(args, ftsText(c))
+		args = append(args, c)
 	}
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO books_fts(rowid, title, author, series, narrator, genres, tags) VALUES(?,?,?,?,?,?,?)`, args...)

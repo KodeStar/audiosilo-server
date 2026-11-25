@@ -3,10 +3,14 @@ package library
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
@@ -112,5 +116,36 @@ func TestScanStoppedMidBatchKeepsTheBatch(t *testing.T) {
 	if books == 0 || books != res.Added || books >= n || bare != 0 {
 		t.Errorf("index has %d books (%d without files), the scan counted %d added; want the batched book(s), counted and whole",
 			books, bare, res.Added)
+	}
+}
+
+func TestTagBackfillPublishesBatchedBooksFirst(t *testing.T) {
+	t.Parallel()
+	s, _, lib, db := newTestScanner(t, smallLibrary(t, 12, 1), "", 1)
+	if _, err := s.Scan(t.Context(), *lib); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `UPDATE books SET released_checked = 0`); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"A", "B", "C"} {
+		writeFile(t, lib.Root, "Ahead/"+name+"/01.mp3", []byte("new audio"))
+	}
+	var batched, checked atomic.Int32
+	s.batched = func(int) { batched.Add(1) }
+	s.readFile = func(ctx context.Context, root, p, ff string, timeout time.Duration) *metadata.Metadata {
+		if strings.Contains(filepath.ToSlash(p), "/Author/") && checked.Add(1) == 1 {
+			var visible int32
+			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books WHERE rel_path LIKE 'Ahead/%'`).Scan(&visible); err != nil {
+				t.Error(err)
+			}
+			if n := batched.Load(); n == 0 || n != visible {
+				t.Errorf("tag backfill began with %d books batched and %d visible", n, visible)
+			}
+		}
+		return extractFile(ctx, root, p, ff, timeout)
+	}
+	if _, err := s.Scan(t.Context(), *lib); err != nil || checked.Load() == 0 {
+		t.Fatalf("backfill reads %d: %v", checked.Load(), err)
 	}
 }

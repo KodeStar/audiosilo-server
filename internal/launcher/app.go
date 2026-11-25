@@ -409,6 +409,7 @@ func Run(ctx context.Context, opts Options) (err error) {
 	defer func() {
 		stopBase()
 		a.WaitMediaCaches()
+		scanner.WaitReads()
 	}()
 	a.StartSourceResolves()
 	a.StartChapterChecks(ctx)
