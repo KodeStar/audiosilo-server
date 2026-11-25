@@ -12,11 +12,12 @@
 # A chown can fail without saying so (a NAS share with ACLs, a read-only mount), so
 # the entrypoint runs audiosilo checkdirs as the server user. It checks for write
 # access to the data and backups folders and read access to mounted content.
-# When a check fails it prints the path,
-# the user, the folder's owner and the fix (server#368). It warns and carries on:
-# the server's own start-up error says the same about the data folder. Each check
-# of a mounted folder is given $WAIT seconds: a share whose server is gone is said
-# not to answer, and never holds the start.
+# When a check fails it prints the path, the user, the folder's owner and the fix
+# (server#368). It warns and carries on: the server's own start-up error says the
+# same about the data folder. The checks share one time limit
+# (fsaccess.DirCheckTimeout): a share whose server is gone is said not to answer,
+# and never holds the start. The root-only ownership steps below are each bounded
+# by $WAIT seconds for the same reason.
 #
 # If the container is started with an explicit non-root user (docker `--user` /
 # compose `user:`), we skip the chown/drop, run the same checks and exec as that
@@ -132,11 +133,13 @@ chown_folder() {
   find "$1" -maxdepth 0 \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$RUN_AS" {} +
 }
 
+# Runs checkdirs behind the command prefix in "$@" (su-exec as the server user,
+# or nothing when the container already runs as it).
 check_folders() {
-  set -- audiosilo --data "$DATA" checkdirs
+  set -- "$@" audiosilo --data "$DATA" checkdirs
   if [ -n "$DATA_CHOWN_FAILED" ]; then set -- "$@" --data-chown-failed; fi
   if [ -n "$BACKUPS_CHOWN_FAILED" ]; then set -- "$@" --backups-chown-failed; fi
-  as_user "$@"
+  "$@"
 }
 
 # Ends the watcher BusyBox's timeout leaves behind each command for up to a second.
@@ -152,11 +155,9 @@ reap_watchers() {
   return 0
 }
 
-WAIT=5 # seconds a check of a mounted folder may take
+WAIT=5 # seconds each root-only ownership step may take
 DATA=$(trim "$(data_dir "$@")")
 record_data_dir "$DATA"
-BACKUPS=$(trim "${AUDIOSILO_BACKUP_DIR:-}")
-if ! usable_path "$BACKUPS"; then BACKUPS=""; fi
 DATA_CHOWN_FAILED=""
 BACKUPS_CHOWN_FAILED=""
 
@@ -164,7 +165,10 @@ if [ "$(id -u)" = "0" ]; then
   PUID="${PUID:-1000}"
   PGID="${PGID:-1000}"
   RUN_AS="$PUID:$PGID"
-  as_user() { su-exec "$RUN_AS" "$@"; }
+  # Only an AUDIOSILO_BACKUP_DIR folder gets the ownership pass; checkdirs
+  # resolves the backups folder (env, config.yaml or the default) itself.
+  BACKUPS=$(trim "${AUDIOSILO_BACKUP_DIR:-}")
+  if ! usable_path "$BACKUPS"; then BACKUPS=""; fi
   if usable_path "$DATA"; then
     chown_folder "$DATA" 2>/dev/null || DATA_CHOWN_FAILED=1
     chown_data 2>/dev/null || true
@@ -182,12 +186,11 @@ if [ "$(id -u)" = "0" ]; then
       BACKUPS_CHOWN_FAILED=1
     fi
   fi
-  check_folders
+  check_folders su-exec "$RUN_AS"
   reap_watchers
   exec su-exec "$RUN_AS" "$@"
 fi
 
-as_user() { "$@"; }
 export AUDIOSILO_STARTED_AS_USER=1
 check_folders
 reap_watchers
