@@ -215,9 +215,13 @@ func (s *mkvState) headers(visit func(ebmlElem, int64) bool) error {
 	}
 	var seeks []seekEntry
 	at := seg.data
+	// An element running past the Segment's end is still visited, as the probe
+	// always did: its payload read (bytesAt, mkvFields) is bounded by the file,
+	// and one past the file's end makes the probe unsure (ffprobe answers)
+	// rather than answering without it.
 	for at < segEnd {
 		c, ok := elemAt(b, at)
-		if !ok || c.size > segEnd-c.data {
+		if !ok {
 			break
 		}
 		if c.id == mkvCluster {
@@ -267,9 +271,6 @@ func (s *mkvState) headers(visit func(ebmlElem, int64) bool) error {
 		if sk.id == mkvCues || sk.id == mkvCluster {
 			continue
 		}
-		if sk.pos >= segEnd-seg.data {
-			continue
-		}
 		pos := seg.data + sk.pos
 		if s.parsed[pos] || sk.id != mkvTags && s.parsedID[sk.id] {
 			continue
@@ -279,7 +280,7 @@ func (s *mkvState) headers(visit func(ebmlElem, int64) bool) error {
 			return unsure("mkv: a second SeekHead")
 		}
 		c, ok := elemAt(b, pos)
-		if !ok || c.id != sk.id || c.size < 0 || c.size > segEnd-c.data {
+		if !ok || c.id != sk.id || c.size < 0 {
 			continue
 		}
 		if visit(c, pos) {
