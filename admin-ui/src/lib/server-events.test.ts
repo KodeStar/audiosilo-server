@@ -55,6 +55,10 @@ describe('describeEvent', () => {
       ' ' + detail,
     );
     expect(describeEvent(ev('library_unavailable', {})).body?.values?.detail).toBe('');
+    expect(
+      describeEvent(ev('library_unavailable', { detail: "the server can't read /books" })).body
+        ?.values?.detail,
+    ).toBe(" The server can't read /books");
   });
 
   it('joins a device and its app, and survives missing or odd data', () => {

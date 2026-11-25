@@ -108,7 +108,12 @@ export function describeEvent(ev: ServerEvent): EventText {
         title: { key: 'events.library_unavailable.title', values: { library: str(d.library) } },
         body: {
           key: 'events.library_unavailable.body',
-          values: { detail: d.detail ? ' ' + str(d.detail) : '' },
+          // The OS's words start lower case; here they are a sentence of their own.
+          values: {
+            detail: str(d.detail)
+              ? ' ' + str(d.detail).charAt(0).toUpperCase() + str(d.detail).slice(1)
+              : '',
+          },
         },
         tone: 'warn',
         link: { destination: 'library', section: 'libraries' },

@@ -346,6 +346,10 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 		}
 		return n
 	}
+	lower := catalog.ServerEvent{Kind: KindLibraryUnavailable, Data: map[string]any{"library": "Lectures", "detail": "the server can't read /books"}}
+	if got := compose(lower, Server{}).Text; !strings.HasSuffix(got, " The server can't read /books") {
+		t.Fatalf("offline detail not its own sentence: %q", got)
+	}
 	finish(catalog.RunOK)
 	finish(catalog.RunUnavailable)
 	finish(catalog.RunUnavailable)

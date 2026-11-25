@@ -765,7 +765,7 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		m.Title = str("library") + " is offline"
 		m.Text = "Its folder can't be read, so the scan stopped. Nothing was removed: books and progress are kept until it is back."
 		if detail := str("detail"); detail != "" {
-			m.Text += " " + detail
+			m.Text += " " + upperFirst(detail) // a sentence of its own
 		}
 		m.Link, m.Tags, m.Priority, m.Color = link("/library/libraries"), []string{"electric_plug"}, 4, colorWarn
 	case KindNewDevice:
@@ -1049,7 +1049,8 @@ func webhookBody(ev catalog.ServerEvent, m message, srv Server) map[string]any {
 // internalData are event facts the console's bell shows but no destination is
 // sent as data: a failed scan's detail is the tool's or the OS's own message,
 // which can name a folder on the server. (A failed backup's detail is the
-// message's own text when its folder refused the server: backupReason.)
+// message's own text when its folder refused the server: backupReason; an
+// offline library's folder detail is appended to its message: compose.)
 var internalData = []string{"detail"}
 
 // outbound is an event's data without its internal facts.
