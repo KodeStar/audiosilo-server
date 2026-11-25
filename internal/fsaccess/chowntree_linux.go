@@ -36,7 +36,10 @@ const statMask = unix.STATX_TYPE | unix.STATX_UID | unix.STATX_GID | unix.STATX_
 // on the way (an NFS export's child filesystem), an automount point (never
 // triggered), a folder on another filesystem type and the snapshot folders.
 // A btrfs subvolume of the data folder is part of it and is walked. Without
-// the mount table the walk does not start, as its edges would be unknown.
+// the mount table the walk does not start, as its edges would be unknown. In
+// each folder the entries are changed before its folders are walked and its
+// mount points looked at, so a walk ended part-way has done the server's own
+// files at the top of dir (the database, config.yaml).
 //
 // A walk that makes no progress for stall (no entry and no part of a listing
 // done: a share whose server stopped answering, whose request no goroutine
@@ -131,23 +134,42 @@ func (w *walker) run(dir string, table []mounts.Mount) error {
 }
 
 // walk changes the owner of the entries in the open folder fd (at path, its
-// stat st) and walks the folders among them. It closes fd.
+// stat st) and walks the folders among them. It closes fd. A folder's own
+// entries go first, then its folders, then what is mounted in it: a walk ended
+// part-way (its stall watch) has given the files at the top of the data folder
+// (the database, config.yaml) before any folder below them, and a share
+// mounted there, whose server may be gone, is reached last.
 func (w *walker) walk(fd int, path string, st *unix.Statx_t) {
 	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
+	var dirs, mounted []string
 	for {
 		names, err := f.Readdirnames(readdirBatch)
 		w.step()
 		for _, name := range names {
-			w.entry(fd, path, st, name)
+			if _, ok := w.points[path+"/"+name]; ok {
+				mounted = append(mounted, name)
+				continue
+			}
+			if w.entry(fd, path, st, name) {
+				dirs = append(dirs, name)
+			}
 			w.step()
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				w.errs = append(w.errs, err)
 			}
-			return
+			break
 		}
+	}
+	for _, name := range dirs {
+		w.enter(fd, path, st, name)
+		w.step()
+	}
+	for _, name := range mounted {
+		w.mountPoint(fd, path, name)
+		w.step()
 	}
 }
 
@@ -157,45 +179,59 @@ func (w *walker) step() {
 	}
 }
 
-func (w *walker) entry(dirfd int, dir string, parent *unix.Statx_t, name string) {
+// entry changes the owner of name in the open folder dirfd (at dir, its stat
+// parent), an entry no mount point in the table names, when it is not a
+// folder, and reports whether it is a folder for walk to enter.
+func (w *walker) entry(dirfd int, dir string, parent *unix.Statx_t, name string) (folder bool) {
 	path := dir + "/" + name
 	var st unix.Statx_t
 	// AT_NO_AUTOMOUNT: looking at an automount point never mounts it.
-	flags := unix.AT_SYMLINK_NOFOLLOW | unix.AT_NO_AUTOMOUNT
-	ro, mounted := w.points[path]
-	if mounted {
-		// The stat reaches what is mounted there, whose server may be gone (a
-		// backups share): its cached attributes tell a file from a folder,
-		// with no request that could hold the walk until its stall watch.
-		flags |= unix.AT_STATX_DONT_SYNC
-	}
-	if err := statAt(dirfd, name, flags, &st); err != nil {
+	if err := statAt(dirfd, name, unix.AT_SYMLINK_NOFOLLOW|unix.AT_NO_AUTOMOUNT, &st); err != nil {
 		if !errors.Is(err, unix.ENOENT) { // gone since the listing
+			w.errs = append(w.errs, fmt.Errorf("stat %s: %w", path, err))
+		}
+		return false
+	}
+	if w.elsewhere(&st, parent) {
+		return false
+	}
+	if uint32(st.Mode)&unix.S_IFMT != unix.S_IFDIR {
+		w.chown(&st, path, func() error { return w.chownAt(dirfd, name) })
+		return false
+	}
+	return !snapshotDirs[name]
+}
+
+// mountPoint changes the owner of name in the open folder dirfd (at dir), a
+// mount point in the table, only when a read and write regular file is
+// mounted there (a config.yaml). The stat reaches what is mounted there, whose
+// server may be gone (a backups share): its cached attributes tell a file from
+// a folder, with no request that could hold the walk until its stall watch.
+func (w *walker) mountPoint(dirfd int, dir, name string) {
+	path := dir + "/" + name
+	var st unix.Statx_t
+	if err := statAt(dirfd, name, unix.AT_SYMLINK_NOFOLLOW|unix.AT_NO_AUTOMOUNT|unix.AT_STATX_DONT_SYNC, &st); err != nil {
+		if !errors.Is(err, unix.ENOENT) {
 			w.errs = append(w.errs, fmt.Errorf("stat %s: %w", path, err))
 		}
 		return
 	}
-	kind := uint32(st.Mode) & unix.S_IFMT
-	if mounted {
-		if kind == unix.S_IFREG && !ro {
-			w.chown(&st, path, func() error { return w.chownAt(dirfd, name) })
-		}
-		return
-	}
-	if w.elsewhere(&st, parent) {
-		return
-	}
-	if kind != unix.S_IFDIR {
+	if uint32(st.Mode)&unix.S_IFMT == unix.S_IFREG && !w.points[path] {
 		w.chown(&st, path, func() error { return w.chownAt(dirfd, name) })
-		return
 	}
-	if snapshotDirs[name] {
-		return
-	}
+}
+
+// enter opens the folder name in the open folder dirfd (at dir, its stat
+// parent) that entry looked at and, when what was opened is still a folder on
+// the root's mount, changes its owner and walks it.
+func (w *walker) enter(dirfd int, dir string, parent *unix.Statx_t, name string) {
+	path := dir + "/" + name
 	// O_NOFOLLOW: a folder swapped for a link since the stat is not entered.
 	fd, err := unix.Openat(dirfd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		w.errs = append(w.errs, fmt.Errorf("open %s: %w", path, err))
+		if !errors.Is(err, unix.ENOENT) { // gone since the listing
+			w.errs = append(w.errs, fmt.Errorf("open %s: %w", path, err))
+		}
 		return
 	}
 	// What was opened, which may not be what was looked at.

@@ -68,6 +68,16 @@ func TestChownTreeStaysOnTheDataMount(t *testing.T) {
 	if err := w.run(data, table); err != nil {
 		t.Fatal(err)
 	}
+	// A folder's own entries before its folders, its mount points last: a
+	// walk ended part-way has done the database.
+	for _, top := range []string{"a.db", "dirlink", "link"} {
+		if i := slices.Index(changed, top); i < 0 || i > slices.Index(changed, "d") || i > slices.Index(changed, "d/f") {
+			t.Errorf("%s not changed before the folder d: %q", top, changed)
+		}
+	}
+	if len(changed) == 0 || changed[len(changed)-1] != "config.yaml" {
+		t.Errorf("the mounted file wasn't changed last: %q", changed)
+	}
 	slices.Sort(changed)
 	want := []string{"a.db", "config.yaml", "d", "d/f", "dirlink", "link"}
 	if !slices.Equal(changed, want) {
