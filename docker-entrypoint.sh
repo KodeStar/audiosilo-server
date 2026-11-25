@@ -107,6 +107,15 @@ chown_folder() {
   find "$1" -maxdepth 0 \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$RUN_AS" {} +
 }
 
+# Whether folder $1 is reached through no link, its own name included: root's
+# mkdir and chown resolve every name on the way, and the server's user could
+# leave a link on it (in /data) to a system folder for root to hand over at the
+# next start. Bounded, as a dead share's cd would block.
+physical() {
+  # shellcheck disable=SC2016 # the inner shell expands $1
+  [ "$(timeout "$WAIT" sh -c 'cd -P "$1" && pwd -P' sh "$1" 2>/dev/null)" = "$1" ]
+}
+
 # Runs checkdirs behind the command prefix in "$@" (su-exec as the server user,
 # or nothing when the container already runs as it). Advisory only: under set -e
 # a check that could not run (a crash, a killed process) would otherwise end
@@ -152,14 +161,15 @@ if [ "$(id -u)" = "0" ]; then
   if [ -n "$BACKUPS" ]; then
     # The folder and AudioSilo's own backup files in it, never the rest (it may be
     # a share other apps keep their backups in too) and never what a link in it
-    # points at: files only, and chown -h. The folder itself takes chown -h too:
-    # in a folder the server's user can write (/data/backups) it could leave a
-    # link there to a system folder for root to hand it at the next start. Each
-    # step bounded, as the checks are: the share's server may be gone, and the
-    # server starts without its backups.
+    # points at: files only, and chown -h. The folder itself is changed only
+    # when no name on its path is a link (physical), and with chown -h: in a
+    # folder the server's user can write (/data/backups) it could leave a link
+    # there to a system folder for root to hand it at the next start. Each step
+    # bounded, as the checks are: the share's server may be gone, and the server
+    # starts without its backups.
     timeout "$WAIT" mkdir -p "$BACKUPS" 2>/dev/null || true
-    if timeout "$WAIT" chown -h "$RUN_AS" "$BACKUPS" 2>/dev/null; then
-      timeout "$WAIT" find "$BACKUPS/" -maxdepth 1 -type f \( -name 'audiosilo-*.db' -o -name '.audiosilo-*' \) \
+    if physical "$BACKUPS" && timeout "$WAIT" chown -h "$RUN_AS" "$BACKUPS" 2>/dev/null; then
+      timeout "$WAIT" find "$BACKUPS" -maxdepth 1 -type f \( -name 'audiosilo-*.db' -o -name '.audiosilo-*' \) \
         -exec chown -h "$RUN_AS" {} + 2>/dev/null || true
     else
       BACKUPS_CHOWN_FAILED=1

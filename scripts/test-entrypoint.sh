@@ -136,9 +136,17 @@ expect "backups chown follows no link" "$owners" \
 # 5c'. Nor the folder a link at the backups folder's own name points at: the
 #      server's user can leave one in its data folder for root to follow.
 out=$(docker run --rm -e AUDIOSILO_BACKUP_DIR=/data/backups -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '
-  mkdir -p /data /target && ln -s /target /data/backups &&
-    sh /usr/local/bin/docker-entrypoint.sh true --data /data && stat -c "%n %u:%g" /target' 2>&1 || true)
-expect "backups folder link is not followed" "$out" "^/target 0:0$"
+  mkdir -p /data /target && touch /target/audiosilo-x.db /target/.audiosilo-y && ln -s /target /data/backups &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data &&
+    stat -c "%n %u:%g" /target /target/audiosilo-x.db /target/.audiosilo-y' 2>&1 || true)
+expect "backups folder link is not followed" "$out" "^/target 0:0$" "^/target/audiosilo-x.db 0:0$" "^/target/.audiosilo-y 0:0$"
+
+# 5c''. Nor a link on the way to it: with a backups folder nested in the data
+#       folder, the server's user can make its parent a link to a system folder.
+out=$(docker run --rm -e AUDIOSILO_BACKUP_DIR=/data/backups/bin -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '
+  mkdir -p /data && ln -s /usr/local /data/backups &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data && stat -c "%n %u:%g" /usr/local/bin' 2>&1 || true)
+expect "link on the backups folder's path is not followed" "$out" "^/usr/local/bin 0:0$"
 
 # A backups listing that outlasts the ownership pass's five seconds cannot
 # hold startup. The stand-in records whether it reached the end of its wait.
@@ -146,7 +154,7 @@ out=$(docker run --rm -e AUDIOSILO_BACKUP_DIR=/backups -v "$EP:/usr/local/bin/do
   mkdir -p /data /backups /test-bin
   cat >/test-bin/find << "SLOW_FIND"
 #!/bin/sh
-if [ "$1" = /backups/ ]; then
+if [ "$1" = /backups ]; then
   echo started >/tmp/backup-walk
   sleep 8
   echo late >>/tmp/backup-walk
