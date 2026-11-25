@@ -15,13 +15,18 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/kodestar/audiosilo-server/internal/api"
+	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/launcher"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 func main() {
@@ -43,7 +48,7 @@ func main() {
 		FFmpegPath:  *ffmpegPath,
 		Setup:       *setup,
 	}); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
@@ -55,7 +60,8 @@ func main() {
 // fails, or 2 when asked wrongly (launcher.UsageError); anything else is a usage
 // error (exit 2, as the flag package exits on a bad flag). "healthcheck" asks the
 // server running from dataDir whether it is healthy (launcher.Healthcheck) and
-// exits 0 when it is, 1 when it is not.
+// exits 0 when it is, 1 when it is not. "checkdirs" prints folder warnings as the server user.
+// "chowndata UID:GID" is the image's root ownership walk of dataDir (fsaccess.ChownTree).
 func command(args []string, dataDir string, stdout, stderr io.Writer) (code int, done bool) {
 	switch {
 	case len(args) == 0:
@@ -70,13 +76,68 @@ func command(args []string, dataDir string, stdout, stderr io.Writer) (code int,
 		return resetAdmin(args[1:], dataDir, stdout, stderr), true
 	case len(args) == 1 && args[0] == "healthcheck":
 		return healthcheck(dataDir, stdout, stderr), true
+	case args[0] == "checkdirs":
+		return checkDirs(args[1:], dataDir, stderr), true
+	case args[0] == "chowndata":
+		return chownData(args[1:], dataDir, stderr), true
 	case args[0] == "healthcheck":
 		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] healthcheck (flags go before the command)")
 		return 2, true
 	default:
-		fmt.Fprintf(stderr, "audiosilo: unknown command %q (the commands are \"version\", \"reset-admin\" and \"healthcheck\"; run with -h for the flags)\n", args[0])
+		_, _ = fmt.Fprintf(stderr, "audiosilo: unknown command %q (the commands are \"version\", \"reset-admin\", \"healthcheck\", \"checkdirs\" and \"chowndata\"; run with -h for the flags)\n", args[0])
 		return 2, true
 	}
+}
+
+// checkDirs runs the checkdirs command: the folder warnings on stderr, exit 0
+// whatever they say (they never hold the start), 2 when asked wrongly.
+func checkDirs(args []string, dataDir string, stderr io.Writer) int {
+	flags := flag.NewFlagSet("checkdirs", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	dataFailed := flags.Bool("data-chown-failed", false, "the entrypoint could not change the data folder's owner")
+	backupFailed := flags.Bool("backups-chown-failed", false, "the entrypoint could not change the backups folder's owner")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] checkdirs")
+		return 2
+	}
+	fsaccess.CheckDirs(dataDir, configuredBackups(dataDir), *dataFailed, *backupFailed, stderr)
+	return 0
+}
+
+// chownData runs the chowndata command: the data folder's contents given to
+// UID:GID (the entrypoint's PUID:PGID), 0 when all changed, 1 when some could
+// not be (on stderr), 2 when asked wrongly.
+func chownData(args []string, dataDir string, stderr io.Writer) int {
+	// 32 bits, as the kernel's uid_t: a larger number would wrap (to root at
+	// 4294967296), and 4294967295 is chown's "leave it as it is".
+	u, g, found := strings.Cut(strings.Join(args, " "), ":")
+	uid, errU := strconv.ParseUint(u, 10, 32)
+	gid, errG := strconv.ParseUint(g, 10, 32)
+	if len(args) != 1 || !found || errU != nil || errG != nil || uid == math.MaxUint32 || gid == math.MaxUint32 {
+		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] chowndata UID:GID")
+		return 2
+	}
+	if err := fsaccess.ChownTree(dataDir, int(uid), int(gid)); err != nil {
+		_, _ = fmt.Fprintln(stderr, "audiosilo: chowndata:", err)
+		return 1
+	}
+	return 0
+}
+
+// The root ownership pass is opt-in by environment only. The unprivileged
+// probe checks the folder the server will use, including a YAML-only override.
+func configuredBackups(dataDir string) string {
+	if dir := os.Getenv("AUDIOSILO_BACKUP_DIR"); dir != "" {
+		return dir
+	}
+	dir, _ := metadata.LookBounded(context.Background(), config.Path(dataDir), fsaccess.DirCheckTimeout, func() (string, error) {
+		cfg, _, err := config.Load(dataDir)
+		if err != nil {
+			return "", err // startup reports a config it cannot load
+		}
+		return cfg.Backups.Dir, nil
+	})
+	return dir
 }
 
 // healthcheck runs the healthcheck command: 0 when the server answers healthy,
@@ -93,13 +154,13 @@ func healthcheck(dataDir string, stdout, stderr io.Writer) int {
 // username. A flag there is refused, since the flag package stops at the
 // command: "--data" after it would never be read.
 func resetAdmin(args []string, dataDir string, stdout, stderr io.Writer) int {
-	if len(args) > 1 || len(args) == 1 && strings.HasPrefix(args[0], "-") {
-		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] reset-admin [username] (flags go before the command)")
-		return 2
-	}
 	username := ""
-	if len(args) == 1 {
-		username = args[0]
+	for _, arg := range args {
+		if len(args) > 1 || strings.HasPrefix(arg, "-") {
+			_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] reset-admin [username] (flags go before the command)")
+			return 2
+		}
+		username = arg
 	}
 	err := launcher.ResetAdmin(context.Background(), dataDir, username, stdout)
 	if err == nil {

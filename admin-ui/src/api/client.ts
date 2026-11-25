@@ -90,6 +90,7 @@ import type {
   BookPage,
   DirListing,
   ErrorEnvelope,
+  FolderAccess,
   FolderMode,
   FsListing,
   Import,
@@ -132,12 +133,13 @@ export class ApiError extends Error {
   readonly max?: number;
   /** Which rule a refused chapter edit broke (code "chapters_invalid": empty, order, ...). */
   readonly detail?: string;
+  readonly folderAccess?: FolderAccess;
   constructor(
     status: number,
     message: string,
     code?: string,
     field?: string,
-    detail: { reason?: string; max?: number; detail?: string } = {},
+    detail: { reason?: string; max?: number; detail?: string; folderAccess?: FolderAccess } = {},
   ) {
     super(message);
     this.name = 'ApiError';
@@ -147,6 +149,7 @@ export class ApiError extends Error {
     this.reason = detail.reason;
     this.max = detail.max;
     this.detail = detail.detail;
+    this.folderAccess = detail.folderAccess;
   }
 }
 
@@ -234,6 +237,8 @@ async function apiError(res: Response): Promise<ApiError> {
       reason: typeof env?.reason === 'string' ? env.reason : undefined,
       max: typeof env?.max === 'number' ? env.max : undefined,
       detail: typeof env?.detail === 'string' ? env.detail : undefined,
+      folderAccess:
+        typeof env?.folder_access?.server_user === 'string' ? env.folder_access : undefined,
     },
   );
 }

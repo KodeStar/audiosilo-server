@@ -179,7 +179,7 @@ jobs:
       - name: Check the GoReleaser config
         uses: goreleaser/goreleaser-action@v7
         with:
-          version: '~> v2'
+          version: 'v2.20.3'
           args: check
 
       - name: Build a snapshot (linux amd64)

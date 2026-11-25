@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { ShieldCheck, Unplug } from 'lucide-react';
 import type { AdminLibrary } from '@/api/types';
 import { Notice } from '@/components/notice';
+import { folderAccessText } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 
 /**
@@ -35,6 +36,7 @@ export function OfflineNotice({
         className={className}
       >
         {t('libraries.unreadable.body', { root: l.root })}
+        {folderAccessText(l.folder_access, t)}
       </Notice>
     );
   }
@@ -51,6 +53,7 @@ export function OfflineNotice({
         count: l.book_count,
         formatted: formatNumber(l.book_count, i18n.resolvedLanguage ?? 'en'),
       })}
+      {folderAccessText(l.folder_access, t)}
       {listeners ? (
         <>
           {' '}

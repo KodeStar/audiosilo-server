@@ -4886,7 +4886,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   optional); Discord is one embed with `allowed_mentions` empty. Triggers: `Scanner.OnRunFinished`
   (`book_added` with up to 5 titles from `ScanResult.AddedTitles`, never for a podcast library, `scan_failed` (its `detail` is shown in the
   bell but never sent out: `internalData`), `library_unavailable`
-  only when the previous run wasn't), login/exchange (`new_device`, not demo accounts; `invite_redeemed`
+  with the scan's folder detail in the bell and delivered message, only when the previous run wasn't), login/exchange (`new_device`, not demo accounts; `invite_redeemed`
   via `auth.ConsumePairing`'s code kind), `updates.Checker.OnAvailable`, `backup.Service.OnFailure`,
   the upcoming releases job (`book_released`, once a run finds releases not announced before: see Upcoming
   releases), `bridge.Service.OnTransition` (`bridge_job_finished` into done, `bridge_job_failed` into failed or into
@@ -4985,7 +4985,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **Folder permissions (server#368, `internal/fsaccess`, `docker-entrypoint.sh`)**: a folder the server's
   user may not use is said once, the same way everywhere: the path, the user the server runs as
   (`fsaccess.User`, "uid:gid"; none on Windows), the folder's owner (`syscall.Stat_t`, unix only) and the
-  fix (`fsaccess.Hint`: in a container `PUID`/`PGID` set to the owner; never `PUID=0` for a root-owned
+  fix (`fsaccess.Wrap`'s hint: in a container `PUID`/`PGID` set to the owner; never `PUID=0` for a root-owned
   folder, then "make the server's user its owner"; the right owner refused by the mode: "give it access";
   outside a container: run as the owner). Never classify by `os.ErrPermission` on SQLite's error (its
   "unable to open database file" wraps none): probe with a file of our own first (`CheckWrite`: create and
@@ -5010,22 +5010,28 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   environment, so it can't tell) gets `user: "<owner>"`, not PUID/PGID. A scan stops on a library root
   it can stat but not list (`CheckRead`: unavailable, not an empty library scanned OK); the root's stat, this
   check and discovery's resolve of the root are bounded looks (the probe's time), so a root that stops
-  answering after the availability probe is unavailable too, never a scan worker held. The Docker
-  entrypoint words the same as root (after the chown of `/data`: `find -xdev ... -exec chown -h`, each
-  mount point inside it pruned by name from mountinfo, since a volume or bind mount from the same disk
-  shares the device number `-xdev` reads (server#382), unless it is a regular file: a file mounted there
-  (`/data/config.yaml`) is chowned as before, a socket or device node (`/data/docker.sock`) never is
-  (`-path P ! -type f -prune`); and of `AUDIOSILO_BACKUP_DIR` when absolute and
-  not `/` only the folder and its `audiosilo-*.db` / `.audiosilo-*` files: a backups share may hold
-  other apps' files, so regular files only and `chown -h`, never what a link there points at) and
-  under `--user` (where its fix names compose's `user:`): a write check of the data and backups
-  folders (a `mktemp` file, never a name known ahead; a folder on a read-only mount, by mountinfo's
-  options of the mount holding it or of its filesystem, says so instead of naming owners) and a read
-  check of every other mount (MountHints' rule) as the server's user, warning and carrying on.
-  `usable_path` is what keeps a chown off the container's root however it is spelled (`//`, `/.`, a `..` in the path, a link to it).
-  Every check, `stat` and step on the backups folder is bounded by `timeout 5`, as a dead hard mount can
-  block for minutes (not the data folder's chown, which a large folder may need longer for); a check
-  cut off is said not to have answered, with no owner advice. BusyBox's `timeout`
+  answering after the availability probe is unavailable too, never a scan worker held. The bounded probe also supplies the offline admin library's
+  optional `folder_access` (`server_user` and, when known, `owner`, both UID:GID). The picker and
+  setup preview return it on `folder_unreadable`. Systems without Unix IDs omit it.
+  The Docker entrypoint prepares ownership as root, then runs `audiosilo --data <folder> checkdirs`
+  as the server user. Its data walk prunes nested mount points by their decoded mountinfo names.
+  It descends into btrfs subvolumes within the data tree and chowns writable mounted regular files.
+  Mounted folders, devices and read-only file mounts keep their owners. An explicit absolute
+  `AUDIOSILO_BACKUP_DIR` gets only its own folder and regular `audiosilo-*.db` and `.audiosilo-*`
+  files prepared, each with `chown -h`, and only when no name on its path is a link (`physical`:
+  `cd -P` then `pwd -P` gives the path back; the server's user could leave a link at the folder's
+  name or on its way in `/data` for root to follow). A failed `checkdirs` never ends the start.
+  `usable_path` keeps the ownership pass off the container root and paths with `..`.
+  The command checks both data and the configured backups folder (environment, then YAML, then
+  `<data>/backups`) by creating and removing
+  a private temp file. It opens mounted regular files for reading and lists mounted library folders.
+  Each probe gets five seconds, including the owner lookup. A permission failure uses the same
+  `fsaccess` explanation as startup, including `user:` under an explicit user and read-write mount
+  advice for a read-only filesystem. A timeout reports an unresponsive share. The data folder's own
+  chown and the explicit backups folder's ownership steps are also bounded by the shell's
+  five-second timeout; the walk of the data folder's contents (`audiosilo chowndata`,
+  `fsaccess.ChownTree`) is not, as a large folder may need longer, and is skipped when the data
+  folder's own chown timed out. BusyBox's `timeout`
   leaves a watcher behind each command: `reap_watchers` ends them before the hand-over, or each would
   stay a zombie under the server. `scripts/test-entrypoint.sh` (Docker) is its test, not run in CI.
 - **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):

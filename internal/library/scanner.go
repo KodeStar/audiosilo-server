@@ -192,6 +192,7 @@ func (s *Scanner) updateProgress(libID int64, fn func(*ScanProgress)) {
 // ScanResult summarizes a scan: what it found and changed, whether it skipped
 // pruning because part of the tree couldn't be read, and its log.
 type ScanResult struct {
+	rootInfo os.FileInfo // the bounded root probe, for an offline notification
 	catalog.ScanCounts
 	Partial bool
 	Log     []catalog.RunEvent
@@ -311,7 +312,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// would wipe the index. Fail fast before discovery. A hard-mounted share whose
 	// server is gone can block a stat for minutes, holding the one scan worker and
 	// every scan queued behind it, so the bounded root probe answers first.
-	if _, answered := s.roots.check(lib.Root); !answered {
+	root, answered := s.roots.check(lib.Root)
+	res.rootInfo = root.info
+	if !answered {
 		return res, fmt.Errorf("%w: %q is not responding", ErrLibraryUnavailable, lib.Root)
 	}
 	// The probe answering says little of the next look (a share can stop between
@@ -320,8 +323,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// share) would read as an empty library: stop, naming the folder, the
 	// server's user and the fix (server#368).
 	if _, err := metadata.LookBounded(ctx, lib.Root, s.probeTimeout, func() (struct{}, error) {
-		if info, err := os.Stat(lib.Root); err != nil || !info.IsDir() {
-			return struct{}{}, fmt.Errorf("%q: %w", lib.Root, cmp.Or(err, errors.New("not a folder")))
+		if info, err := os.Stat(lib.Root); err != nil {
+			return struct{}{}, fsaccess.Wrap(lib.Root, false, err)
+		} else if !info.IsDir() {
+			return struct{}{}, fmt.Errorf("%q: not a folder", lib.Root)
 		}
 		return struct{}{}, fsaccess.CheckRead(lib.Root)
 	}); err != nil {

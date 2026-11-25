@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/mounts"
 )
 
@@ -61,7 +62,7 @@ func ListDirs(dir string, limit int) (*DirListing, error) {
 	dir = filepath.Clean(dir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, fsaccess.Wrap(dir, false, err)
 	}
 	out := &DirListing{Path: dir, Dirs: []DirEntry{}}
 	if parent := filepath.Dir(dir); parent != dir {

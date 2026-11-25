@@ -34,7 +34,14 @@ describe('system', () => {
         'GET /admin/system': {
           body: systemStatus({
             libraries: [
-              { id: 1, name: 'Lectures', root: '/mnt/nas', available: false, disk: null },
+              {
+                id: 1,
+                name: 'Lectures',
+                root: '/mnt/nas',
+                available: false,
+                disk: null,
+                folder_access: { server_user: '1000:1000', owner: '1026:100' },
+              },
             ],
             metadata: {
               enabled: true,
@@ -49,6 +56,9 @@ describe('system', () => {
     );
     renderApp('/health/system');
     expect(await screen.findByText("A library folder isn't reachable")).toBeInTheDocument();
+    expect(
+      screen.getByText(/The server runs as 1000:1000. The folder belongs to 1026:100/),
+    ).toHaveTextContent('/mnt/nas');
     expect(screen.getByText(/Nothing was deleted/)).toBeInTheDocument();
     expect(screen.getByText("The community metadata service isn't responding")).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Metadata settings' })).toHaveAttribute(

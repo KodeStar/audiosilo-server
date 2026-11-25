@@ -946,6 +946,7 @@ export interface SystemStatus {
     name: string;
     root: string;
     available: boolean;
+    folder_access?: FolderAccess;
     /** null when the root doesn't answer. */
     disk: { total: number; free: number } | null;
   }[];
@@ -1171,6 +1172,12 @@ export interface Library {
   sort_order: number;
 }
 
+/** Numeric accounts for a folder the server could not use. */
+export interface FolderAccess {
+  server_user: string;
+  owner?: string;
+}
+
 /**
  * One library in GET /admin/libraries and PUT /admin/libraries/order
  * (handlers_admin.go adminLibrary): the library plus its indexed book count,
@@ -1181,6 +1188,7 @@ export interface AdminLibrary extends Library {
   from_config: boolean;
   book_count: number;
   available: boolean;
+  folder_access?: FolderAccess;
   scan: ScanProgress;
   /** "" = no scheduled scans; see SCAN_SCHEDULES (library.ParseSchedule). */
   scan_schedule: string;
@@ -1651,6 +1659,7 @@ export type UserPatch = {
 
 /** The {"error": "..."} envelope every handler uses for failures (respond.go). */
 export interface ErrorEnvelope {
+  folder_access?: FolderAccess;
   error: string;
   /** For failures a person can fix (respond.go codeUsernameTaken etc.). */
   code?: string;

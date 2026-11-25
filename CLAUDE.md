@@ -37,6 +37,8 @@ Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe),
 setup wizard** instead of the auto-admin banner - see below). Commands: `version`,
 `reset-admin [username]` (a new admin password, printed once: lost first-run password; flags go
 before the command, `audiosilo --data /data reset-admin`; see First-run setup in CONVENTIONS.md),
+`checkdirs` (the image's bounded startup checks for writable data and backups and readable mounts, run as the server user),
+`chowndata UID:GID` (the image's root ownership walk of the data folder, `fsaccess.ChownTree`: never through a link, never off its mount),
 `healthcheck` (`launcher.Healthcheck`: GET `/healthz` on the bind address and TLS mode `config.yaml` +
 env give, exit 0 on 200 or a 503 `"status":"starting"` (the launcher listens before the database
 opens, `server.StartGate` answering until the start is done, under the API's CORS policy (`api.CORS`) and with
@@ -147,7 +149,7 @@ internal/diskspace/   a filesystem's size and free space per OS (statfs / GetDis
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
 internal/mounts/      the mount a path is on, from the mount table alone (Of; no filesystem call, so a hung share answers at once; PerMount keeps a value per mount, keyed by the filesystem's device so a remount starts fresh and bind mounts of one share count together): the per-mount bounds on the scan's abandoned reads, the folder picker's slots and the setup preview (server#360); ParseLine and Scan read mountinfo
-internal/fsaccess/    a folder the server's user can't read or write, worded with the path, the user, the folder's owner and the fix (CheckWrite, CheckRead, Hint; see Folder permissions)
+internal/fsaccess/    a folder the server's user can't read or write, worded with the path, the user, the folder's owner and the fix (CheckWrite, CheckRead, Wrap; see Folder permissions)
 internal/backup/      database backups: VACUUM INTO the backups folder on a schedule or on request, retention, restore applied at the next start
 internal/jsonfile/    the small JSON files beside the database (backup's restore marker/result, the mirror's state.json): Write is owner-only, temp file synced then renamed (all or nothing); Read[T] is nil without a file
 internal/bridge/      the Bridge's side on the server (BRIDGE-PLAN.md): its last heartbeat (status.go: validation, the 2-minute online window, features, the lenient `estimates`, Writable, CanContribute: the `setup` block's, else the estimates'; setup.go: the lenient, bounded onboarding checklist and the reply's `accepts`) and the job queue (jobs.go: kinds the server can check (`bridge.verify`, `sidecars.generate`, `sidecars.describe`, `chapters.detect`, Phase 2b's `sidecars.contribute` and `meta.correct`, contribute.go: their strict params, `ModuleFor`, and Phase 3c's `readalong.align`, Phase 4a's `audible.poll`, 4b's `audible.import` and 4c's `audible.sync` in audible.go, LibriVox L6's `librivox.fetch` in librivox.go), dedupe, priority claim with a lease (a queued job whose managed module is off held: `ModuleOn`), long-poll wake, lease expiry, held updates and parks, cooperative cancel, `OnTransition` / `Job.Notable`); estimate.go (EstimateSidecars: a job's cost from the heartbeat's figures); priority.go (the job priority bands every queue uses); pairing and the bridge token are auth's (auth/bridge.go)

@@ -26,7 +26,7 @@ import { ProgressBar } from '@/components/progress-bar';
 import { QueryError } from '@/components/query-error';
 import { StatusText } from '@/components/status-text';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { toastError } from '@/lib/errors';
+import { folderAccessText, toastError } from '@/lib/errors';
 import {
   formatBytes,
   formatDate,
@@ -123,6 +123,15 @@ function SystemList({ sys }: { sys: SystemStatus }) {
           title={t('system.offline.title', { count: offline.length })}
         >
           {t('system.offline.body')}
+          {offline.map(
+            (lib) =>
+              lib.folder_access && (
+                <p key={lib.id}>
+                  <code>{lib.root}</code>
+                  {folderAccessText(lib.folder_access, t)}
+                </p>
+              ),
+          )}
         </Notice>
       ) : null}
       {metaDown ? (

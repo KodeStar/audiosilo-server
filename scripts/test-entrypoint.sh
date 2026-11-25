@@ -15,27 +15,32 @@ EP="$(pwd)/docker-entrypoint.sh"
 [ -f "$EP" ] || { echo "run from the repository root" >&2; exit 2; }
 
 RUN_ID="audiosilo-ep-test-$$"
-VOLS=""
+context=$(mktemp -d)
+touch "$context/volumes"
 cleanup() {
-  for v in $VOLS; do docker volume rm -f "$v" >/dev/null 2>&1 || true; done
+  while IFS= read -r v; do docker volume rm -f "$v" >/dev/null 2>&1 || true; done <"$context/volumes"
+  rm -rf "$context"
   docker image rm -f "$RUN_ID" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-# A base with su-exec, as the image has it, and a stand-in for the server that
-# says how it was asked and as whom (case 15's healthcheck).
-docker build -q -t "$RUN_ID" --build-arg IMG="$IMG" - >/dev/null <<'DOCKERFILE'
+# Exercise the real checkdirs and chowndata commands. Only the long-running server and the
+# healthcheck are replaced with a recorder of their arguments and identity.
+arch=$(docker version --format '{{.Server.Arch}}')
+CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$context/checkdirs-bin" ./cmd/audiosilo
+docker build -q -t "$RUN_ID" --build-arg IMG="$IMG" -f - "$context" >/dev/null <<'DOCKERFILE'
 ARG IMG
 FROM $IMG
-RUN apk add --no-cache su-exec
-RUN printf '#!/bin/sh\necho "audiosilo $* as $(id -u):$(id -g)"\n' >/usr/local/bin/audiosilo && chmod 755 /usr/local/bin/audiosilo
+RUN apk add --no-cache su-exec btrfs-progs
+COPY checkdirs-bin /usr/local/bin/checkdirs-bin
+RUN printf '#!/bin/sh\ncase "$3" in checkdirs | chowndata) exec /usr/local/bin/checkdirs-bin "$@" ;; esac\necho "audiosilo $* as $(id -u):$(id -g)"\n' >/usr/local/bin/audiosilo && chmod 755 /usr/local/bin/audiosilo
 DOCKERFILE
 
 # vol NAME OWNER MODE: a volume whose root belongs to OWNER with MODE.
 vol() {
   v="$RUN_ID-$1"
   docker volume create "$v" >/dev/null
-  VOLS="$VOLS $v"
+  echo "$v" >>"$context/volumes"
   docker run --rm -v "$v:/v" "$RUN_ID" sh -c "chown $2 /v && chmod $3 /v"
   printf '%s' "$v"
 }
@@ -83,9 +88,9 @@ expect "PUID/PGID" "$out" "ran as 1026:100" "!WARNING"
 NAS=$(vol nas 1026:100 700)
 out=$(run "$NOCHOWN" -v "$NAS:/data")
 expect "data folder of another owner" "$out" \
-  "WARNING: the server can't write to /data: it runs as user 1000:1000 and the folder belongs to 1026:100\." \
+  "WARNING: the server can't write to /data: permission denied. The server runs as user 1000:1000 and the folder belongs to 1026:100\." \
   "Changing its owner to 1000:1000 failed" \
-  "Fix: set PUID=1026 and PGID=100 \(the folder's owner\) on the container, or give user 1000:1000 read and write access to the folder on the host\." \
+  "Set PUID=1026 and PGID=100 \(the folder's owner\) on the container, or give user 1000:1000 read and write access to the folder\." \
   "ran as 1000:1000"
 
 # 4. A root-owned folder never gets PUID=0 advice.
@@ -110,6 +115,14 @@ owners=$(docker run --rm -v "$BK:/v" "$RUN_ID" sh -c \
 expect "backups chown spares other files" "$owners" \
   "^/v/other 0:0$" "^/v/other.tar 0:0$" "^/v/audiosilo-20261101-030000Z-scheduled.db 1000:1000$"
 
+# The write probe leaves existing names, including links, untouched and removes its temp file.
+out=$(docker run --rm -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '
+  mkdir -p /data/backups && echo keep >/keep && ln -s /keep /data/backups/.audiosilo-write-check-123456 &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data &&
+    test -L /data/backups/.audiosilo-write-check-123456 && cat /keep &&
+    find /data/backups -name ".audiosilo-write-check-*" | wc -l' 2>&1 || true)
+expect "backups write probe keeps existing files" "$out" "^keep$" "^[[:space:]]*1$" "!WARNING"
+
 # 5c. Nor does what a link in the backups folder points at, whatever the link is
 #     called: a share others can write to must not get root to re-own their pick.
 docker run --rm -v "$BK:/v" "$RUN_ID" sh -c \
@@ -119,6 +132,38 @@ owners=$(docker run --rm -v "$BK:/v" "$RUN_ID" sh -c \
   'stat -c "%n %u:%g" /v/other /v/other.tar /v/audiosilo-20261101-030000Z-scheduled.db')
 expect "backups chown follows no link" "$owners" \
   "^/v/other 0:0$" "^/v/other.tar 0:0$" "^/v/audiosilo-20261101-030000Z-scheduled.db 1000:1000$"
+
+# 5c'. Nor the folder a link at the backups folder's own name points at: the
+#      server's user can leave one in its data folder for root to follow.
+out=$(docker run --rm -e AUDIOSILO_BACKUP_DIR=/data/backups -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '
+  mkdir -p /data /target && touch /target/audiosilo-x.db /target/.audiosilo-y && ln -s /target /data/backups &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data &&
+    stat -c "%n %u:%g" /target /target/audiosilo-x.db /target/.audiosilo-y' 2>&1 || true)
+expect "backups folder link is not followed" "$out" "^/target 0:0$" "^/target/audiosilo-x.db 0:0$" "^/target/.audiosilo-y 0:0$"
+
+# 5c''. Nor a link on the way to it: with a backups folder nested in the data
+#       folder, the server's user can make its parent a link to a system folder.
+out=$(docker run --rm -e AUDIOSILO_BACKUP_DIR=/data/backups/bin -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '
+  mkdir -p /data && ln -s /usr/local /data/backups &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data && stat -c "%n %u:%g" /usr/local/bin' 2>&1 || true)
+expect "link on the backups folder's path is not followed" "$out" "^/usr/local/bin 0:0$"
+
+# A backups listing that outlasts the ownership pass's five seconds cannot
+# hold startup. The stand-in records whether it reached the end of its wait.
+out=$(docker run --rm -e AUDIOSILO_BACKUP_DIR=/backups -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '
+  mkdir -p /data /backups /test-bin
+  cat >/test-bin/find << "SLOW_FIND"
+#!/bin/sh
+if [ "$1" = /backups ]; then
+  echo started >/tmp/backup-walk
+  sleep 8
+  echo late >>/tmp/backup-walk
+fi
+exec /bin/busybox find "$@"
+SLOW_FIND
+  chmod +x /test-bin/find
+  PATH=/test-bin:$PATH sh /usr/local/bin/docker-entrypoint.sh sh -c "cat /tmp/backup-walk && echo running" --data /data' 2>&1 || true)
+expect "slow backups ownership walk is bounded" "$out" "^started$" "^running$" "!^late$"
 
 # 5d. A trailing slash names the same folder: chowned, and not read again as a
 #     folder of books.
@@ -133,12 +178,12 @@ expect "unwritable backups folder" "$out" "WARNING: the server can't write to /b
 #     no failed chown, as the data folder, the backups folder and under --user.
 out=$(run -v "$DATA:/data:ro")
 expect "read-only data folder" "$out" \
-  "WARNING: the server can't write to /data: it is mounted read-only\." "Fix: mount it read and write \(without :ro\)\." \
+  "WARNING: the server can't write to /data: read-only file system\." "mount it read and write \(in Docker, without :ro\)\." \
   "!belongs to" "!Changing its owner" "!PUID"
 out=$(run -e AUDIOSILO_BACKUP_DIR=/backups -v "$DATA:/data" -v "$BK:/backups:ro")
-expect "read-only backups folder" "$out" "WARNING: the server can't write to /backups: it is mounted read-only\." "!belongs to"
+expect "read-only backups folder" "$out" "WARNING: the server can't write to /backups: read-only file system\." "!belongs to"
 out=$(run --user 1000:1000 -v "$DATA:/data:ro")
-expect "read-only data folder under --user" "$out" "/data: it is mounted read-only" "!user: \""
+expect "read-only data folder under --user" "$out" "/data: read-only file system" "!user: \""
 
 # 6c. A filesystem that is itself read-only under a mount that isn't (one the
 #     host remounted read-only after errors): the same words, no owner advice.
@@ -146,12 +191,16 @@ out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:r
   mkdir -p /src /backups && mount -t tmpfs tmpfs /src && mount --bind /src /backups && mount -o remount,ro /src &&
     AUDIOSILO_BACKUP_DIR=/backups sh /usr/local/bin/docker-entrypoint.sh true --data /data' 2>&1 || true)
 expect "read-only filesystem under a read and write mount" "$out" \
-  "WARNING: the server can't write to /backups: it is mounted read-only\." "!belongs to"
+  "WARNING: the server can't write to /backups: read-only file system\." "!belongs to"
+
+# The default backups folder is probed even when no override is configured.
+out=$(run -v "$DATA:/data" -v "$BK:/data/backups:ro")
+expect "read-only default backups" "$out" "can't write to /data/backups: read-only file system" "without :ro"
 
 # 7. An audiobooks folder the server's user can't read (a library there is offline).
 out=$(run -v "$DATA:/data" -v "$NAS:/audiobooks:ro")
 expect "unreadable audiobooks" "$out" \
-  "WARNING: the server can't read /audiobooks: it runs as user 1000:1000 and the folder belongs to 1026:100\." \
+  "WARNING: the server can't read /audiobooks: permission denied. The server runs as user 1000:1000 and the folder belongs to 1026:100\." \
   "give user 1000:1000 read access" "shows as offline"
 BOOKS=$(vol books 0:0 755)
 out=$(run -v "$DATA:/data" -v "$BOOKS:/audiobooks:ro")
@@ -160,14 +209,14 @@ expect "readable audiobooks" "$out" "!WARNING"
 # 8. Started with --user: no chown, the same checks, the fix names user: not PUID.
 out=$(run --user 1000:1000 -v "$NAS:/data")
 expect "--user" "$out" "ran as 1000:1000 started_as_user=1" \
-  "run the container as the folder's owner \(user: \"1026:100\"\)" "!PUID"
+  "Run the container as the folder's owner \(user: \"1026:100\"\)" "!PUID"
 
 # 9. A folder the server's user owns but may not write to (its mode refuses it)
 #    gets no PUID advice, whatever its group: the user is right already.
 OWN=$(vol own 1000:100 500)
 out=$(run --user 1000:1000 -v "$OWN:/data")
 expect "own folder refused by its mode" "$out" \
-  "the folder belongs to 1000:100\." "Fix: give user 1000:1000 read and write access" "!PUID" "!user: "
+  "the folder belongs to 1000:100\." "Give user 1000:1000 read and write access" "!PUID" "!user: "
 
 # 10. Another spelling of / is never chowned (it would re-own the whole
 #     container, the mounted books included): --data //, /. or /data/.., and the
@@ -181,6 +230,7 @@ done
 
 # 11. No watcher of a bounded check is left behind for the server to carry as a
 #     zombie (a shell builtin looks: nothing here may reap one).
+# shellcheck disable=SC2016 # the container's shell expands these
 leftover='for f in /proc/[0-9]*/comm; do read -r c <"$f" || continue; if [ "$c" = timeout ]; then echo LEFTOVER; fi; done; echo looked'
 for u in "" "--user 1000:1000"; do
   # shellcheck disable=SC2086 # $u is zero or two words
@@ -193,7 +243,7 @@ done
 # 12. A folder mounted inside the data folder (a backups share at /data/backups,
 #     another app's files) keeps its owner and its files theirs; the data
 #     folder's own files are chowned. Volumes share the host disk's device number,
-#     so this is the mount point pruned by name (-xdev alone would cross it), a
+#     so this is the mount point pruned by name (a device-number check alone would cross it), a
 #     name with a space and a glob character too.
 NEST=$(vol nest 1026:100 755)
 ODD=$(vol odd 1026:100 755)
@@ -205,6 +255,49 @@ owners=$(docker run --rm -v "$DATA:/data" -v "$NEST:/data/backups" -v "$ODD:/dat
 expect "nested mount keeps its owner" "$owners" \
   "^/data/audiosilo.db 1000:1000$" "^/data/backups 1026:100$" "^/data/backups/theirs.db 1026:100$" \
   "^/data/odd \[1\]\* 1026:100$" "^/data/odd \[1\]\*/x 1026:100$"
+
+# Mountinfo escapes a tab as \011. The following digit and literal backslash
+# must survive decoding in both the root ownership walk and the user's check.
+odd=$(printf '/data/tab\t7\\040')
+out=$(run -v "$DATA:/data" -v "$ODD:$odd")
+expect "startup with tab and octal digits" "$out" "ran as 1000:1000"
+owner=$(docker run --rm -v "$ODD:/v" "$RUN_ID" stat -c '%u:%g' /v/x)
+expect "tab and octal digits in a nested mount name" "$owner" "^1026:100$"
+
+# On kernels with btrfs and loop devices, check that a nested subvolume's
+# distinct device number does not keep its own data files from being prepared,
+# while snapper's .snapshots (a subvolume holding snapshots) and a second btrfs
+# mounted inside keep their owner: the walk never leaves the data folder's own
+# mount, whatever the filesystem type.
+out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '
+  if ! grep -qw btrfs /proc/filesystems || ! losetup -f >/dev/null 2>&1; then
+    echo "skip: kernel has no btrfs or loop device"; exit
+  fi
+  truncate -s 160M /disk && truncate -s 160M /disk2 && mkfs.btrfs -q /disk && mkfs.btrfs -q /disk2 && mkdir /data &&
+    mount -t btrfs -o loop /disk /data && btrfs subvolume create /data/nested &&
+    touch /data/nested/ours && btrfs subvolume create /data/.snapshots >/dev/null &&
+    btrfs subvolume snapshot /data/nested /data/.snapshots/1 >/dev/null && mkdir /data/other &&
+    mount -t btrfs -o loop /disk2 /data/other && touch /data/other/theirs &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data &&
+    stat -c "%n %u:%g" /data/nested/ours /data/.snapshots/1/ours /data/other /data/other/theirs &&
+    umount /data/other && umount /data' 2>&1 || true)
+case "$out" in
+  "skip: "*) echo "$out" ;;
+  *) expect "data in a btrfs subvolume" "$out" "^/data/nested/ours 1000:1000$" "^/data/.snapshots/1/ours 0:0$" \
+    "^/data/other 0:0$" "^/data/other/theirs 0:0$" ;;
+esac
+
+# 12b. A NAS's snapshot folder (Synology's #snapshot, NetApp's .snapshot) holds
+#      copies, never the data: left as it is. A link to a system folder is
+#      changed itself, never what it points at, wherever it is in the tree.
+out=$(docker run --rm -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" -v "$DATA:/data" "$RUN_ID" sh -ec '
+  mkdir -p "/data/#snapshot/daily" /data/.snapshot /data/sub && touch "/data/#snapshot/daily/x" /data/.snapshot/y &&
+    chown -R 0:0 "/data/#snapshot" /data/.snapshot && ln -sfn /etc /data/sub/etc && chown -h 0:0 /data/sub/etc &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data &&
+    stat -c "%n %u:%g" "/data/#snapshot/daily/x" /data/.snapshot/y /etc /etc/passwd && stat -c "link %u:%g" /data/sub/etc &&
+    rm -rf "/data/#snapshot" /data/.snapshot /data/sub' 2>&1 || true)
+expect "snapshot folders and links in the data folder" "$out" "^/data/#snapshot/daily/x 0:0$" "^/data/.snapshot/y 0:0$" \
+  "^/etc 0:0$" "^/etc/passwd 0:0$" "^link 1000:1000$"
 
 # 13. A file mounted inside the data folder (-v ./config.yaml:/data/config.yaml,
 #     root's and 600 on the host) is chowned as it always was, so the server can
@@ -220,7 +313,7 @@ out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:r
       stat -c \"%n %u:%g %a\" /data/config.yaml /data/backups /data/backups/theirs.db" --data /data' 2>&1 || true)
 expect "file mounted in the data folder is chowned" "$out" \
   "^listen: :8080$" "ran as 1000:1000" "^/data/config.yaml 1000:1000 600$" \
-  "^/data/backups 1026:100 " "^/data/backups/theirs.db 1026:100 " "!WARNING"
+  "^/data/backups 1026:100 " "^/data/backups/theirs.db 1026:100 " "WARNING: the server can't write to /data/backups" "!can't read /data/config.yaml"
 
 # 14. A device node or a pipe mounted inside the data folder (a docker.sock, a
 #     /dev/null) is no regular file: it keeps its owner, so a start never chowns
@@ -235,7 +328,17 @@ out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:r
     sh /usr/local/bin/docker-entrypoint.sh sh -c "stat -c \"%n %u:%g %F\" /data/config.yaml /data/backups /data/null /data/pipe" --data /data' 2>&1 || true)
 expect "device and pipe mounted in the data folder keep their owner" "$out" \
   "^/data/config.yaml 1000:1000 regular" "^/data/backups 1026:100 directory$" \
-  "^/data/null 1026:100 character special" "^/data/pipe 1026:100 fifo" "!WARNING"
+  "^/data/null 1026:100 character special" "^/data/pipe 1026:100 fifo" "can't write to /data/backups" "!can't read /data/(null|pipe)"
+
+# The parent is owned by the server but its mode denies writes. An unreadable
+# read-only config mount has its own warning and cannot explain the parent.
+out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -c '
+  mkdir /data /src && touch /src/config /data/config.yaml && chmod 600 /src/config &&
+    chown 1000:1000 /data && chmod 500 /data && mount --bind /src/config /data/config.yaml &&
+    mount -o remount,bind,ro /data/config.yaml &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data' 2>&1 || true)
+expect "unreadable read-only config mount" "$out" "can't write to /data:" "can't read /data/config.yaml" \
+  "file belongs to 0:0" "!Changing its owner" "!shows as offline"
 
 # 15. The healthcheck mode asks the data folder the start resolved from the
 #     command's --data (any spelling, a relative one made absolute), /data when

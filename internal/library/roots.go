@@ -9,6 +9,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/diskspace"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 )
 
 // Root availability, for the admin console's "root unavailable" state.
@@ -29,8 +30,9 @@ const (
 
 // rootState is what a probe found.
 type rootState struct {
-	readable bool // a directory the server can list
-	empty    bool // it lists no entries at all (an unmounted mount point)
+	info     os.FileInfo // the folder as seen by this bounded probe
+	readable bool        // a directory the server can list
+	empty    bool        // it lists no entries at all (an unmounted mount point)
 	// The filesystem holding the root (when the root is readable and the OS
 	// answered): its size and the bytes free to the server.
 	diskTotal, diskFree uint64
@@ -64,10 +66,15 @@ func newRootProber() *rootProber {
 func statRoot(root string) rootState {
 	f, err := os.Open(root)
 	if err != nil {
-		return rootState{}
+		if !errors.Is(err, os.ErrPermission) {
+			return rootState{}
+		}
+		info, _ := os.Stat(root) // a directory we cannot open may still name its owner
+		return rootState{info: info}
 	}
 	defer func() { _ = f.Close() }() // read-only
-	if info, err := f.Stat(); err != nil || !info.IsDir() {
+	info, err := f.Stat()
+	if err != nil || !info.IsDir() {
 		return rootState{}
 	}
 	names, err := f.Readdirnames(1)
@@ -78,8 +85,9 @@ func statRoot(root string) rootState {
 	case errors.Is(err, io.EOF):
 		st = rootState{readable: true, empty: true}
 	default: // no permission, a dead mount
-		return rootState{}
+		return rootState{info: info}
 	}
+	st.info = info
 	st.diskTotal, st.diskFree, st.hasDisk = diskspace.Of(root)
 	return st
 }
@@ -144,6 +152,7 @@ type Disk struct {
 // right now (RootsAvailable's rule) and, when it can and the OS said, the space
 // on its filesystem.
 type RootStatus struct {
+	Access    *fsaccess.Identity // only when offline
 	Available bool
 	Disk      *Disk
 }
@@ -185,12 +194,9 @@ func (s *Scanner) RootsAvailable(libs []catalog.Library, indexed map[int64]int) 
 // indexed under it (what an unmounted network share looks like). It waits at
 // most rootProbeTimeout.
 func (s *Scanner) rootStatus(lib catalog.Library, indexed int) RootStatus {
-	if s.Progress(lib.ID).Unavailable {
-		return RootStatus{}
-	}
 	st, answered := s.roots.check(lib.Root)
-	if !answered || !st.readable || (st.empty && indexed > 0) {
-		return RootStatus{}
+	if !answered || !st.readable || (st.empty && indexed > 0) || s.Progress(lib.ID).Unavailable {
+		return RootStatus{Access: fsaccess.IdentityOf(st.info)}
 	}
 	out := RootStatus{Available: true}
 	if st.hasDisk {

@@ -35,6 +35,7 @@ const tableTTL = 10 * time.Second
 // filesystem ID. An empty Device is told by its Point.
 type Mount struct {
 	Point, FSType, Device string
+	ReadOnly              bool // mount or underlying filesystem is read-only (Linux mountinfo)
 }
 
 // snapshot is one read of the mount table: each mount point's key (its
@@ -223,7 +224,13 @@ func ParseLine(line string) (m Mount, ok bool) {
 	if len(fields) < 5 || len(tail) < 1 {
 		return Mount{}, false
 	}
-	return Mount{Point: filepath.Clean(unescape(fields[4])), FSType: tail[0], Device: fields[2]}, true
+	m = Mount{Point: filepath.Clean(unescape(fields[4])), FSType: tail[0], Device: fields[2]}
+	m.ReadOnly = (len(fields) > 5 && hasRO(fields[5])) || (len(tail) > 2 && hasRO(tail[2]))
+	return m, true
+}
+
+func hasRO(options string) bool {
+	return strings.Contains(","+options+",", ",ro,")
 }
 
 // unescape undoes mountinfo's octal escapes ("\040" is a space).
@@ -244,3 +251,7 @@ func unescape(s string) string {
 	}
 	return b.String()
 }
+
+// Table reads the mount table once, uncached (readTable): nil off Linux and
+// macOS, and nil with the error when it can't be read.
+func Table() ([]Mount, error) { return readTable() }
