@@ -275,8 +275,10 @@ func (r *Runner) run(ctx context.Context, now time.Time) (catalog.UnknownASINRep
 		return res, err
 	}
 	// In mirror mode the copy answers the lookups (the mirror has loaded), so no
-	// Ping: a health check the copy fails would go to the remote service.
-	if r.opt.Loaded == nil {
+	// Ping: a health check the copy fails would go to the remote service. Remote
+	// mode is a nil Loaded or one that hands out no signal (api.mirrorLoaded
+	// without a mirror).
+	if r.opt.Loaded == nil || r.opt.Loaded() == nil {
 		if h := r.meta.Ping(); !h.Reachable {
 			return failed(fmt.Errorf("metadata service unreachable: %s", h.Error))
 		}

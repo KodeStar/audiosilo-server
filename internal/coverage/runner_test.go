@@ -333,6 +333,22 @@ func TestRunServiceUnreachable(t *testing.T) {
 	}
 }
 
+// Remote mode as the API wires it: a Loaded func that hands out no signal (no
+// mirror) still pings first.
+func TestRunRemoteModePingsWithNilSignal(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.unknowns(t, 3)
+	e.md.unreach = true
+	r := New(e.cat, e.md, Options{On: e.on.Load, Now: e.clock.now, Loaded: func() <-chan struct{} { return nil }})
+	if err := r.RunOnce(context.Background()); err == nil {
+		t.Fatal("no error")
+	}
+	if p, l, s := e.md.calls(); p != 1 || l+s != 0 {
+		t.Fatalf("calls: %d pings, %d lookups, %d posts", p, l, s)
+	}
+}
+
 // 404 (an older metaserve, intake off): not_offered, a week without a call.
 func TestRunNotOffered(t *testing.T) {
 	t.Parallel()
