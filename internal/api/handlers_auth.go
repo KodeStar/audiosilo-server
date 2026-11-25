@@ -256,7 +256,8 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeInviteError answers a refused code or pairing token: a 401 naming an
-// invite that is used up or expired, else the plain fallback message.
+// invite that is used up or expired, or one this device already used (its
+// retry spent: exchange only), else the plain fallback message.
 func writeInviteError(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, auth.ErrInviteUsedByDevice):
@@ -279,7 +280,13 @@ func writeInviteError(w http.ResponseWriter, err error, fallback string) {
 // and the session are one transaction (auth.ConsumePairing): a failure to
 // write the session burns no use and answers 500, uncharged (only a token
 // the lookup found valid reaches that write; a guess is charged unless the
-// database fails to answer its lookup, a 500 that tells it nothing).
+// database fails to answer its lookup, a 500 that tells it nothing). An
+// invite's device that sent device_id and lost the answer may send the same
+// token and device_id once more within a minute, before it presents the
+// bearer: the original session's bearer is rotated, no use claimed, no
+// sign-in reported again. An older server refuses device_id with 400
+// "pairing_token is required", spending nothing, and the player resends
+// without it.
 func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if !allowAttempt(w, a.redeemLimiter, ip) {

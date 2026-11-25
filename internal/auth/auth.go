@@ -95,7 +95,8 @@ var (
 	// from a bogus token.
 	ErrCodeExhausted = errors.New("invite has no uses left")
 	// ErrInviteUsedByDevice means this pairing token already gave this device a
-	// session and its one retry is spent, too late, or the session has ended.
+	// session and its one retry is spent, too late, or the session has ended or
+	// been used (replayInvite).
 	ErrInviteUsedByDevice = errors.New("invite already used by this device")
 	// ErrCodeExpired is returned by ConsumePairing when the parent invite
 	// expired between redeem and exchange.
@@ -794,8 +795,8 @@ func inPlaceholders(n int) string {
 // but its row id stays the same. The browser's sign-in key stays remembered.
 func (s *Service) SignOut(ctx context.Context, userID, tokenID int64) error {
 	_, err := s.db.ExecDurable(ctx, "SignOut",
-		`UPDATE tokens SET revoked = 1 WHERE id = ? AND user_id = ? AND kind IN ('session', 'api')`,
-		tokenID, userID)
+		`UPDATE tokens SET revoked = 1 WHERE id = ? AND user_id = ? AND kind IN (?, ?)`,
+		tokenID, userID, KindSession, KindAPI)
 	return err
 }
 
@@ -1423,8 +1424,9 @@ func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, 
 }
 
 // Refused reports whether err is ConsumePairing's or ConsumeOIDC's refusal of
-// the token presented (unknown, spent, expired, signed out, or its invite used
-// up or expired), as opposed to a failure to answer it (the database).
+// the token presented (unknown, spent, expired, signed out, its invite used
+// up or expired, or this device's one retry of it spent), as opposed to a
+// failure to answer it (the database).
 func Refused(err error) bool {
 	return errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrCodeExhausted) || errors.Is(err, ErrCodeExpired) || errors.Is(err, ErrInviteUsedByDevice)
 }
