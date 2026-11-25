@@ -66,4 +66,32 @@ describe('service worker', () => {
     expect(await request('/api/v1/me')).toBeUndefined();
     expect(network).not.toHaveBeenCalled();
   });
+
+  it("drops only the console's own older caches when it activates", async () => {
+    const handlers: Record<string, (e: { waitUntil: (p: Promise<unknown>) => void }) => void> = {};
+    const self = {
+      location: { origin: 'https://books.example' },
+      addEventListener: (type: string, fn: (typeof handlers)[string]) => (handlers[type] = fn),
+      clients: { claim: async () => {} },
+    };
+    const deleted: string[] = [];
+    const caches = {
+      keys: async () => [
+        'audiosilo-admin-v3',
+        'audiosilo-admin-v4',
+        'audiosilo-media-v1',
+        'audiosilo-web-build-abc',
+      ],
+      delete: async (k: string) => {
+        deleted.push(k);
+        return true;
+      },
+    };
+    const code = readFileSync(resolve(process.cwd(), '../internal/web/assets/sw.js'), 'utf8');
+    new Function('self', 'caches', 'fetch', code)(self, caches, vi.fn());
+    let done: Promise<unknown> | undefined;
+    handlers.activate({ waitUntil: (p) => (done = p) });
+    await done;
+    expect(deleted).toEqual(['audiosilo-admin-v3']);
+  });
 });
