@@ -913,9 +913,12 @@ func TestFavouriteIndexOutlastsTheRequest(t *testing.T) {
 	e.api.favouriteWait = 20 * time.Millisecond
 	release, finished := make(chan struct{}), make(chan error, 1)
 	index := e.api.indexPath
-	e.api.indexPath = func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool) (*catalog.Book, error) {
+	e.api.indexPath = func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool, background bool) (*catalog.Book, error) {
+		if !background {
+			t.Error("favourite read did not use its background worker")
+		}
 		<-release // a slow share
-		b, err := index(ctx, lib, rel, allow)
+		b, err := index(ctx, lib, rel, allow, background)
 		finished <- err
 		return b, err
 	}

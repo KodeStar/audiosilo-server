@@ -986,7 +986,7 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	updated, stale, err := a.cat.UpdateLibrary(r.Context(), id, p)
+	updated, changes, err := a.cat.UpdateLibrary(r.Context(), id, p)
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "library not found")
 		return
@@ -996,9 +996,13 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "library.update", updated.Name, req.changes())
-	resolving := false
-	if req.MetadataSource != nil {
+	resolving := changes.ResolvePending
+	if changes.SourceChanged {
 		resolving = !awaitResolve(r.Context(), a.resolveSources()) || a.resolvePending()
+	} else if resolving && !a.resolvePending() {
+		// A previous run exhausted its retries. A re-save can restart it
+		// without making the caller wait on the same change.
+		a.resolveSources()
 	}
 	// Resolving: the books are still taking the new metadata source when this
 	// answers (a large library finishes in the background, a run that failed
@@ -1008,7 +1012,7 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		Job       *library.Job `json:"job,omitempty"`
 		Resolving bool         `json:"resolving,omitempty"`
 	}{Library: updated, Resolving: resolving}
-	if stale {
+	if changes.Scan {
 		// The folders kept open under its old root are let go of now, not
 		// when they have gone unused a moment: that root can be unmounted
 		// once the reads still under way there end.

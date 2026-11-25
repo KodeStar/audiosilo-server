@@ -370,16 +370,18 @@ func (a *API) indexFavourite(ctx context.Context, lib *catalog.Library, scope ca
 		}
 		return
 	}
-	l, done := *lib, make(chan struct{})
-	go func() {
+	done := make(chan struct{})
+	if !a.startBookRead(func() {
 		defer close(done)
 		ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
 		defer cancel()
-		_, err := a.indexOnDemand(ctx, &l, path, scope.Allows)
+		_, err := a.indexOnDemand(ctx, lib, path, scope.Allows, true)
 		if err != nil && !errors.Is(err, library.ErrNotIndexable) && !errors.Is(err, library.ErrNotAllowed) {
 			a.log.Info("index favourite on demand failed", "library", lib.ID, "path", path, "err", err)
 		}
-	}()
+	}) {
+		return
+	}
 	wait := time.NewTimer(a.favouriteWait)
 	defer wait.Stop()
 	select {

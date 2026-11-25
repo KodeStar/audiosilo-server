@@ -1157,7 +1157,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`Scanner.SetBaseContext`, from the API's base context), writing nothing then, and a request still
   waiting on it answers 503 `stopping` with `Retry-After` (`library.ErrStopping`, `indexShared`; an admin's Re-read too, `readAt`, and the Bridge's rescan, `rescanAt`), not a 500. A scan's read of a book and the Bridge's
   `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
-  index asked for during a scan's read waits for the scan's write and loads it. An admin's Re-read
+  index asked for during a scan's read can publish the finished book ahead of the batch. A scan reaching a book indexed on demand since it started checks the stored signature against discovery before reading it again (`matchesOpenedBook`); one it keeps that was new to the scan still counts as added, so the scan's new-books notice names it. An admin's Re-read
   (`handleRescanBook`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that
   read stored may be older than the change the admin wants picked up; one that kept the book as stored because a file
   did not answer (a look given up on, or its audio's read cut short: `ReadCutShort` with an `unreadable` problem,
@@ -1197,7 +1197,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   deciding as `bookForPath`'s does), detached from the request like a rescan (the probes don't stop
   for a context, so a request's deadline would only throw the read away at its last write): the
   POST waits for it up to `favouriteIndexWait`, 5 s, under the player's 15 s request timeout, and it
-  is saved when it ends.
+  is saved when it ends. The favourite worker can lead the shared read itself. Shutdown drains these
+  workers and the scanner's detached on-demand reads before closing the database.
   **The book-path rule** (#199, server#210): `GET`/`PUT`/`PATCH .../progress?path=`, the sync
   events, and `GET`/`POST .../bookmarks|notes|history` key the row (and PUT's listening session)
   on the path of the indexed book the path is or names a file of (`api.timelinePath` over
@@ -1729,8 +1730,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or an on-demand one, maybe stuck the same way) for more than a look's time (`lookTimeout`) in which that
   read made no progress (`waitFlight`: `metadata.Progress`, noted by each of the read's bounded calls that
   answers in time, `WithProgress`; a read idle a probe's time is marked stuck, `indexFlight.stuck`, and no
-  later waiter waits on it; a scan's read that has returned is waited on until its batch write, one marked
-  stuck before it returned too; a read running ffprobe, which reports nothing until it returns, is given the
+  later waiter waits on it; a waiter can publish a finished scan read, including one previously marked stuck; a read running ffprobe, which reports nothing until it returns, is given the
   probe's time from its last progress whatever the waiter's look time, `Progress.Probe` in `runFFprobe`,
   `Probing`; a request's waits, under `WithLookTimeout`, end at `API.lookCtx`'s `library.WithWaitCap`, a time,
   `API.flightWaitEnd` (`flightWaitMargin`, 5 s, before the request's deadline, or `timeoutDur` from now on a context
@@ -1784,14 +1784,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   written whole with the part's problem (counted as updated), never held at a file list that is no
   longer on disk. A book whose only cut short reads are its tags, ffprobe having read every file's length
   (`Book.LengthsRead`), keeps its names but takes the lengths, codec and chapters read (`catalog.recordLengths`,
-  only while its file paths are the stored ones). An existing book whose audio open fails as a share does
+  only while its file paths are the stored ones). It records the file sizes and mtime with the lengths, so the
+  next scan can check the part with unread tags. A scan stops reading remaining parts once it knows a
+  previously indexed book must be kept whole. An existing book whose audio open fails as a share does
   (EIO, a permission: `openFaulted`) is kept as stored with its problem, never rewritten without that file. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
   (`noFFprobeRules`, decision 2, server#269): a file it is unsure of has no duration and no
   `ProbeErr`; a read out of time says so (`Metadata.ProbeTimedOut`) and the scan reads it again
-  alone, as an ffprobe time-out; a scan reads an unchanged book with no stored duration or codec
-  again once per server run (`Scanner.rereadUnprobed`), so a server that ran without ffprobe
-  gets its books' lengths from its first scan since. `metadata.ExtractTags` reads tags alone. A
+  alone, as an ffprobe time-out. A completed index without a duration or codec records
+  `@probe_unsure` in its scanned snapshot. A no-ffprobe scan can skip it across restarts.
+  An older row gets a read, as does a changed book or one for which ffprobe is now available. `metadata.ExtractTags` reads tags alone. A
   key `applyProbe` starts reading joins `probeTagKeys`. **The one departure from parity (SRV-16, server#452)**: a VBR MP3
   with no frame count in a Xing/VBRI header has its frames counted: one with no header whose first 64 frames, or a
   run of 16 frames at each of 15 places spread over its audio (not into a trailing tag), differ in bitrate or sample rate (`mp3ConstantBitrate`,
@@ -2271,7 +2273,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unicode61 splits only on spaces and punctuation, server#178; `buildMatchQuery` makes a CJK
   token a phrase of its characters, the last a prefix, and `ftsPhrase` writes the credit
   filters' phrase the same way; `Catalog.IndexSearchText`, run by the launcher after
-  `KeySeries`, rewrites once the rows an older server wrote, gated by `server_state`
+  `KeySeries`, rebuilds outdated rows from the effective book fields, gated by `server_state`
   `search_text` = `searchTextVersion` (rules + `unicode.Version`), no migration)
   and the book page shows it as provenance, so the two can't disagree. `UpsertBook` runs
   `refreshEffective` in the scan's own transaction, which is what makes an edit a lock (a
@@ -2435,7 +2437,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and `UpdateLibrary` marks the library's books due a re-resolve in the edit's own transaction
   (`markResolve`: the `library_resolve_due` row of `server_state`, the library's id and the change's
   generation), no rescan. `Catalog.ResolveSources` re-resolves them (`refreshEffective`) 200 books a
-  transaction, starting a library again when a later change overtook its run, and clears the mark
+  transaction, giving each due library one batch per round, starting a library again when a later change overtook its run, and clears the mark
   with the last batch, so a stop leaves it due for the next start (`API.StartSourceResolves`); a
   book whose `scanned` snapshot doesn't decode is passed over (in every batch re-resolve: a savepoint
   per book, `skipUnreadable`, `eachPathBatch`, and the series, match and override passes) with an
@@ -2449,7 +2451,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   to its deadline (`awaitResolve`): a library small enough answers re-resolved (about 1 s per 5,000
   books), a large one answers at once with the rest going on (server#213) and `"resolving": true` in
   the answer (omitted otherwise; true too when the run failed and waits to be run again,
-  `API.resolvePending`), which the console's toast reports as finishing in the background.
+  `API.resolvePending`), which the console's toast reports as finishing in the background. A re-save of the same source
+  reports any pending work for that library and returns immediately.
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
   with a tag read (`media.EmbeddedCoverBelow`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one
@@ -3365,7 +3368,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `{"still_reading": true}` and goes on, so the console says it shows when done rather than meeting
   the timeout's bare 503: its looks keep `API.fileWait` but no wait cap, and another read of the book under way
   (a second click racing the first, a scan's) is waited on while it moves on, `WithUncappedWait`, then this one
-  reads the book itself, so a fix made between the clicks is picked up; counted in `API.rereads`,
+  reads the book itself, so a fix made between the clicks is picked up; counted in `API.bookReads`,
   which `WaitMediaCaches` waits for, and a failure after the 202 logged as a warning, server#224), `GET
   /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`
   (queue every library: `Scanner.EnqueueAll`, also the startup scans), `GET /admin/scan-runs`

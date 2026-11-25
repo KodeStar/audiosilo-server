@@ -227,10 +227,9 @@ type Book struct {
 	// (the in-process read cut short) and every file's length was read all the
 	// same (ffprobe answered: metadata.Metadata.LengthRead), so the length,
 	// codec and chapters are known though the names are not. UpsertBook keeps
-	// the stored book's names, cover flag and file signatures (the next scan
-	// reads it again) but writes those lengths and today's length revision
-	// (recordLengths), while its files
-	// are the stored ones by path; it clears LengthsRead when it writes none.
+	// the stored names and cover flag. While the paths match, recordLengths
+	// writes the length revision, lengths and file signatures. The recorded
+	// problem brings the next scan back to the file whose tags timed out.
 	LengthsRead bool `json:"-"`
 	// ReadRoot is the library folder the book was read under, for a read that
 	// may outlast a change to it (an on-demand index, which goes on past its
@@ -245,6 +244,8 @@ type Book struct {
 	// ffprobe's estimate. UpsertBook then writes books.duration_rev 0, no
 	// revision, so the next scan reads the book again (SRV-16).
 	LengthUncounted bool `json:"-"`
+	// ProbeUnsure records a completed index without ffprobe that found no duration or codec.
+	ProbeUnsure bool `json:"-"`
 	// FoundAdded is when each of the book's audio files first appeared on disk
 	// as the scan's discovery read it (its lstat: the birth time where that
 	// carries one, else the mtime; Unix seconds), in Files' order, or the

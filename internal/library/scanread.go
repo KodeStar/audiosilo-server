@@ -182,20 +182,53 @@ func (r *readSlots) read(ctx context.Context, root, absPath, ffprobePath string)
 // many at once as they allow. With room for one at a time they are read on the
 // caller's goroutine: an on-demand index reads on leadIndex's, which recovers a
 // reader's panic (errIndexAborted) rather than the server going down with it.
-func (s *Scanner) readFiles(ctx context.Context, lib catalog.Library, files []catalog.BookFile, first *metadata.Metadata, slots *readSlots) []*metadata.Metadata {
+func (s *Scanner) readFiles(ctx context.Context, lib catalog.Library, files []catalog.BookFile, first *metadata.Metadata, slots *readSlots, existed bool) []*metadata.Metadata {
 	mds := make([]*metadata.Metadata, len(files))
 	if len(files) == 0 {
 		return mds
 	}
 	mds[0] = first
+	if len(files) == 1 {
+		return mds
+	}
+	// A stored book can still take fresh lengths when only tags timed out,
+	// or a changed file list when only a length timed out. Stop scheduling
+	// parts only when this read must keep the whole book.
+	const tagsMissing, lengthMissing = 1, 2
+	var missing atomic.Uint32
+	mustKeep := func(md *metadata.Metadata) bool {
+		if !existed || md == nil {
+			return false
+		}
+		var flags uint32
+		if openFaulted(md) || md.TagsUnread() {
+			flags |= tagsMissing
+		}
+		if !lengthKnown(md) || uncountedForNow(md) {
+			flags |= lengthMissing
+		}
+		if flags == 0 {
+			return false
+		}
+		seen := missing.Or(flags) | flags
+		return seen == tagsMissing|lengthMissing
+	}
+	if mustKeep(first) {
+		return mds
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	read := func(i int) {
 		if ctx.Err() == nil { // stopped: the scan drops this book's reading
 			mds[i] = slots.extract(ctx, lib.Root, absOf(lib, files[i].RelPath), s.ffprobePath)
+			if mustKeep(mds[i]) {
+				cancel()
+			}
 		}
 	}
 	workers := min(slots.size(), len(files)-1)
 	if workers <= 1 {
-		for i := 1; i < len(files); i++ {
+		for i := 1; i < len(files) && ctx.Err() == nil; i++ {
 			read(i)
 		}
 		return mds
@@ -214,6 +247,12 @@ type bookRead struct {
 	book    *catalog.Book
 	existed bool // indexed before this scan
 	done    chan struct{}
+	root    string          // checked by a request publishing this scan read
+	ctx     context.Context // the scan's: a request takes the write only before a Stop (waitFlight)
+	claimed atomic.Bool     // either the scan batch or a waiting reader owns the write
+	stored  chan struct{}
+	err     error // the write's outcome, read after stored closes
+	reused  bool  // an on-demand read already indexed this discovery
 	// The book's flight (Scanner.startFlight), held from before the read until
 	// the book is written or dropped; nil when the scan stopped first.
 	flight *indexFlight
@@ -222,18 +261,38 @@ type bookRead struct {
 	left atomic.Bool
 }
 
-// endFlight ends the read's flight once its book is written (err nil) or not,
-// after the read is done; a book not written leaves its waiters to read it
-// themselves.
-func (r *bookRead) endFlight(s *Scanner, err error) {
-	if r.flight == nil {
-		return
+// finishWrite releases the flight and gives the scan the actual write outcome.
+// Joined requests may retry a dropped scan read.
+func (r *bookRead) finishWrite(s *Scanner, err error) {
+	r.err = err
+	if r.flight != nil {
+		if err != nil {
+			err = errReadDropped
+		}
+		s.endFlight(r.flight, err)
 	}
-	if err != nil {
-		err = errReadDropped
+	close(r.stored)
+}
+
+// publish writes the scan's finished read for a request waiting on it (its
+// waitFlight claimed it, only while the scan ran: the read was whole), ahead
+// of the scan's batch. Like flush it runs past a Stop that lands during the
+// write: a stopped scan keeps what it read, whether or not a request asked for
+// it first, and the stopped scan waits for this write (bookRead.drop, flush).
+func (r *bookRead) publish(s *Scanner) {
+	r.book.ReadRoot = r.root
+	_, err := s.cat.UpsertBook(context.WithoutCancel(r.ctx), r.book)
+	r.finishWrite(s, err)
+}
+
+// drop ends a read the scan will not write (stopped), unless another
+// writer claimed it first: then it waits for that write's outcome.
+func (r *bookRead) drop(s *Scanner) {
+	if r.claimed.CompareAndSwap(false, true) {
+		r.finishWrite(s, errReadDropped)
+	} else {
+		<-r.stored
 	}
-	s.endFlight(r.flight, err)
-	r.flight = nil
 }
 
 // finished reports whether the read is done, without waiting.

@@ -386,7 +386,7 @@ func readFile(ctx context.Context, m *Metadata, root, path string, ff ffRules, c
 	case err != nil:
 		return nil, "", err
 	}
-	defer f.Close()
+	defer closeBlockFile(f, path)
 	var md tag.Metadata
 	terr := errTagsUnread
 	narrator := ""
@@ -601,6 +601,31 @@ func HoldReadsForTests(dir string) (release func()) {
 	return sync.OnceFunc(func() {
 		close(held)
 		restore()
+	})
+}
+
+// HoldClosesForTests holds the close of every file under dir a tag read or
+// a fingerprint opened (closeBlockFile) until release (once, however often it
+// is called), as a FUSE share holds the close of a file whose read was given
+// up on: the read's caller, not only the read, then waits. held closes once
+// the first such close is held. For a test that isn't parallel (the hook is
+// global); it panics outside a test binary.
+func HoldClosesForTests(dir string) (held <-chan struct{}, release func()) {
+	if !testing.Testing() {
+		panic("metadata.HoldClosesForTests called outside a test binary")
+	}
+	entered, gate := make(chan struct{}), make(chan struct{})
+	first := sync.OnceFunc(func() { close(entered) })
+	hook := func(p string) {
+		if mounts.Within(p, dir) {
+			first()
+			<-gate
+		}
+	}
+	heldCloses.Store(&hook)
+	return entered, sync.OnceFunc(func() {
+		heldCloses.Store(nil)
+		close(gate)
 	})
 }
 

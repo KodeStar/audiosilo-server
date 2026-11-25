@@ -338,7 +338,7 @@ func TestReadFilesKeepsOrder(t *testing.T) {
 	lib := catalog.Library{Root: root}
 	first := &metadata.Metadata{Title: "first"}
 	for _, slots := range []*readSlots{newReadSlots(1, time.Second), newReadSlots(3, time.Second), newReadSlots(64, time.Second)} {
-		mds := s.readFiles(context.Background(), lib, files, first, slots)
+		mds := s.readFiles(context.Background(), lib, files, first, slots, false)
 		if len(mds) != len(files) || mds[0] != first {
 			t.Fatalf("slots %d: %d readings, first %v", slots.size(), len(mds), mds[0])
 		}
@@ -348,7 +348,7 @@ func TestReadFilesKeepsOrder(t *testing.T) {
 			}
 		}
 	}
-	if got := s.readFiles(context.Background(), lib, nil, first, newReadSlots(2, time.Second)); len(got) != 0 {
+	if got := s.readFiles(context.Background(), lib, nil, first, newReadSlots(2, time.Second), false); len(got) != 0 {
 		t.Fatalf("no files read as %v", got)
 	}
 }
@@ -562,5 +562,22 @@ func TestScanStopEndsProbeRetry(t *testing.T) {
 	var n int
 	if err := db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM books`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("a stopped scan wrote %d books (%v)", n, err)
+	}
+}
+
+func TestStoredBookStopsReadingAfterShareFault(t *testing.T) {
+	files := []catalog.BookFile{{RelPath: "1.mp3"}, {RelPath: "2.mp3"}, {RelPath: "3.mp3"}}
+	for _, existed := range []bool{true, false} {
+		s := &Scanner{}
+		slots := newReadSlots(1, time.Second)
+		reads := 0
+		slots.readFile = func(context.Context, string, string, string, time.Duration) *metadata.Metadata {
+			reads++
+			return &metadata.Metadata{OpenErr: os.ErrPermission}
+		}
+		got := s.readFiles(t.Context(), catalog.Library{Root: t.TempDir()}, files, &metadata.Metadata{}, slots, existed)
+		if got[1] == nil || (got[2] == nil) != existed || reads != map[bool]int{true: 1, false: 2}[existed] {
+			t.Fatalf("existing %t: %d reads, parts %v", existed, reads, got)
+		}
 	}
 }

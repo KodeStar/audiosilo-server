@@ -350,9 +350,9 @@ func TestCaseVariantOnDemandCostsWhatMissingDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := c.api.indexPath
-	c.api.indexPath = func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool) (*catalog.Book, error) {
+	c.api.indexPath = func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool, background bool) (*catalog.Book, error) {
 		reads.Add(1)
-		return index(ctx, lib, rel, allow)
+		return index(ctx, lib, rel, allow, background)
 	}
 	steps := func(tok, u string, want int) []string {
 		t.Helper()

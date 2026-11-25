@@ -308,8 +308,10 @@ func (c *Catalog) NoteUnreadablePath(ctx context.Context, lib Library, relPath, 
 // ScanErrorDetail) on the stored row at b's path and nothing else: every field
 // a scan wrote (names, duration, codec, chapters, cover flag, mtime and size,
 // indexed_at) stays as the last full read left it, and since the stored mtime
-// and size are the old ones, the next scan reads the book again. ok is false
-// when the book has no row yet (a new book is written whole).
+// and size are the old ones, the next scan reads the book again (but for one
+// whose lengths recordLengths takes, with this reading's mtime and size: the
+// problem recorded brings the next scan back to its file). ok is false when
+// the book has no row yet (a new book is written whole).
 func recordReadProblem(ctx context.Context, tx *sql.Tx, b *Book) (id int64, ok bool, err error) {
 	err = tx.QueryRowContext(ctx,
 		`UPDATE books SET scan_error = ?, scan_error_file = ?, scan_error_detail = ?
@@ -339,7 +341,8 @@ func scannedChaptersJSON(chs []metadata.Chapter) (string, error) {
 // recordReadProblem kept (Book.LengthsRead): its duration, codec and chapters
 // (the scan's own, books.scanned_chapters, with what stands over them put back
 // by refreshEffective, as UpsertBook does) and each file's duration and codec,
-// the rest of the row as stored. Only while b's files are the stored ones by
+// along with the sizes and mtime of that reading. The recorded read problem
+// brings the scanner back for the tags. Only while the files match by
 // path, in order: a list that differs is the next scan's, which reads the
 // book whole once its tags answer, and b.LengthsRead is cleared to say nothing
 // was written.
@@ -364,13 +367,14 @@ func recordLengths(ctx context.Context, tx *sql.Tx, id int64, b *Book) error {
 	// The lengths are today's revision's (LengthsRead: none left uncounted).
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE books SET duration = ?, codec = ?, scanned_chapters = ?, chapters_hash = ?,
+		        mtime = ?, size = ?,
 		        `+setDurationRev+`
-		  WHERE id = ?`, b.Duration, b.Codec, raw, chaptersHash(raw), id); err != nil {
+		  WHERE id = ?`, b.Duration, b.Codec, raw, chaptersHash(raw), b.MTime, b.Size, id); err != nil {
 		return err
 	}
 	for _, f := range b.Files {
-		if _, err := tx.ExecContext(ctx, `UPDATE book_files SET duration = ?, codec = ? WHERE book_id = ? AND rel_path = ?`,
-			f.Duration, f.Codec, id, f.RelPath); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE book_files SET duration = ?, codec = ?, size = ? WHERE book_id = ? AND rel_path = ?`,
+			f.Duration, f.Codec, f.Size, id, f.RelPath); err != nil {
 			return err
 		}
 	}
@@ -571,6 +575,7 @@ type Signature struct {
 	// indexes once more though its files are unchanged, so a VBR MP3 with no
 	// Xing or VBRI header has its frames counted (SRV-16).
 	DurationStale bool
+	ProbeUnsure   bool // this snapshot recorded an inconclusive read without ffprobe
 	// TagReadFailed: a scan's backfill read of the book's primary file for its
 	// names or tag hints found ffprobe rejecting the file, where the index had
 	// not, or found the last file of a book whose title turns on it
@@ -688,6 +693,22 @@ func fileOrderKey(joined string) uint64 {
 // Signatures returns the stored mtime/size for every book in a library, keyed
 // by rel_path. The scanner uses it to skip re-extracting unchanged books.
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
+	return c.bookSignatures(ctx, libraryID, "")
+}
+
+// SignatureAt reloads the signature of one book indexed on demand during a scan.
+func (c *Catalog) SignatureAt(ctx context.Context, libraryID int64, path string) (Signature, error) {
+	rows, err := c.bookSignatures(ctx, libraryID, path)
+	return rows[path], err
+}
+
+func (c *Catalog) bookSignatures(ctx context.Context, libraryID int64, path string) (map[string]Signature, error) {
+	where := "library_id = ?"
+	args := []any{libraryID}
+	if path != "" {
+		where += " AND rel_path = ?"
+		args = append(args, path)
+	}
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, cover_art, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, scan_error_detail, split_parent,
@@ -696,8 +717,10 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		        CASE WHEN is_folder AND `+fileOrderExpr+` IS NULL THEN
 		             (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
 		                FROM book_files f WHERE f.book_id = books.id) END, ebook_sig, indexed_at,
-		        `+snapshotNamesExpr+`, `+durationStaleExpr+`, IFNULL(tag_read_failed_at = indexed_at, 0)
-		   FROM books WHERE library_id = ?`, libraryID)
+		        `+snapshotNamesExpr+`, `+durationStaleExpr+`, IFNULL(tag_read_failed_at = indexed_at, 0),
+		        CASE WHEN (duration <= 0 OR codec = '') AND json_valid(scanned) THEN
+		          json_extract(scanned, '$."`+probeUnsureKey+`"') IS '1' AND json_extract(scanned, '$."`+scannedStampKey+`"') IS indexed_at ELSE 0 END
+		   FROM books WHERE `+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -715,7 +738,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 			&sig.ScanError, &sig.ScanErrorFile, &sig.ScanErrorDetail, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
 			&stored, &format, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &narrator, &revOlder, &severalFiles,
-			&sig.DurationStale, &sig.TagReadFailed); err != nil {
+			&sig.DurationStale, &sig.TagReadFailed, &sig.ProbeUnsure); err != nil {
 			return nil, err
 		}
 		if rev.String != scannedRev {

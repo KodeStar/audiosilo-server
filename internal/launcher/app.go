@@ -408,7 +408,12 @@ func Run(ctx context.Context, opts Options) (err error) {
 	a.SetBaseContext(baseCtx)
 	defer func() {
 		stopBase()
-		a.WaitMediaCaches()
+		wait, cancel := context.WithTimeout(context.Background(), shutdownReadWait)
+		defer cancel()
+		a.WaitMediaCaches(wait)
+		if left := scanner.WaitReads(wait); left > 0 {
+			log.Warn("shutting down with book reads still under way, left to end on their own", "reads", left)
+		}
 	}()
 	a.StartSourceResolves()
 	a.StartChapterChecks(ctx)
@@ -465,6 +470,13 @@ func (h *heldWriter) release() {
 
 // logRingSize is how many log lines the admin console's log viewer keeps.
 const logRingSize = 2000
+
+// shutdownReadWait is how long shutdown waits, once the base context has
+// ended, for the book reads detached from their requests (a favourite's, a
+// Re-read's, an open's) before it closes the database without them: a read
+// the stop ended returns within ffprobe's kill grace (5 s), one held on a
+// share that stopped answering may never (see library.Scanner.WaitReads).
+const shutdownReadWait = 5 * time.Second
 
 // baseURL builds a best-effort browser base URL from config: the configured
 // public_url wins; otherwise scheme is derived from the TLS mode and the host
