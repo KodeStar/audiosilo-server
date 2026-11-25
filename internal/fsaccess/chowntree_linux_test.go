@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -108,9 +110,53 @@ func TestChownTreeUnlistedMount(t *testing.T) {
 	}
 }
 
+// The stall watch: a walk blocked in one request (a share that stopped
+// answering) is given up on, while a slow walk that keeps moving, here more
+// than twice the limit in all, is not, even through a folder listed in parts.
+func TestChownTreeStall(t *testing.T) {
+	data, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range readdirBatch + 10 {
+		if err := os.WriteFile(filepath.Join(data, strconv.Itoa(i)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	walk := func(chown func() error) (stalled bool) {
+		t.Helper()
+		var fired atomic.Bool
+		progressed, stop := watchStall(200*time.Millisecond, func() { fired.Store(true) })
+		defer stop()
+		w := walker{
+			uid: os.Getuid() + 1, gid: os.Getgid() + 1,
+			chownAt:    func(int, string) error { return chown() },
+			chownFd:    func(int) error { return nil },
+			progressed: progressed,
+		}
+		if err := w.run(data, []mounts.Mount{{Point: "/"}}); err != nil {
+			t.Fatal(err)
+		}
+		return fired.Load()
+	}
+	if walk(func() error { time.Sleep(2 * time.Millisecond); return nil }) {
+		t.Error("a slow walk that kept moving was given up on")
+	}
+	first := true
+	if !walk(func() error {
+		if first {
+			first = false
+			time.Sleep(time.Second) // released here, as an answering share would be
+		}
+		return nil
+	}) {
+		t.Error("a walk blocked in one request wasn't given up on")
+	}
+}
+
 func TestChownTreeRefuses(t *testing.T) {
 	data := t.TempDir()
-	if err := chownTree(data, 0, 0, nil); err == nil {
+	if err := chownTree(data, 0, 0, nil, nil); err == nil {
 		t.Fatal("walked with no mount table")
 	}
 	link := filepath.Join(t.TempDir(), "link")
@@ -118,10 +164,10 @@ func TestChownTreeRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	table := []mounts.Mount{{Point: "/"}}
-	if err := chownTree(link, 0, 0, table); err == nil {
+	if err := chownTree(link, 0, 0, table, nil); err == nil {
 		t.Fatal("walked through a link at the data folder's name")
 	}
-	if err := chownTree("/", 0, 0, table); err == nil {
+	if err := chownTree("/", 0, 0, table, nil); err == nil {
 		t.Fatal("walked the whole system")
 	}
 }

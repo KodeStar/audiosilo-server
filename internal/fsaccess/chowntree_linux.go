@@ -5,9 +5,11 @@ package fsaccess
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -34,15 +36,29 @@ const statMask = unix.STATX_TYPE | unix.STATX_UID | unix.STATX_GID | unix.STATX_
 // triggered), a folder on another filesystem type and the snapshot folders.
 // A btrfs subvolume of the data folder is part of it and is walked. Without
 // the mount table the walk does not start, as its edges would be unknown.
-func ChownTree(dir string, uid, gid int) error {
+//
+// A walk that makes no progress for stall (no entry and no part of a listing
+// done: a share whose server stopped answering, whose request no goroutine
+// can interrupt) calls stalled, once, from another goroutine, and stays
+// blocked: stalled is expected to end the process. A slow walk that keeps
+// moving is never cut.
+func ChownTree(dir string, uid, gid int, stall time.Duration, stalled func()) error {
+	progressed, stop := watchStall(stall, stalled)
+	defer stop()
 	table, err := mounts.Table()
 	if err != nil {
 		return fmt.Errorf("read the mount table: %w", err)
 	}
-	return chownTree(dir, uid, gid, table)
+	return chownTree(dir, uid, gid, table, progressed)
 }
 
-func chownTree(dir string, uid, gid int, table []mounts.Mount) error {
+// watchStall calls stalled once progressed has not been called for stall.
+func watchStall(stall time.Duration, stalled func()) (progressed, stop func()) {
+	t := time.AfterFunc(stall, stalled)
+	return func() { t.Reset(stall) }, func() { t.Stop() }
+}
+
+func chownTree(dir string, uid, gid int, table []mounts.Mount, progressed func()) error {
 	if len(table) == 0 {
 		return errors.New("no mount table to bound the walk")
 	}
@@ -51,15 +67,23 @@ func chownTree(dir string, uid, gid int, table []mounts.Mount) error {
 		chownAt: func(dirfd int, name string) error {
 			return unix.Fchownat(dirfd, name, uid, gid, unix.AT_SYMLINK_NOFOLLOW)
 		},
-		chownFd: func(fd int) error { return unix.Fchown(fd, uid, gid) },
+		chownFd:    func(fd int) error { return unix.Fchown(fd, uid, gid) },
+		progressed: progressed,
 	}
 	return w.run(dir, table)
 }
+
+// readdirBatch is how many names walk lists at a time: a folder of many
+// files on a slow disk shows progress between its parts.
+const readdirBatch = 256
 
 type walker struct {
 	uid, gid int
 	chownAt  func(dirfd int, name string) error
 	chownFd  func(fd int) error
+	// progressed, when set, is called after each entry and each part of a
+	// listing (the stall watch).
+	progressed func()
 
 	points  map[string]bool // mount points under the root: whether read-only
 	fsType  int64           // the root's filesystem type
@@ -107,12 +131,25 @@ func (w *walker) run(dir string, table []mounts.Mount) error {
 func (w *walker) walk(fd int, path string, st *unix.Statx_t) {
 	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
-	names, err := f.Readdirnames(-1)
-	if err != nil {
-		w.errs = append(w.errs, err)
+	for {
+		names, err := f.Readdirnames(readdirBatch)
+		w.step()
+		for _, name := range names {
+			w.entry(fd, path, st, name)
+			w.step()
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				w.errs = append(w.errs, err)
+			}
+			return
+		}
 	}
-	for _, name := range names {
-		w.entry(fd, path, st, name)
+}
+
+func (w *walker) step() {
+	if w.progressed != nil {
+		w.progressed()
 	}
 }
 

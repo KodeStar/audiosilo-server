@@ -16,8 +16,13 @@
 # (server#368). It warns and carries on: the server's own start-up error says the
 # same about the data folder. The checks share one time limit
 # (fsaccess.DirCheckTimeout): a share whose server is gone is said not to answer,
-# and never holds the start. Each root-only ownership step gets $WAIT seconds,
-# including the walk of the data folder's contents.
+# and never holds the start. The root-only ownership steps on the data folder
+# itself and on the backups folder are each bounded by $WAIT seconds for the
+# same reason. The walk of the data folder's contents has no total limit (a
+# large folder may need longer): it gives up when it makes no progress for 30
+# seconds (chowndata's own watch), as on a share whose server stopped answering
+# after the folder's attributes were cached, and is skipped when the data
+# folder itself didn't answer.
 #
 # If the container is started with an explicit non-root user (docker `--user` /
 # compose `user:`), we skip the chown/drop, run the same checks and exec as that
@@ -97,15 +102,13 @@ usable_path() {
 # (config.yaml) is the only mount whose owner it changes. It works from open
 # folders, so the server's user, who can write in the data folder, cannot
 # swap in a link for root to follow.
+# A walk that stops moving ends with status 3 (chowndata's stall watch).
 chown_data() {
-  # A hard NFS request can ignore TERM. BusyBox returns 137 after SIGKILL.
-  timeout -s KILL "$WAIT" audiosilo --data "$DATA" chowndata "$RUN_AS" 2>/dev/null || {
-    case "$?" in
-      124 | 137)
-        printf "audiosilo: WARNING: The ownership walk of %s didn't finish within %ss. Check the network share if this folder is on one. Continuing startup.\n" "$DATA" "$WAIT" >&2
-        ;;
-    esac
-  }
+  walk=0
+  audiosilo --data "$DATA" chowndata "$RUN_AS" 2>/dev/null || walk=$?
+  if [ "$walk" = 3 ]; then
+    printf 'audiosilo: WARNING: %s stopped answering while its files were being given to user %s, so some may still belong to another user. If the folder is on a network share, check that the share is up. Starting the server anyway.\n' "$DATA" "$RUN_AS" >&2
+  fi
 }
 
 # The status passed to checkdirs is about this folder alone. A failed chown
@@ -166,7 +169,8 @@ if [ "$(id -u)" = "0" ]; then
     rc=0
     chown_folder "$DATA" 2>/dev/null || rc=$?
     if [ "$rc" != 0 ]; then DATA_CHOWN_FAILED=1; fi
-    # Even when this check answers from cache, the walk has its own deadline.
+    # A data folder that didn't answer in time isn't walked. One whose answer
+    # came from a network share's cache is stopped by the walk's stall watch.
     case "$rc" in 124 | 143) ;; *) chown_data ;; esac
   fi
   if [ -n "$BACKUPS" ]; then

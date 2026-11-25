@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/api"
 	"github.com/kodestar/audiosilo-server/internal/config"
@@ -104,9 +105,19 @@ func checkDirs(args []string, dataDir string, stderr io.Writer) int {
 	return 0
 }
 
+// chownStall is how long the ownership walk may go without progress before
+// it gives up (a share that stopped answering): longer than a spun-down NAS
+// disk takes to wake, and a slow walk that keeps moving is never cut.
+const chownStall = 30 * time.Second
+
+// chownStalled is chowndata's exit status for a walk that stopped moving.
+const chownStalled = 3
+
 // chownData runs the chowndata command: the data folder's contents given to
 // UID:GID (the entrypoint's PUID:PGID), 0 when all changed, 1 when some could
-// not be (on stderr), 2 when asked wrongly.
+// not be (on stderr), 2 when asked wrongly, and chownStalled (the process
+// ends at once, as the blocked request can't be interrupted) when the walk
+// made no progress for chownStall.
 func chownData(args []string, dataDir string, stderr io.Writer) int {
 	// 32 bits, as the kernel's uid_t: a larger number would wrap (to root at
 	// 4294967296), and 4294967295 is chown's "leave it as it is".
@@ -117,7 +128,11 @@ func chownData(args []string, dataDir string, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] chowndata UID:GID")
 		return 2
 	}
-	if err := fsaccess.ChownTree(dataDir, int(uid), int(gid)); err != nil {
+	stalled := func() {
+		_, _ = fmt.Fprintf(stderr, "audiosilo: chowndata: no progress for %v\n", chownStall)
+		os.Exit(chownStalled)
+	}
+	if err := fsaccess.ChownTree(dataDir, int(uid), int(gid), chownStall, stalled); err != nil {
 		_, _ = fmt.Fprintln(stderr, "audiosilo: chowndata:", err)
 		return 1
 	}
