@@ -668,11 +668,17 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		grace := time.NewTimer(stopGrace)
 		defer grace.Stop()
 		left := 0
+		// Once the grace has passed its timer has fired for good: a read that
+		// returned just as it did must not send the next one back to wait on
+		// it (a read held on a share that stopped answering would hold the
+		// scan, and every one queued behind it, for good).
+		graceOver := false
 		for _, r := range pending {
-			if left == 0 {
+			if !graceOver {
 				select {
 				case <-r.done:
 				case <-grace.C:
+					graceOver = true
 				}
 			}
 			if r.finished() {
