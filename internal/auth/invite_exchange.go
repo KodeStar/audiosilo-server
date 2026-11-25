@@ -85,9 +85,12 @@ func (s *Service) ConsumePairing(ctx context.Context, secret, deviceName, device
 // rechecked the pairing credential in this transaction. An empty answer with
 // no error means this device has never used this particular pairing token.
 // Only a bearer never presented is rotated (last_seen NULL: an authenticated
-// request's touch sets it): a lost answer was never used, and a session already
-// in use is neither taken from its device nor left with credentials minted
-// through the old bearer (an API key, a cast or pairing token).
+// request's touch sets it, and resolve authorizes a never-presented session's
+// request only once that touch wrote the row under the bearer it checked): a
+// lost answer was never used, and a session already in use is neither taken
+// from its device nor left with credentials minted through the old bearer (an
+// API key, a cast or pairing token). The rotation is a compare-and-set on that
+// mark, so the touch and the rotation are exclusive.
 func replayInvite(ctx context.Context, tx *sql.Tx, userID int64, pair tokenRow, deviceHash, now string) (string, error) {
 	var sessionID int64
 	var canReplay bool
@@ -111,8 +114,14 @@ func replayInvite(ctx context.Context, tx *sql.Tx, userID int64, pair tokenRow, 
 	if err != nil {
 		return "", err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE tokens SET token_hash = ? WHERE id = ?`, hash, sessionID); err != nil {
+	res, err := tx.ExecContext(ctx, `UPDATE tokens SET token_hash = ? WHERE id = ? AND revoked = 0 AND last_seen IS NULL`, hash, sessionID)
+	if err != nil {
 		return "", err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return "", err
+	} else if n != 1 {
+		return "", ErrInviteUsedByDevice
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE invite_exchanges SET retry_until = NULL WHERE session_id = ?`, sessionID)
 	return secret, err

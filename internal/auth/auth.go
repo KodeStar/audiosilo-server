@@ -225,6 +225,9 @@ type Service struct {
 	// read and the transaction that spends it and mints its session
 	// (exchangeSession), where a test commits a sign-out.
 	beforeSpend func()
+	// beforeTouch is nil but in tests: it runs between a request's token check
+	// and its touch (resolve), where a test commits an invite replay.
+	beforeTouch func()
 }
 
 // SetSSOIssuer says which provider's identities count as an admin's way into
@@ -591,7 +594,26 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	if row.kind == KindCast {
 		slideTo = s.castExpiry(row.grant)
 	}
-	_ = s.touch(ctx, row.id, row.kind, p, slideTo, u.MemberKind)
+	if s.beforeTouch != nil {
+		s.beforeTouch()
+	}
+	// A session never presented (last_seen NULL) is one an invite replay may
+	// still rotate (replayInvite), so its first touch is what makes it
+	// presented: the request is authorized only when that touch wrote the row
+	// under the bearer it checked. A replay committing first leaves the touch
+	// nothing to write (a 401: that bearer is gone), and a touch committing first
+	// refuses the replay, so no request acts on, or mints by row id through, a
+	// bearer the replay then rotates. A failed touch fails the request (the 503
+	// of a token not checked). Every other touch is best effort.
+	wrote, err := s.touch(ctx, row.id, hash, row.kind, p, slideTo, u.MemberKind)
+	if row.kind == KindSession && !row.lastSeen.Valid {
+		if err != nil {
+			return nil, Credential{}, err
+		}
+		if !wrote {
+			return nil, Credential{}, ErrInvalidToken
+		}
+	}
 	return u, cred, nil
 }
 
@@ -608,7 +630,10 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 // kid between a request's read and its touch has their addresses forgotten
 // (clearKidCredentials), and the touch must not write back the one the
 // grown-up's request came from for their owner to see (server#217). The next
-// request, read as a kid, records it.
+// request, read as a kid, records it. A bearer hash (?10, "" for any) touches
+// the row only while it still holds that bearer: an invite replay may rotate a
+// never-presented session's bearer between a request's read and its touch
+// (resolve).
 const touchRowSQL = `UPDATE tokens SET last_seen = ?1,
         last_ip = CASE WHEN ?2 <> '' AND (SELECT member_kind FROM users WHERE id = tokens.user_id) IS ?9
                        THEN ?2 ELSE last_ip END,
@@ -616,24 +641,29 @@ const touchRowSQL = `UPDATE tokens SET last_seen = ?1,
         client_version = CASE WHEN ?3 = '' THEN client_version ELSE ?4 END,
         client_platform = CASE WHEN ?3 = '' THEN client_platform ELSE ?5 END,
         expires_at = CASE WHEN ?7 <> '' AND expires_at > ?8 THEN MAX(expires_at, ?7) ELSE expires_at END
-  WHERE id = ?6 AND revoked = 0`
+  WHERE id = ?6 AND revoked = 0 AND (?10 = '' OR token_hash = ?10)`
 
 // touch writes token id's touch (touchRowSQL), of kind, as p reports the
 // request and moving a cast token's expiry to slideTo ("" leaves it), the
 // address only while the account's member kind is still readAs (the User the
-// request was read as: its MemberKind). It is
+// request was read as: its MemberKind), and only while the row still holds the
+// bearer hash ("" for any). It reports whether it wrote the row. It is
 // user state: it leaves the content generation, and so every cache keyed on
 // it, where it was (store.DB.ExecUserState); a caller holding the token's
 // cached row drops it. A cast token's last_seen is in milliseconds (castStamp).
-func (s *Service) touch(ctx context.Context, id int64, kind string, p Presence, slideTo string, readAs *string) error {
+func (s *Service) touch(ctx context.Context, id int64, hash, kind string, p Presence, slideTo string, readAs *string) (bool, error) {
 	stamp := s.ts()
 	if kind == KindCast {
 		stamp = s.castStamp()
 	}
 	// readAs nil binds NULL: no household member.
-	_, err := s.db.ExecUserState(ctx, touchRowSQL,
-		stamp, p.IP, p.Client.App, p.Client.Version, p.Client.Platform, id, slideTo, s.ts(), readAs)
-	return err
+	res, err := s.db.ExecUserState(ctx, touchRowSQL,
+		stamp, p.IP, p.Client.App, p.Client.Version, p.Client.Platform, id, slideTo, s.ts(), readAs, hash)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // checkToken is whether hash (hashSecret's) is a valid token of one of kinds, writing

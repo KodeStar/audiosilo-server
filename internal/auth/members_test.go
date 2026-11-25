@@ -720,7 +720,7 @@ func TestMemberTouchAfterTheKidSwitch(t *testing.T) {
 	if _, _, err := s.UpdateMember(ctx, adam.ID, gwen.ID, MemberUpdate{Kind: &kid}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.touch(ctx, row.id, row.kind, Presence{IP: "192.0.2.10"}, "", asGrownup.MemberKind); err != nil {
+	if _, err := s.touch(ctx, row.id, hashSecret(tok), row.kind, Presence{IP: "192.0.2.10"}, "", asGrownup.MemberKind); err != nil {
 		t.Fatal(err)
 	}
 	if got := lastIP(); got != "" {
@@ -730,7 +730,7 @@ func TestMemberTouchAfterTheKidSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.touch(ctx, row.id, row.kind, Presence{IP: "192.0.2.11"}, "", asKid.MemberKind); err != nil {
+	if _, err := s.touch(ctx, row.id, hashSecret(tok), row.kind, Presence{IP: "192.0.2.11"}, "", asKid.MemberKind); err != nil {
 		t.Fatal(err)
 	}
 	if got := lastIP(); got != "192.0.2.11" {

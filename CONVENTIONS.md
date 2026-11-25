@@ -180,7 +180,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   seconds the server can rotate the original live session's bearer once, with its
   device row and invite use intact, while that bearer has never been presented
   (`last_seen` NULL: a lost answer was never used, so a session in use is never taken
-  from its device). It records
+  from its device). Presented and rotated are exclusive: a never-presented session's
+  request is authorized only once its touch wrote the row under the bearer it checked
+  (`resolve`, `touchRowSQL`'s bearer hash; a failed touch is the 503 of a token not
+  checked, a rotated bearer a 401), and the rotation is a compare-and-set on
+  `last_seen IS NULL`, so nothing is minted by row id through a bearer a replay ends. It records
   the hashed device key and retry deadline in `invite_exchanges` (0098) in the same
   transaction as the claim. A further or late retry gets 401
   `invite_used_by_this_device` while the pairing token and record still exist.

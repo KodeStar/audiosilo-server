@@ -292,3 +292,112 @@ func TestInviteReplayNeedsOriginalDeviceID(t *testing.T) {
 		}
 	}
 }
+
+// A replay committing between a request's token check and its touch rotates a
+// bearer that request checked: the touch finds the row holding another bearer,
+// so the request is refused and nothing is authorized (or minted by row id)
+// through the bearer the replay ended. The replay's own bearer works.
+func TestInviteReplayBetweenCheckAndTouch(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u := mustUser(t, s, ctx, "listener", "", RoleUser)
+	code, err := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := pairThrough(t, s, ctx, code)
+	first, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replay PairingSession
+	var replayErr error
+	s.beforeTouch = func() {
+		s.beforeTouch = nil
+		replay, replayErr = s.ConsumePairing(ctx, pair, "phone", testInviteDevice)
+	}
+	if got, _, err := s.ResolveRequest(ctx, first.Token, Presence{IP: "192.0.2.1"}, KindSession); !errors.Is(err, ErrInvalidToken) || got != nil {
+		t.Fatalf("request on the rotated bearer: %v, want refused", err)
+	}
+	if replayErr != nil || !replay.Replayed {
+		t.Fatalf("replay inside the request: %v", replayErr)
+	}
+	if got, _, err := s.ResolveRequest(ctx, replay.Token, Presence{}, KindSession); err != nil || got.ID != u.ID {
+		t.Fatalf("replayed bearer: %v", err)
+	}
+	if _, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice); !errors.Is(err, ErrInviteUsedByDevice) {
+		t.Fatalf("second replay: %v", err)
+	}
+}
+
+// A request whose touch commits first marks the bearer presented, so a replay
+// committing after it (still inside that request) is refused and the request's
+// bearer keeps working.
+func TestInviteReplayAfterTouch(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u := mustUser(t, s, ctx, "listener", "", RoleUser)
+	code, err := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := pairThrough(t, s, ctx, code)
+	first, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, cred, err := s.ResolveRequest(ctx, first.Token, Presence{}, KindSession); err != nil {
+		t.Fatal(err)
+	} else if _, _, err := s.IssueAPIToken(ctx, u.ID, cred.ID, "script"); err != nil {
+		t.Fatalf("key minted on the presented session: %v", err)
+	}
+	if got, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice); !errors.Is(err, ErrInviteUsedByDevice) || got.Token != "" {
+		t.Fatalf("replay after the touch: %v, want refused", err)
+	}
+	if _, err := s.ResolveToken(ctx, first.Token, KindSession); err != nil {
+		t.Fatalf("presented bearer after the refused replay: %v", err)
+	}
+}
+
+// A session's first touch is what marks it presented, so a failed one fails
+// the request (not a refusal: the 503 of a token not checked) and leaves the
+// bearer unauthorized, which a replay may then still rotate. A presented
+// session's touch stays best effort.
+func TestFirstTouchFailureFailsRequest(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u := mustUser(t, s, ctx, "listener", "", RoleUser)
+	code, err := s.CreateAuthCode(ctx, u.ID, "invite", 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := pairThrough(t, s, ctx, code)
+	first, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	used, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, code), "tablet", "tablet-random-key-0123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveToken(ctx, used.Token, KindSession); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE TRIGGER fail_touch BEFORE UPDATE OF last_seen ON tokens
+		BEGIN SELECT RAISE(ABORT,'touch failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := s.ResolveRequest(ctx, first.Token, Presence{}, KindSession); err == nil || errors.Is(err, ErrInvalidToken) || got != nil {
+		t.Fatalf("first request with a failed touch: %v, want an unchecked token", err)
+	}
+	// A new address makes the presented bearer's request touch it.
+	if got, _, err := s.ResolveRequest(ctx, used.Token, Presence{IP: "192.0.2.7"}, KindSession); err != nil || got.ID != u.ID {
+		t.Fatalf("presented bearer with a failed touch: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DROP TRIGGER fail_touch`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.ConsumePairing(ctx, pair, "phone", testInviteDevice); err != nil || !got.Replayed {
+		t.Fatalf("replay of the never-authorized bearer: %v", err)
+	}
+}
