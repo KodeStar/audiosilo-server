@@ -18,8 +18,11 @@
 # (fsaccess.DirCheckTimeout): a share whose server is gone is said not to answer,
 # and never holds the start. The root-only ownership steps on the data folder
 # itself and on the backups folder are each bounded by $WAIT seconds for the
-# same reason; the walk of the data folder's contents is not (a large folder may
-# need longer), and is skipped when the data folder itself didn't answer.
+# same reason. The walk of the data folder's contents has no total limit (a
+# large folder may need longer): it gives up when it makes no progress for 30
+# seconds (chowndata's own watch), as on a share whose server stopped answering
+# after the folder's attributes were cached, and is skipped when the data
+# folder itself didn't answer.
 #
 # If the container is started with an explicit non-root user (docker `--user` /
 # compose `user:`), we skip the chown/drop, run the same checks and exec as that
@@ -99,8 +102,13 @@ usable_path() {
 # (config.yaml) is the only mount whose owner it changes. It works from open
 # folders, so the server's user, who can write in the data folder, cannot
 # swap in a link for root to follow.
+# A walk that stops moving ends with status 3 (chowndata's stall watch).
 chown_data() {
-  audiosilo --data "$DATA" chowndata "$RUN_AS"
+  walk=0
+  audiosilo --data "$DATA" chowndata "$RUN_AS" 2>/dev/null || walk=$?
+  if [ "$walk" = 3 ]; then
+    printf 'audiosilo: WARNING: %s stopped answering while its files were being given to user %s, so some may still belong to another user. If the folder is on a network share, check that the share is up. Starting the server anyway.\n' "$DATA" "$RUN_AS" >&2
+  fi
 }
 
 # The status passed to checkdirs is about this folder alone. A failed chown
@@ -161,9 +169,9 @@ if [ "$(id -u)" = "0" ]; then
     rc=0
     chown_folder "$DATA" 2>/dev/null || rc=$?
     if [ "$rc" != 0 ]; then DATA_CHOWN_FAILED=1; fi
-    # A data folder that didn't answer in time isn't walked: the walk would hold
-    # the start on it.
-    case "$rc" in 124 | 143) ;; *) chown_data 2>/dev/null || true ;; esac
+    # A data folder that didn't answer in time isn't walked. One whose answer
+    # came from a network share's cache is stopped by the walk's stall watch.
+    case "$rc" in 124 | 143) ;; *) chown_data || true ;; esac
   fi
   if [ -n "$BACKUPS" ]; then
     # The folder and AudioSilo's own backup files in it, never the rest (it may be

@@ -175,11 +175,17 @@ the user that should own `/data` (Unraid: `99`/`100`; generic Linux: your `id -u
 `id -g`; Synology: often `1026`/`100`) - the entrypoint chowns the data dir (a file
 mounted inside it such as `config.yaml` too, but not a folder, socket or device mounted
 inside it, which keeps its owner) and `AUDIOSILO_BACKUP_DIR` when set,
-and runs the server as that user, so it works regardless of how the mounted volume is
-owned. Where a chown is refused (a NAS share with ACLs) the container log names each
+and runs the server as that user. If the data folder stops answering during that
+walk (a network share whose server went away) for 30 seconds, the entrypoint logs the
+folder name and starts the server with the owners set so far.
+Where a chown is refused (a NAS share with ACLs) the container log names each
 folder the server's user can't write (data, backups) or read (the audiobooks), the
 user, the folder's owner and the fix (`user:` instead of PUID/PGID when the container
-runs with `--user`; "mounted read-only" for a `:ro` data or backups mount). Update -
+runs with `--user`; "mounted read-only" for a `:ro` data or backups mount). A folder
+owned by nobody (an NFS owner that maps to no account) gets the NFS export's squash
+settings and ID mapping to check instead. Keep `/data` on a local disk: the database
+needs file locking (on SMB, the `nobrl` mount option), and the server can crash when an
+NFS share stops answering; the log says when `/data` is on a network share. Update -
 server or the bundled player - is always a new image:
 `docker compose pull && docker compose up -d`.
 

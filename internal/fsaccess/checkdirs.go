@@ -53,13 +53,16 @@ func checkDirs(dataDir, backups string, dataFailed, backupFailed bool, table []m
 		visible[m.Point] = m
 	}
 	var checks []check
-	write := func(path string, chownFailed bool) {
-		ro := onReadOnlyMount(path, visible)
-		checks = append(checks, startCheck(path, func() string { return writeProblem(path, ro, chownFailed) }))
+	write := func(path string, m mounts.Mount, chownFailed bool) {
+		checks = append(checks, startCheck(path, func() string { return writeProblem(path, m.ReadOnly, chownFailed) }))
 	}
-	write(data, dataFailed)
+	dataMount := containingMount(data, visible)
+	if networkFSTypes[dataMount.FSType] {
+		_, _ = fmt.Fprintf(out, "audiosilo: WARNING: The data folder %s is on a network share (%s). Keep it on a local disk if you can: the server's database needs file locking a share may not give (an SMB share needs the nobrl mount option), and the server can crash when the share stops answering.\n", data, dataMount.FSType)
+	}
+	write(data, dataMount, dataFailed)
 	if backups != "" && backups != data {
-		write(backups, backupFailed)
+		write(backups, containingMount(backups, visible), backupFailed)
 	}
 	for _, path := range slices.Sorted(maps.Keys(visible)) {
 		if path == data || path == backups || mounts.SystemPath(path) {
@@ -73,13 +76,23 @@ func checkDirs(dataDir, backups string, dataFailed, backupFailed bool, table []m
 	report(out, checks, limit)
 }
 
-func onReadOnlyMount(path string, table map[string]mounts.Mount) bool {
+// networkFSTypes are the mountinfo types of a network share, the data folder's
+// notice. Not every FUSE type: Unraid's shfs and mergerfs pool local disks.
+var networkFSTypes = map[string]bool{
+	"nfs": true, "nfs4": true, "cifs": true, "smb3": true, "smbfs": true, "ceph": true,
+	"fuse.sshfs": true, "fuse.rclone": true, "fuse.s3fs": true, "fuse.gcsfuse": true, "fuse.glusterfs": true,
+	"fuse.ceph-fuse": true, "fuse.juicefs": true,
+}
+
+// containingMount is the visible mount path is on, by its name: the nearest
+// mount point at or above it (the zero Mount when none is).
+func containingMount(path string, table map[string]mounts.Mount) mounts.Mount {
 	for p := path; ; p = filepath.Dir(p) {
 		if m, ok := table[p]; ok {
-			return m.ReadOnly
+			return m
 		}
 		if p == filepath.Dir(p) {
-			return false
+			return mounts.Mount{}
 		}
 	}
 }

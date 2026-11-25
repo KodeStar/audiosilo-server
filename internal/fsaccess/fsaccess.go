@@ -189,6 +189,9 @@ func hint(info fs.FileInfo, write bool) string {
 	case known && ouid == 0:
 		// Never advise running the server as root.
 		fmt.Fprintf(&b, "%s, for example by making %s its owner on the host.", giveFirst, user)
+	case known && (unmappedID(ouid) || unmappedID(ogid)):
+		// Never advise running as nobody: the real owner is unknown.
+		fmt.Fprintf(&b, "Its owner or group is nobody, an ID that maps to no account. If the %s is on an NFS share, check the export's root_squash or all_squash setting and that the NAS and this computer map user IDs the same way. Otherwise %s.", noun, give)
 	case InContainer():
 		asUser := os.Getenv(EnvStartedAsUser) == "1"
 		switch {
@@ -205,6 +208,12 @@ func hint(info fs.FileInfo, write bool) string {
 		fmt.Fprintf(&b, "Run the server as the %s's owner, or %s.", noun, give)
 	}
 	return b.String()
+}
+
+// unmappedID is nobody: the overflow ID (65534), which NFS also shows for an
+// owner it could not map, or NFSv4's unmapped -2 (4294967294).
+func unmappedID(id int) bool {
+	return id == 65534 || uint32(id) == 4294967294
 }
 
 // writeCheck is the file CheckWrite creates and removes.

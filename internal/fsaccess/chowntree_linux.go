@@ -5,9 +5,12 @@ package fsaccess
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -33,16 +36,36 @@ const statMask = unix.STATX_TYPE | unix.STATX_UID | unix.STATX_GID | unix.STATX_
 // on the way (an NFS export's child filesystem), an automount point (never
 // triggered), a folder on another filesystem type and the snapshot folders.
 // A btrfs subvolume of the data folder is part of it and is walked. Without
-// the mount table the walk does not start, as its edges would be unknown.
-func ChownTree(dir string, uid, gid int) error {
+// the mount table the walk does not start, as its edges would be unknown. In
+// each folder the entries are changed before its folders are walked and its
+// mount points looked at, so a walk ended part-way has done the server's own
+// files at the top of dir (the database, config.yaml).
+//
+// A walk that makes no progress for stall (no entry and no part of a listing
+// done: a share whose server stopped answering, whose request no goroutine
+// can interrupt) calls stalled, once, from another goroutine, and stays
+// blocked: stalled is expected to end the process. A slow walk that keeps
+// moving is never cut.
+func ChownTree(dir string, uid, gid int, stall time.Duration, stalled func()) error {
+	progressed, stop := watchStall(stall, stalled)
+	defer stop()
 	table, err := mounts.Table()
 	if err != nil {
 		return fmt.Errorf("read the mount table: %w", err)
 	}
-	return chownTree(dir, uid, gid, table)
+	return chownTree(dir, uid, gid, table, progressed)
 }
 
-func chownTree(dir string, uid, gid int, table []mounts.Mount) error {
+// watchStall calls stalled once progressed has not been called for stall, at
+// most once (a Reset after the timer fired would schedule it again) and never
+// once stop has returned, so a walk that ends as the timer fires isn't reported.
+func watchStall(stall time.Duration, stalled func()) (progressed, stop func()) {
+	var once sync.Once
+	t := time.AfterFunc(stall, func() { once.Do(stalled) })
+	return func() { t.Reset(stall) }, func() { t.Stop(); once.Do(func() {}) }
+}
+
+func chownTree(dir string, uid, gid int, table []mounts.Mount, progressed func()) error {
 	if len(table) == 0 {
 		return errors.New("no mount table to bound the walk")
 	}
@@ -51,15 +74,23 @@ func chownTree(dir string, uid, gid int, table []mounts.Mount) error {
 		chownAt: func(dirfd int, name string) error {
 			return unix.Fchownat(dirfd, name, uid, gid, unix.AT_SYMLINK_NOFOLLOW)
 		},
-		chownFd: func(fd int) error { return unix.Fchown(fd, uid, gid) },
+		chownFd:    func(fd int) error { return unix.Fchown(fd, uid, gid) },
+		progressed: progressed,
 	}
 	return w.run(dir, table)
 }
+
+// readdirBatch is how many names walk lists at a time: a folder of many
+// files on a slow disk shows progress between its parts.
+const readdirBatch = 256
 
 type walker struct {
 	uid, gid int
 	chownAt  func(dirfd int, name string) error
 	chownFd  func(fd int) error
+	// progressed, when set, is called after each entry and each part of a
+	// listing (the stall watch).
+	progressed func()
 
 	points  map[string]bool // mount points under the root: whether read-only
 	fsType  int64           // the root's filesystem type
@@ -103,20 +134,55 @@ func (w *walker) run(dir string, table []mounts.Mount) error {
 }
 
 // walk changes the owner of the entries in the open folder fd (at path, its
-// stat st) and walks the folders among them. It closes fd.
+// stat st) and walks the folders among them. It closes fd. A folder's own
+// entries go first, then its folders, then what is mounted in it: a walk ended
+// part-way (its stall watch) has given the files at the top of the data folder
+// (the database, config.yaml) before any folder below them, and a share
+// mounted there, whose server may be gone, is reached last.
 func (w *walker) walk(fd int, path string, st *unix.Statx_t) {
 	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
-	names, err := f.Readdirnames(-1)
-	if err != nil {
-		w.errs = append(w.errs, err)
+	var dirs, mounted []string
+	for {
+		names, err := f.Readdirnames(readdirBatch)
+		w.step()
+		for _, name := range names {
+			if _, ok := w.points[path+"/"+name]; ok {
+				mounted = append(mounted, name)
+				continue
+			}
+			if w.entry(fd, path, st, name) {
+				dirs = append(dirs, name)
+			}
+			w.step()
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				w.errs = append(w.errs, err)
+			}
+			break
+		}
 	}
-	for _, name := range names {
-		w.entry(fd, path, st, name)
+	for _, name := range dirs {
+		w.enter(fd, path, st, name)
+		w.step()
+	}
+	for _, name := range mounted {
+		w.mountPoint(fd, path, name)
+		w.step()
 	}
 }
 
-func (w *walker) entry(dirfd int, dir string, parent *unix.Statx_t, name string) {
+func (w *walker) step() {
+	if w.progressed != nil {
+		w.progressed()
+	}
+}
+
+// entry changes the owner of name in the open folder dirfd (at dir, its stat
+// parent), an entry no mount point in the table names, when it is not a
+// folder, and reports whether it is a folder for walk to enter.
+func (w *walker) entry(dirfd int, dir string, parent *unix.Statx_t, name string) (folder bool) {
 	path := dir + "/" + name
 	var st unix.Statx_t
 	// AT_NO_AUTOMOUNT: looking at an automount point never mounts it.
@@ -124,29 +190,48 @@ func (w *walker) entry(dirfd int, dir string, parent *unix.Statx_t, name string)
 		if !errors.Is(err, unix.ENOENT) { // gone since the listing
 			w.errs = append(w.errs, fmt.Errorf("stat %s: %w", path, err))
 		}
-		return
+		return false
 	}
-	kind := uint32(st.Mode) & unix.S_IFMT
-	if ro, mounted := w.points[path]; mounted {
-		if kind == unix.S_IFREG && !ro {
-			w.chown(&st, path, func() error { return w.chownAt(dirfd, name) })
+	if w.elsewhere(&st, parent) {
+		return false
+	}
+	if uint32(st.Mode)&unix.S_IFMT != unix.S_IFDIR {
+		w.chown(&st, path, func() error { return w.chownAt(dirfd, name) })
+		return false
+	}
+	return !snapshotDirs[name]
+}
+
+// mountPoint changes the owner of name in the open folder dirfd (at dir), a
+// mount point in the table, only when a read and write regular file is
+// mounted there (a config.yaml). The stat reaches what is mounted there, whose
+// server may be gone (a backups share): its cached attributes tell a file from
+// a folder, with no request that could hold the walk until its stall watch.
+func (w *walker) mountPoint(dirfd int, dir, name string) {
+	path := dir + "/" + name
+	var st unix.Statx_t
+	if err := statAt(dirfd, name, unix.AT_SYMLINK_NOFOLLOW|unix.AT_NO_AUTOMOUNT|unix.AT_STATX_DONT_SYNC, &st); err != nil {
+		if !errors.Is(err, unix.ENOENT) {
+			w.errs = append(w.errs, fmt.Errorf("stat %s: %w", path, err))
 		}
 		return
 	}
-	if w.elsewhere(&st, parent) {
-		return
-	}
-	if kind != unix.S_IFDIR {
+	if uint32(st.Mode)&unix.S_IFMT == unix.S_IFREG && !w.points[path] {
 		w.chown(&st, path, func() error { return w.chownAt(dirfd, name) })
-		return
 	}
-	if snapshotDirs[name] {
-		return
-	}
+}
+
+// enter opens the folder name in the open folder dirfd (at dir, its stat
+// parent) that entry looked at and, when what was opened is still a folder on
+// the root's mount, changes its owner and walks it.
+func (w *walker) enter(dirfd int, dir string, parent *unix.Statx_t, name string) {
+	path := dir + "/" + name
 	// O_NOFOLLOW: a folder swapped for a link since the stat is not entered.
 	fd, err := unix.Openat(dirfd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		w.errs = append(w.errs, fmt.Errorf("open %s: %w", path, err))
+		if !errors.Is(err, unix.ENOENT) { // gone since the listing
+			w.errs = append(w.errs, fmt.Errorf("open %s: %w", path, err))
+		}
 		return
 	}
 	// What was opened, which may not be what was looked at.
@@ -192,14 +277,15 @@ func (w *walker) chown(st *unix.Statx_t, path string, change func() error) {
 // statAt is statx, or fstatat on a kernel without it (before 4.11) or where a
 // seccomp profile refuses it (EPERM, an older container runtime's default
 // answer; this runs as root, so statx gives EACCES, not EPERM, for a real
-// refusal), whose answer carries no mount id and no attributes.
+// refusal), whose answer carries no mount id and no attributes (and which
+// takes no AT_STATX_DONT_SYNC, statx's own flag).
 func statAt(dirfd int, name string, flags int, st *unix.Statx_t) error {
 	err := unix.Statx(dirfd, name, flags, statMask, st)
 	if !errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EPERM) {
 		return err
 	}
 	var s unix.Stat_t
-	if err := unix.Fstatat(dirfd, name, &s, flags); err != nil {
+	if err := unix.Fstatat(dirfd, name, &s, flags&^unix.AT_STATX_DONT_SYNC); err != nil {
 		return err
 	}
 	dev := uint64(s.Dev)

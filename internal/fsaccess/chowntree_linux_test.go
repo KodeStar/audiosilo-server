@@ -7,11 +7,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/kodestar/audiosilo-server/internal/mounts"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // The walk's choices, with the changes recorded instead of made (a test runs
@@ -65,6 +68,16 @@ func TestChownTreeStaysOnTheDataMount(t *testing.T) {
 	if err := w.run(data, table); err != nil {
 		t.Fatal(err)
 	}
+	// A folder's own entries before its folders, its mount points last: a
+	// walk ended part-way has done the database.
+	for _, top := range []string{"a.db", "dirlink", "link"} {
+		if i := slices.Index(changed, top); i < 0 || i > slices.Index(changed, "d") || i > slices.Index(changed, "d/f") {
+			t.Errorf("%s not changed before the folder d: %q", top, changed)
+		}
+	}
+	if len(changed) == 0 || changed[len(changed)-1] != "config.yaml" {
+		t.Errorf("the mounted file wasn't changed last: %q", changed)
+	}
 	slices.Sort(changed)
 	want := []string{"a.db", "config.yaml", "d", "d/f", "dirlink", "link"}
 	if !slices.Equal(changed, want) {
@@ -108,9 +121,56 @@ func TestChownTreeUnlistedMount(t *testing.T) {
 	}
 }
 
+// The stall watch: a walk blocked in one request (a share that stopped
+// answering) is given up on, while a slow walk that keeps moving, here more
+// than twice the limit in all, is not, even through a folder listed in parts.
+func TestChownTreeStall(t *testing.T) {
+	data, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range readdirBatch + 10 {
+		if err := os.WriteFile(filepath.Join(data, strconv.Itoa(i)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stall := testwait.Scaled(200 * time.Millisecond)
+	walk := func(chown func(fired *atomic.Bool) error) (stalled bool) {
+		t.Helper()
+		var fired atomic.Bool
+		progressed, stop := watchStall(stall, func() { fired.Store(true) })
+		defer stop()
+		w := walker{
+			uid: os.Getuid() + 1, gid: os.Getgid() + 1,
+			chownAt:    func(int, string) error { return chown(&fired) },
+			chownFd:    func(int) error { return nil },
+			progressed: progressed,
+		}
+		if err := w.run(data, []mounts.Mount{{Point: "/"}}); err != nil {
+			t.Fatal(err)
+		}
+		return fired.Load()
+	}
+	if walk(func(*atomic.Bool) error { time.Sleep(stall / 100); return nil }) {
+		t.Error("a slow walk that kept moving was given up on")
+	}
+	first := true
+	if !walk(func(fired *atomic.Bool) error {
+		if first {
+			first = false
+			// Held until the watch gives up, then released, as an answering
+			// share would be.
+			testwait.Eventually(t, "the stall watch", 10*time.Second, fired.Load)
+		}
+		return nil
+	}) {
+		t.Error("a walk blocked in one request wasn't given up on")
+	}
+}
+
 func TestChownTreeRefuses(t *testing.T) {
 	data := t.TempDir()
-	if err := chownTree(data, 0, 0, nil); err == nil {
+	if err := chownTree(data, 0, 0, nil, nil); err == nil {
 		t.Fatal("walked with no mount table")
 	}
 	link := filepath.Join(t.TempDir(), "link")
@@ -118,10 +178,10 @@ func TestChownTreeRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	table := []mounts.Mount{{Point: "/"}}
-	if err := chownTree(link, 0, 0, table); err == nil {
+	if err := chownTree(link, 0, 0, table, nil); err == nil {
 		t.Fatal("walked through a link at the data folder's name")
 	}
-	if err := chownTree("/", 0, 0, table); err == nil {
+	if err := chownTree("/", 0, 0, table, nil); err == nil {
 		t.Fatal("walked the whole system")
 	}
 }
