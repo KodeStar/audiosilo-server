@@ -308,8 +308,10 @@ func (c *Catalog) NoteUnreadablePath(ctx context.Context, lib Library, relPath, 
 // ScanErrorDetail) on the stored row at b's path and nothing else: every field
 // a scan wrote (names, duration, codec, chapters, cover flag, mtime and size,
 // indexed_at) stays as the last full read left it, and since the stored mtime
-// and size are the old ones, the next scan reads the book again. ok is false
-// when the book has no row yet (a new book is written whole).
+// and size are the old ones, the next scan reads the book again (but for one
+// whose lengths recordLengths takes, with this reading's mtime and size: the
+// problem recorded brings the next scan back to its file). ok is false when
+// the book has no row yet (a new book is written whole).
 func recordReadProblem(ctx context.Context, tx *sql.Tx, b *Book) (id int64, ok bool, err error) {
 	err = tx.QueryRowContext(ctx,
 		`UPDATE books SET scan_error = ?, scan_error_file = ?, scan_error_detail = ?
