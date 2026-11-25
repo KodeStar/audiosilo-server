@@ -161,14 +161,22 @@ func (w *walker) entry(dirfd int, dir string, parent *unix.Statx_t, name string)
 	path := dir + "/" + name
 	var st unix.Statx_t
 	// AT_NO_AUTOMOUNT: looking at an automount point never mounts it.
-	if err := statAt(dirfd, name, unix.AT_SYMLINK_NOFOLLOW|unix.AT_NO_AUTOMOUNT, &st); err != nil {
+	flags := unix.AT_SYMLINK_NOFOLLOW | unix.AT_NO_AUTOMOUNT
+	ro, mounted := w.points[path]
+	if mounted {
+		// The stat reaches what is mounted there, whose server may be gone (a
+		// backups share): its cached attributes tell a file from a folder,
+		// with no request that could hold the walk until its stall watch.
+		flags |= unix.AT_STATX_DONT_SYNC
+	}
+	if err := statAt(dirfd, name, flags, &st); err != nil {
 		if !errors.Is(err, unix.ENOENT) { // gone since the listing
 			w.errs = append(w.errs, fmt.Errorf("stat %s: %w", path, err))
 		}
 		return
 	}
 	kind := uint32(st.Mode) & unix.S_IFMT
-	if ro, mounted := w.points[path]; mounted {
+	if mounted {
 		if kind == unix.S_IFREG && !ro {
 			w.chown(&st, path, func() error { return w.chownAt(dirfd, name) })
 		}
@@ -233,14 +241,15 @@ func (w *walker) chown(st *unix.Statx_t, path string, change func() error) {
 // statAt is statx, or fstatat on a kernel without it (before 4.11) or where a
 // seccomp profile refuses it (EPERM, an older container runtime's default
 // answer; this runs as root, so statx gives EACCES, not EPERM, for a real
-// refusal), whose answer carries no mount id and no attributes.
+// refusal), whose answer carries no mount id and no attributes (and which
+// takes no AT_STATX_DONT_SYNC, statx's own flag).
 func statAt(dirfd int, name string, flags int, st *unix.Statx_t) error {
 	err := unix.Statx(dirfd, name, flags, statMask, st)
 	if !errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EPERM) {
 		return err
 	}
 	var s unix.Stat_t
-	if err := unix.Fstatat(dirfd, name, &s, flags); err != nil {
+	if err := unix.Fstatat(dirfd, name, &s, flags&^unix.AT_STATX_DONT_SYNC); err != nil {
 		return err
 	}
 	dev := uint64(s.Dev)

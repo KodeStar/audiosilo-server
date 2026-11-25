@@ -5055,7 +5055,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   stall watch ends it with status 3 after 30 s without progress (no entry or listing part done: an
   NFS share answering the folder's stat from its attribute cache while its server is gone; `os.Exit`
   ends a thread held in a killable NFS wait), and the entrypoint warns with the folder name and
-  starts the server. BusyBox's `timeout`
+  starts the server. A share mounted inside the data folder is looked at from its cached attributes
+  (`AT_STATX_DONT_SYNC`), so a dead backups share there is passed over, not a stall. BusyBox's `timeout`
   leaves a watcher behind each command: `reap_watchers` ends them before the hand-over, or each would
   stay a zombie under the server. `scripts/test-entrypoint.sh` (Docker) is its test, not run in CI.
 - **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):
