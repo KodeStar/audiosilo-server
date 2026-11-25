@@ -55,6 +55,8 @@ type Scanner struct {
 	// side (indexShared, startFlight).
 	flightMu sync.Mutex
 	flights  map[bookKey]*indexFlight
+	// Paths written on demand since a running scan loaded its signatures.
+	opened map[int64]map[string]string // library -> path -> root, guarded by flightMu
 	// base, once set (SetBaseContext), ends the reads leadIndex runs past their
 	// requests with the server: none reads on or writes once it has stopped.
 	base atomic.Pointer[context.Context]
@@ -84,40 +86,6 @@ type Scanner struct {
 	// absolute path.
 	rejectedMu sync.Mutex
 	rejected   map[string]fileState
-
-	// With no ffprobe: the books with no stored duration this server has read
-	// again since it started (rereadUnprobed), in the state read.
-	unprobedMu sync.Mutex
-	unprobed   map[bookKey]fileState
-}
-
-// rereadUnprobed reports whether a scan with no ffprobe should read again a
-// book it finds unchanged with no stored duration or codec (the caller's
-// test): once per
-// server run and book state (noteUnprobed). A server that ran without ffprobe
-// before the in-process probe ran without it (SCAN-SPIKE decision 2) gets its
-// existing books' durations from its first scan since, while a file the probe
-// is unsure of (no ffprobe to ask) is not re-indexed on every scan. A restart
-// reads such books once more.
-func (s *Scanner) rereadUnprobed(libraryID int64, b *catalog.Book) bool {
-	s.unprobedMu.Lock()
-	defer s.unprobedMu.Unlock()
-	was, ok := s.unprobed[bookKey{libraryID, b.RelPath}]
-	return !ok || was != (fileState{mtime: b.MTime, size: b.Size})
-}
-
-// noteUnprobed remembers a book a scan with no ffprobe has just written with
-// no duration or codec, in the state it read (rereadUnprobed).
-func (s *Scanner) noteUnprobed(libraryID int64, b *catalog.Book) {
-	if s.ffprobePath != "" || (b.Duration > 0 && b.Codec != "") {
-		return
-	}
-	s.unprobedMu.Lock()
-	defer s.unprobedMu.Unlock()
-	if s.unprobed == nil {
-		s.unprobed = map[bookKey]fileState{}
-	}
-	s.unprobed[bookKey{libraryID, b.RelPath}] = fileState{mtime: b.MTime, size: b.Size}
 }
 
 // SetConcurrency sets how many audio files a scan reads at once (tags and
@@ -125,9 +93,8 @@ func (s *Scanner) noteUnprobed(libraryID int64, b *catalog.Book) {
 // DefaultScanReaders. Set below walkIO, it also caps discovery's folder listings
 // and file lookups (walkWidth). Set it before Start; a scan reads it when it
 // begins.
-// However many files are read at once, the index is written by the scan alone,
-// in discovery order, so a scan's result is the same as one that reads a file at
-// a time.
+// The scan writes in discovery order unless a caller asks for one of its
+// finished books before the scan reaches its write.
 func (s *Scanner) SetConcurrency(n int) { s.concurrency = n }
 
 // DefaultScanReaders caps the default number of files a scan reads at once. Past
@@ -324,6 +291,17 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}()
 	rl.add("info", "started", func(e *catalog.RunEvent) { e.Path = lib.Root })
 
+	s.flightMu.Lock()
+	if s.opened == nil {
+		s.opened = make(map[int64]map[string]string)
+	}
+	s.opened[lib.ID] = make(map[string]string)
+	s.flightMu.Unlock()
+	defer func() {
+		s.flightMu.Lock()
+		delete(s.opened, lib.ID)
+		s.flightMu.Unlock()
+	}()
 	sigs, err := s.cat.Signatures(ctx, lib.ID)
 	if err != nil {
 		return res, err
@@ -569,8 +547,8 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 	// The books to read are read a few files at a time (readFiles), each book on
 	// its own goroutine, up to a window of books ahead of the one written next; the
-	// index is written here alone, in discovery order (writeNext), so the rows,
-	// their ids and the log come out as a scan reading one file at a time writes them.
+	// scan writes in discovery order (writeNext). A request for a finished
+	// book may publish its row earlier. The scan still counts it in order.
 	window := 2 * slots.size()
 	var pending []*bookRead
 	// The books read and waiting to be written: a few share a transaction
@@ -583,18 +561,23 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// counted as added: the discs of one are one book added, not one each
 	// (PLAYER-08).
 	addedSplit := map[string]bool{}
-	// recordWrite counts a book written (err nil) or not, and logs its problem
-	// or the failure.
-	recordWrite := func(r *bookRead, err error) {
-		b := r.book
-		r.endFlight(s, err)
+	// recordWrite counts a book written (r.err nil) or not, and logs its
+	// problem or the failure.
+	recordWrite := func(r *bookRead) {
+		b, err := r.book, r.err
+		if (r.reused && r.existed) || errors.Is(err, errReadDropped) {
+			// The on-demand read's row stands, or the read was dropped at a
+			// Stop (bookRead.drop): no write of the scan's, no failure.
+			// A book new to this scan whose row an on-demand read stored
+			// meanwhile is still new content, counted as added below.
+			return
+		}
 		if err != nil {
 			s.log.Warn("index book failed", "library", lib.Name, "path", b.RelPath, "err", err)
 			res.Errors++
 			rl.add("error", "error", func(e *catalog.RunEvent) { e.Path, e.Detail = b.RelPath, err.Error() })
 			return
 		}
-		s.noteUnprobed(lib.ID, b)
 		if b.ScanError != "" {
 			res.Errors++
 			rl.add("warn", "problem", func(e *catalog.RunEvent) {
@@ -631,12 +614,20 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		if len(batch) == 0 {
 			return
 		}
-		books := make([]*catalog.Book, len(batch))
-		for i, r := range batch {
-			books[i] = r.book
+		var owned []*bookRead
+		var books []*catalog.Book
+		for _, r := range batch {
+			if r.claimed.CompareAndSwap(false, true) {
+				books = append(books, r.book)
+				owned = append(owned, r)
+			}
 		}
 		for i, err := range s.cat.UpsertBooks(context.WithoutCancel(ctx), books) {
-			recordWrite(batch[i], err)
+			owned[i].finishWrite(s, err)
+		}
+		for _, r := range batch {
+			<-r.stored
+			recordWrite(r)
 		}
 		clear(batch)
 		batch = batch[:0]
@@ -685,28 +676,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		flush()
 		grace := time.NewTimer(stopGrace)
 		defer grace.Stop()
-		left := 0
-		for _, r := range pending {
-			if left == 0 {
-				select {
-				case <-r.done:
-					r.endFlight(s, errReadDropped)
-					continue
-				case <-grace.C:
-				}
-			} else if r.finished() {
-				r.endFlight(s, errReadDropped)
-				continue
-			}
-			left++
-			r.left.Store(true)
-			s.readsLeft.Add(1)
-			go func() {
-				<-r.done
-				r.endFlight(s, errReadDropped)
-				s.readsLeft.Add(-1)
-			}()
-		}
+		left := s.endReads(pending, grace.C, recordWrite)
 		if left > 0 {
 			s.log.Warn("scan stopped with reads still under way, left to end on their own",
 				"library", lib.Name, "reads", left, "left_by_all_scans", s.readsLeft.Load())
@@ -743,9 +713,8 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			lastLog = time.Now()
 		}
 		old, existed := sigs[b.RelPath]
-		if existed && old.MTime == b.MTime && old.Size == b.Size &&
-			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) && (!old.DurationStale || keptAsStored(old)) &&
-			((s.ffprobePath == "" && !s.rereadUnprobed(lib.ID, b)) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
+		if existed && sameFiles(b, old) && (!old.DurationStale || keptAsStored(old)) &&
+			((s.ffprobePath == "" && (old.ProbeUnsure || keptAsStored(old))) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
 			(old.CoverPath != "" || !b.CoverSeen || keptAsStored(old)) && !s.problemCleared(ctx, lib, old, slots) {
 			// Unchanged since last scan, its files in the order stored (a book
 			// indexed in byte order before #160 is read again in natural order),
@@ -757,7 +726,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// only skip the probe when a prior probe already stored both duration
 			// and codec (so books indexed before the codec column get it
 			// backfilled), or, with no ffprobe, the in-process probe has had its
-			// one go at the book this run (rereadUnprobed), or the book's one
+			// one go at these files (ProbeUnsure), or the book's one
 			// file has a read problem that problemCleared just found still there:
 			// reading the book again would find the same. One stored with no
 			// sidecar cover is read again once the walk lists an image beside
@@ -845,6 +814,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				if old.ReleasedUnchecked || old.GenresUnchecked || readHints || readPath {
 					tagReads = append(tagReads, &tagRead{book: b, old: old, primary: primary, names: readPath, hints: readHints})
 					if len(tagReads) >= slots.size()*tagReadsPerSlot {
+						flush()
 						readTags()
 					}
 				}
@@ -881,6 +851,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				}
 				if len(pathBackfill)+len(genresBackfill)+len(hintsBackfill)+len(absBackfill)+len(attachBackfill)+len(revBackfill)+
 					len(orderBackfill)+len(ebookBackfill) >= pathFlushEvery {
+					flush()
 					flushBackfills()
 				}
 				continue
@@ -892,7 +863,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// whose row has gone since the scan began is first seen now.
 			b.AddedAt = now()
 		}
-		r := &bookRead{book: b, existed: existed, done: make(chan struct{})}
+		r := &bookRead{book: b, existed: existed, ctx: ctx, root: lib.Root, done: make(chan struct{}), stored: make(chan struct{})}
 		pending = append(pending, r)
 		go func() {
 			defer close(r.done)
@@ -909,7 +880,25 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				return // the scan stopped: writeNext sees it
 			}
 			r.flight = f
-			s.enrich(metadata.WithProgress(ctx, f.progress), lib, b, slots)
+			if s.openedSinceScan(lib, b) {
+				sig, err := s.cat.SignatureAt(ctx, lib.ID, b.RelPath)
+				if err == nil && matchesOpenedBook(b, sig) {
+					if !existed {
+						// Counted as added (recordWrite), under the title stored
+						// (else the path's).
+						if stored, err := s.cat.GetBookByPath(ctx, lib.ID, b.RelPath); err == nil {
+							b.Title = stored.Title
+						} else {
+							setNames(b, nil, nil)
+						}
+					}
+					r.reused = true
+					r.claimed.Store(true)
+					r.finishWrite(s, nil)
+					return
+				}
+			}
+			s.enrich(metadata.WithProgress(ctx, f.progress), lib, b, slots, existed)
 		}()
 	}
 	for len(pending) > 0 {
@@ -995,6 +984,41 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 // books a transaction takes, and how long it may hold the writer, are
 // catalog.UpsertBooks' bounds.
 const writeBatchAge = 250 * time.Millisecond
+
+// endReads ends a stopped scan's reads under way (pending), waiting for each
+// until grace fires: one done by then is dropped and recorded (record: a
+// request's write of it, if one claimed it), one still under way is left to
+// end on its own (bookRead.left, Scanner.readsLeft). It returns how many were
+// left. Once grace has fired it is not waited on again (it fires once): a
+// read that returned just as it did must not send the next one back to wait
+// on it, or a read held on a share that stopped answering would hold the
+// scan, and every one queued behind it, for good.
+func (s *Scanner) endReads(pending []*bookRead, grace <-chan time.Time, record func(*bookRead)) (left int) {
+	graceOver := false
+	for _, r := range pending {
+		if !graceOver {
+			select {
+			case <-r.done:
+			case <-grace:
+				graceOver = true
+			}
+		}
+		if r.finished() {
+			r.drop(s)
+			record(r)
+			continue
+		}
+		left++
+		r.left.Store(true)
+		s.readsLeft.Add(1)
+		go func() {
+			<-r.done
+			r.drop(s)
+			s.readsLeft.Add(-1)
+		}()
+	}
+	return left
+}
 
 // stopGrace is how long a stopped scan waits for its reads under way to end
 // before it leaves them (stopped).
@@ -1154,7 +1178,7 @@ func setNames(b *catalog.Book, md, last *metadata.Metadata) {
 // A scan reads with its slots (an on-demand index with one, a file at a time)
 // and its ctx, which ends the ffprobe runs at a Stop: the scan then drops
 // the reading rather than writing it.
-func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Book, slots *readSlots) {
+func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Book, slots *readSlots, existed bool) {
 	look := s.lookTimeout(ctx)
 	if b.AddedAt == "" {
 		stampAddedAt(ctx, lib, b, look)
@@ -1265,7 +1289,7 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// Normalize chapters so single-file and multi-file books look the same to a
 	// client (see metadata.Chapter).
 	if b.IsFolder {
-		last := s.buildMultiFileChapters(ctx, lib, b, md, slots)
+		last := s.buildMultiFileChapters(ctx, lib, b, md, slots, existed)
 		if partNamed(b, md) {
 			// Named again now its last file's tags are read: a title tag the
 			// first file shares with it is the book's (metadata.PartsTitle).
@@ -1311,6 +1335,7 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 		b.ArtVersion = artVersion(ctx, lib.Root, b.ArtFiles(), look, &gaveUp)
 	}
 	gaveUp.keep(b)
+	b.ProbeUnsure = s.ffprobePath == "" && !b.ReadCutShort && !b.LengthUncounted && (b.Duration <= 0 || b.Codec == "")
 }
 
 // keepLeft is a scan's reading of book b when another read of it may never
@@ -1606,11 +1631,11 @@ func singleFileChapters(md *metadata.Metadata, relPath string) []metadata.Chapte
 // file is read once; the others are read with slots (readFiles), then the
 // chapters are built from them in file order. It returns the reading of the
 // book's last part (first's for a book of one; nil when a Stop left it unread).
-func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Library, b *catalog.Book, first *metadata.Metadata, slots *readSlots) *metadata.Metadata {
+func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Library, b *catalog.Book, first *metadata.Metadata, slots *readSlots, existed bool) *metadata.Metadata {
 	var cum float64
 	idx := 0
 	parts := make([]partFacts, 0, len(b.Files))
-	mds := s.readFiles(ctx, lib, b.Files, first, slots)
+	mds := s.readFiles(ctx, lib, b.Files, first, slots, existed)
 	tagsUnread, lengthsKnown := false, true
 	for i := range b.Files {
 		f := &b.Files[i]
@@ -2732,7 +2757,7 @@ func folderBook(lib catalog.Library, absDir string, audio []audioFile) *catalog.
 // single (multi-file) book, resolving either the book folder or a file inside it
 // yields that same folder book.
 func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath string) (*catalog.Book, error) {
-	return s.IndexPathWithin(ctx, lib, relPath, nil)
+	return s.IndexPathWithin(ctx, lib, relPath, nil, false)
 }
 
 // IndexPathWithin is IndexPath for a caller who may reach only the paths allow
@@ -2740,13 +2765,14 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 // folder book of a part, the joined book of a disc folder); when allow refuses the
 // book's path, it returns ErrNotAllowed before probing or indexing anything.
 // Each caller is checked against allow before concurrent callers for the same
-// book share one read of it (indexShared).
-func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
+// book share one read of it (indexShared). A caller already detached from
+// its request (background) can lead that read on its own goroutine.
+func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool, background bool) (*catalog.Book, error) {
 	book, err := s.resolveAsked(ctx, lib, relPath, allow)
 	if err != nil {
 		return nil, err
 	}
-	return s.indexShared(ctx, lib, book)
+	return s.indexShared(ctx, lib, book, background)
 }
 
 // ReindexPath is IndexPath for a caller who asks for the book as it is on disk
@@ -2811,6 +2837,37 @@ type tagRead struct {
 // tagReadsPerSlot is how many backfill reads a scan gathers per read slot
 // before reading them, at once as the slots allow.
 const tagReadsPerSlot = 8
+
+// openedSinceScan checks after claiming the flight, so a request that was
+// still reading when the scan reached this book has published its row too.
+func (s *Scanner) openedSinceScan(lib catalog.Library, b *catalog.Book) bool {
+	s.flightMu.Lock()
+	defer s.flightMu.Unlock()
+	paths := s.opened[lib.ID]
+	root, opened := paths[b.RelPath]
+	delete(paths, b.RelPath)
+	return opened && root == lib.Root
+}
+
+// sameFiles reports whether discovery found book b's files as sig stored them:
+// the same mtime and size, and a folder's files in the stored order.
+func sameFiles(b *catalog.Book, sig catalog.Signature) bool {
+	return sig.MTime == b.MTime && sig.Size == b.Size && (!b.IsFolder || sig.FileOrder == catalog.FileOrderKey(b.Files))
+}
+
+// matchesOpenedBook reports whether the row an on-demand read stored since the
+// scan began (sig) is a whole reading of book b as discovery found it: no read
+// problem (a read cut short always records one, so a Re-read that kept the row
+// as stored is read again), the same files, its lengths of today's revision,
+// and its cover and side files as the walk lists them. The scan keeps that row
+// rather than read the book again with the same tools.
+func matchesOpenedBook(b *catalog.Book, sig catalog.Signature) bool {
+	return sig.IndexedAt != "" && sig.ScanError == "" && sig.ContentHash != "" && !sig.DurationStale &&
+		sameFiles(b, sig) && sig.IsFolder == b.IsFolder && sig.SplitParent == b.SplitParent &&
+		(!b.CoverSeen || sig.CoverPath != "") && sig.ABSSig == b.ABS.Sig && sig.AttachmentsSig == b.Attachments.Sig &&
+		sig.EbookSig == b.EbookFile.Sig && (!sig.ABSUnchecked || sig.ABSSig == "") &&
+		(!sig.AttachmentsUnchecked || sig.AttachmentsSig == "")
+}
 
 // bookKey names a book across libraries: (library_id, rel_path).
 type bookKey struct {
@@ -2922,22 +2979,34 @@ func (s *Scanner) lookTimeout(ctx context.Context) time.Duration {
 // a scan's): each waits for that read and loads the book it stored, its own
 // copy. A caller whose own request ends stops waiting, the one that began the
 // read too (the read goes on: leadIndex); one whose read was given up (a scan
-// stopped, a read past indexTimeout) reads the book itself. One waiting on
+// stopped before writing) reads the book itself. A detached read that used
+// its full budget returns its timeout to every caller. One waiting on
 // another's read that has not returned in time gives up on it (waitFlight).
-func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *catalog.Book) (*catalog.Book, error) {
+func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *catalog.Book, background bool) (*catalog.Book, error) {
 	for {
 		f, lead := s.claimFlight(bookKey{lib.ID, book.RelPath}, nil)
+		if f == nil {
+			return nil, errFlightStopping
+		}
 		if lead {
-			go s.leadIndex(ctx, lib, book, f, func(ctx context.Context) (string, error) { return s.movedFrom(ctx, lib, book) })
+			read := func() {
+				s.leadIndex(ctx, lib, book, f, func(ctx context.Context) (string, error) { return s.movedFrom(ctx, lib, book) })
+			}
+			if background {
+				read()
+			} else {
+				go read()
+			}
 		}
 		b, err := s.awaitFlight(ctx, f, !lead)
-		if !readGivenUp(err) || ctx.Err() != nil {
+		if ctx.Err() != nil || !readGivenUp(err) {
 			return b, err
 		}
 		if s.stopped() {
-			// A stopped server would end each new read at once: the waiter
-			// learns why (an API answers 503, not a failure).
 			return nil, fmt.Errorf("%w: %w", ErrStopping, err)
+		}
+		if !errors.Is(err, errReadDropped) {
+			return nil, fmt.Errorf("reading %q: %w: %w", book.RelPath, metadata.ErrNotAnswered, err)
 		}
 	}
 }
@@ -2945,6 +3014,9 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 // ErrStopping is an on-demand read's error when the server's stop
 // (SetBaseContext) ended it while its caller still waited.
 var ErrStopping = errors.New("library: the server is stopping")
+
+// errFlightStopping is claimFlight's refusal once the server is stopping.
+var errFlightStopping = errors.Join(ErrStopping, context.Canceled)
 
 // awaitFlight waits for flight f to end, then loads the book it stored; ctx's
 // error when ctx ends first, the flight's when it stored none. A caller that
@@ -3000,6 +3072,9 @@ func readGivenUp(err error) bool {
 func (s *Scanner) startFlight(ctx context.Context, key bookKey, scan *bookRead) (*indexFlight, error) {
 	for {
 		f, lead := s.claimFlight(key, scan)
+		if f == nil {
+			return nil, errFlightStopping
+		}
 		if lead {
 			return f, nil
 		}
@@ -3026,8 +3101,8 @@ func (s *Scanner) startFlight(ctx context.Context, key bookKey, scan *bookRead) 
 // WithWaitCap or the probe's time in all, however the read moves on
 // (flightWaitCap): a read that
 // trickles on never holds it for its whole time. A scan's
-// read that has returned is waited on until the scan writes its book, one
-// marked stuck before it returned (it waited that long for a read slot) too.
+// read that has returned can be written by its waiter, even when an earlier
+// book holds up the scan. The first writer claims the book.
 func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
 	returned := f.scan != nil && f.scan.finished()
 	if (f.stuck.Load() && !returned) || (f.scan != nil && f.scan.left.Load()) {
@@ -3050,21 +3125,31 @@ func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
 		}
 		return errReadLeft
 	}
+	var ready <-chan struct{}
+	if f.scan != nil && f.scan.stored != nil {
+		ready = f.scan.done
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-f.done:
 			return nil
+		case <-ready:
+			ready = nil
+			if r := f.scan; r.ctx.Err() == nil && r.claimed.CompareAndSwap(false, true) {
+				// The scan joins this write in flush or stopped. A request may
+				// leave while SQLite's writer is busy.
+				go r.publish(s)
+			}
 		case <-capped:
 			if f.scan != nil && f.scan.finished() {
-				expired, capped = nil, nil // returned: waited on until the scan writes it
-				continue
+				return errReadUnfinished
 			}
 			return leave()
 		case <-expired:
 			if f.scan != nil && f.scan.finished() {
-				expired, capped = nil, nil // returned: waited on until the scan writes it
+				expired = nil // the read returned; the request still has its wait cap
 				continue
 			}
 			// A read still moving on (a big book on a slow share that answers)
@@ -3127,6 +3212,9 @@ func waitCapLeft(ctx context.Context) (time.Duration, bool) {
 func (s *Scanner) claimFlight(key bookKey, scan *bookRead) (f *indexFlight, lead bool) {
 	s.flightMu.Lock()
 	defer s.flightMu.Unlock()
+	if scan == nil && s.stopped() {
+		return nil, false
+	}
 	if f, busy := s.flights[key]; busy {
 		f.joined.Add(1)
 		return f, false
@@ -3134,6 +3222,39 @@ func (s *Scanner) claimFlight(key bookKey, scan *bookRead) (f *indexFlight, lead
 	f = &indexFlight{key: key, done: make(chan struct{}), scan: scan, progress: metadata.NewProgress()}
 	s.flights[key] = f
 	return f, true
+}
+
+// WaitReads waits for the detached indexing requests admitted before the
+// server cancelled its base context, until wait ends, and returns how many it
+// left under way then. A stopped scan owns its abandoned reads. One left is
+// held in a call a share that stopped answering never returns from (on a
+// FUSE share, the close of a file whose read was given up on:
+// metadata.closeBlockFile), so shutdown goes on without it; it writes nothing
+// when it returns, as its reads and writes run on a context the base
+// context's end has cancelled (leadIndex), the database closed or not.
+func (s *Scanner) WaitReads(wait context.Context) (left int) {
+	s.flightMu.Lock()
+	var done []<-chan struct{}
+	for _, f := range s.flights {
+		if f.scan == nil {
+			done = append(done, f.done)
+		}
+	}
+	s.flightMu.Unlock()
+	for _, d := range done {
+		select {
+		case <-d:
+		case <-wait.Done():
+		}
+	}
+	for _, d := range done {
+		select {
+		case <-d:
+		default:
+			left++
+		}
+	}
+	return left
 }
 
 // endFlight ends flight f with its outcome, for its waiters.
@@ -3216,6 +3337,12 @@ func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *cata
 		return "", fmt.Errorf("library: indexing %q: %s: %w", book.RelPath, why, metadata.ErrNotAnswered)
 	}
 	failed := func(err error) (string, error) {
+		if ctx.Err() != nil {
+			// The read has ended (the server's stop, indexTimeout), its
+			// database perhaps closed by now (Scanner.WaitReads): nothing more
+			// is read or written, and leadIndex tells why.
+			return "", err
+		}
 		s.log.Warn("looking for a moved book failed", "library", lib.Name, "path", book.RelPath, "err", err)
 		return "", nil
 	}
@@ -3272,7 +3399,7 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 		ebook = catalog.EbookReading{Unread: true}
 	}
 	book.EbookFile = ebook
-	s.enrich(ctx, lib, book, s.readSlots(1))
+	s.enrich(ctx, lib, book, s.readSlots(1), false)
 	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
 	// scanned values in the same transaction. The read may have outlasted its
 	// request (leadIndex): a library moved to another folder meanwhile is not
@@ -3281,6 +3408,13 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 	book.ReadRoot = lib.Root
 	if _, err = s.cat.UpsertBook(ctx, book); errors.Is(err, catalog.ErrRootChanged) {
 		return fmt.Errorf("%w: %w", ErrNotIndexable, err)
+	}
+	if err == nil {
+		s.flightMu.Lock()
+		if paths := s.opened[lib.ID]; paths != nil {
+			paths[book.RelPath] = lib.Root
+		}
+		s.flightMu.Unlock()
 	}
 	return err
 }

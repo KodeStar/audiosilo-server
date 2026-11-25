@@ -3,10 +3,14 @@ package library
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
@@ -112,5 +116,75 @@ func TestScanStoppedMidBatchKeepsTheBatch(t *testing.T) {
 	if books == 0 || books != res.Added || books >= n || bare != 0 {
 		t.Errorf("index has %d books (%d without files), the scan counted %d added; want the batched book(s), counted and whole",
 			books, bare, res.Added)
+	}
+}
+
+func TestTagBackfillPublishesBatchedBooksFirst(t *testing.T) {
+	t.Parallel()
+	s, _, lib, db := newTestScanner(t, smallLibrary(t, 12, 1), "", 1)
+	if _, err := s.Scan(t.Context(), *lib); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `UPDATE books SET released_checked = 0`); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"A", "B", "C"} {
+		writeFile(t, lib.Root, "Ahead/"+name+"/01.mp3", []byte("new audio"))
+	}
+	// Discovery order is a map's (booksOf), so the new books may come before
+	// or after the backfill's reads: every tag read checks that the books
+	// batched by then are written, and the last ones (after the final flush)
+	// see all three.
+	var batched, checked, seen atomic.Int32
+	s.batched = func(int) { batched.Add(1) }
+	s.readFile = func(ctx context.Context, root, p, ff string, timeout time.Duration) *metadata.Metadata {
+		if strings.Contains(filepath.ToSlash(p), "/Author/") {
+			checked.Add(1)
+			var visible int32
+			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books WHERE rel_path LIKE 'Ahead/%'`).Scan(&visible); err != nil {
+				t.Error(err)
+			}
+			if n := batched.Load(); n != visible {
+				t.Errorf("tag backfill read with %d books batched and %d visible", n, visible)
+			} else if n > seen.Load() {
+				seen.Store(n)
+			}
+		}
+		return extractFile(ctx, root, p, ff, timeout)
+	}
+	if _, err := s.Scan(t.Context(), *lib); err != nil || checked.Load() == 0 || seen.Load() != 3 {
+		t.Fatalf("backfill reads %d, most new books seen batched %d: %v", checked.Load(), seen.Load(), err)
+	}
+}
+
+// TestPublishRunsPastAStop: a request's early write of a scan's finished read
+// (taken while the scan ran, so the read was whole) still stores the book when
+// the scan's Stop lands during the write, as the scan's own batch write does:
+// a stopped scan keeps what it read, whether or not a request asked first.
+func TestPublishRunsPastAStop(t *testing.T) {
+	t.Parallel()
+	s, cat, lib, _ := newTestScanner(t, t.TempDir(), "", 1)
+	read := func(ctx context.Context, rel string) *bookRead {
+		r := &bookRead{
+			book: &catalog.Book{LibraryID: lib.ID, RelPath: rel, Title: rel, Files: []catalog.BookFile{{RelPath: rel + "/01.mp3", Duration: 10}}},
+			ctx:  ctx, root: lib.Root, done: make(chan struct{}), stored: make(chan struct{}),
+		}
+		close(r.done)
+		r.claimed.Store(true)
+		return r
+	}
+
+	stoppedCtx, stop := context.WithCancel(t.Context())
+	stop()
+	for _, r := range []*bookRead{read(stoppedCtx, "Author/Stopped"), read(t.Context(), "Author/Running")} {
+		r.publish(s)
+		<-r.stored
+		if r.err != nil {
+			t.Errorf("%s: write = %v, want the book stored", r.book.RelPath, r.err)
+			continue
+		}
+		if _, err := cat.GetBookByPath(t.Context(), lib.ID, r.book.RelPath); err != nil {
+			t.Errorf("the published %s is not stored: %v", r.book.RelPath, err)
+		}
 	}
 }

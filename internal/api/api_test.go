@@ -119,7 +119,7 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	t.Cleanup(backups.Wait)
 	// A remux, warm or rendition a request started finishes before the data
 	// folder goes.
-	t.Cleanup(a.WaitMediaCaches)
+	t.Cleanup(func() { a.WaitMediaCaches(context.Background()) })
 	ntf := notify.New(cat, "test", a.NotifyIdentity, slog.Default())
 	t.Cleanup(ntf.Close) // the events still queued are recorded before the database closes
 	a.SetRuntime(Runtime{Backups: backups, Notify: ntf})

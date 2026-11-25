@@ -110,6 +110,10 @@ func TestReindexWithAReadCutShortKeepsTheStoredBook(t *testing.T) {
 				t.Errorf("a new book with its read cut short = %+v, want the path's title and the problem", got)
 			}
 
+			if sigs, err := cat.Signatures(ctx, lib.ID); err != nil || sigs[fresh].ProbeUnsure {
+				t.Errorf("cut-short new book marked as a completed inconclusive probe: %t, %v", sigs[fresh].ProbeUnsure, err)
+			}
+
 			// Reads answer again, but the second part's is refused (too many
 			// stuck): the book is still kept whole, and Health says why.
 			s.probeTimeout = 10 * time.Second
