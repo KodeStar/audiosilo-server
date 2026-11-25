@@ -3519,6 +3519,7 @@
   "bridge.progress.book_lookup": "Demande du livre au serveur",
   "bridge.progress.book_files_lookup": "Demande des fichiers du livre au serveur",
   "bridge.progress.mapping_wait": "En attente de la vérification de la correspondance de la bibliothèque",
+  "bridge.progress.asr_turn_wait": "En attente d'un tour pour utiliser la reconnaissance vocale",
   "bridge.progress.earlier_job_wait": "En attente de la fin de la tâche précédente du livre",
   "bridge.progress.engine_release_wait": "En attente que le moteur libère l'exécution précédente du livre",
   "bridge.progress.chapters_job_wait": "En attente que la tâche des chapitres du livre cède la place",

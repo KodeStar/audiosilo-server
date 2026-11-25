@@ -3325,6 +3325,7 @@
   "bridge.progress.book_lookup": "Asking the server for the book",
   "bridge.progress.book_files_lookup": "Asking the server for the book's files",
   "bridge.progress.mapping_wait": "Waiting for the library's mapping check",
+  "bridge.progress.asr_turn_wait": "Waiting for a turn to use speech recognition",
   "bridge.progress.earlier_job_wait": "Waiting for the book's earlier job to end",
   "bridge.progress.engine_release_wait": "Waiting for the engine to let go of the book's earlier run",
   "bridge.progress.chapters_job_wait": "Waiting for the book's chapters job to give way",
