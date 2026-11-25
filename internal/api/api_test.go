@@ -184,9 +184,16 @@ func (e *testEnv) redeemCode(t *testing.T, code string) (int, string, *int) {
 // session envelope, or the error message on refusal).
 func (e *testEnv) exchangeToken(t *testing.T, pairingToken, device string) (int, string) {
 	t.Helper()
-	resp, b := e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+pairingToken+`","device_name":"`+device+`"}`)
+	resp, b := e.exchangeAs(t, pairingToken, device, "")
 	return resp.StatusCode, b
+}
+
+// exchangeAs is exchangeToken with the device's sign-in key, answering the
+// whole response.
+func (e *testEnv) exchangeAs(t *testing.T, pairingToken, device, deviceID string) (*http.Response, string) {
+	t.Helper()
+	return e.do(t, "POST", "/api/v1/auth/exchange", "",
+		`{"pairing_token":"`+pairingToken+`","device_name":"`+device+`","device_id":"`+deviceID+`"}`)
 }
 
 func TestServerInfoPublic(t *testing.T) {
@@ -677,6 +684,117 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 	if resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"NOPE-NOPE-NOPE-NOPE"}`); resp.StatusCode != http.StatusUnauthorized ||
 		strings.Contains(b, `"code"`) {
 		t.Fatalf("redeem of an unknown code = %d %s, want 401 with no code", resp.StatusCode, b)
+	}
+}
+
+func TestInviteExchangeRetries(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	code, err := e.auth.CreateAuthCode(t.Context(), e.adminID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, pair, _ := e.redeemCode(t, code)
+	if status != http.StatusOK {
+		t.Fatalf("redeem: %d", status)
+	}
+	const device = "device-random-key-0123456789"
+	var bearers []string
+	for i := range 2 {
+		resp, b := e.exchangeAs(t, pair, "phone", device)
+		var got struct {
+			Token string `json:"token"`
+		}
+		if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(b), &got) != nil || got.Token == "" {
+			t.Fatalf("exchange: %d, want a session", resp.StatusCode)
+		}
+		bearers = append(bearers, got.Token)
+		if i > 0 {
+			continue
+		}
+		// Within the retry's minute, another device holding the same pairing
+		// token is told only that the invite is used, never that a device used
+		// it, and gets no session.
+		for _, other := range []string{"another-device-key-0123", ""} {
+			resp, b := e.exchangeAs(t, pair, "laptop", other)
+			if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get(headerUnauthorized) != codeInviteUsed ||
+				strings.Contains(b, codeInviteUsedByDevice) || strings.Contains(b, `"token"`) {
+				t.Fatalf("other device %q: %d, %q, %s", other, resp.StatusCode, resp.Header.Get(headerUnauthorized), b)
+			}
+		}
+	}
+	if bearers[0] == bearers[1] {
+		t.Fatal("replay answered the same bearer")
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/me", bearers[0], ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("first bearer after replay: %d", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/me", bearers[1], ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("replayed bearer: %d", resp.StatusCode)
+	}
+	resp, b := e.exchangeAs(t, pair, "phone", device)
+	if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get(headerUnauthorized) != codeInviteUsedByDevice ||
+		!strings.Contains(b, `"code":"invite_used_by_this_device"`) {
+		t.Fatalf("spent retry: %d, %q, %s", resp.StatusCode, resp.Header.Get(headerUnauthorized), b)
+	}
+}
+
+// A logout admitted by the middleware must sign out that device even when
+// an invite replay rotates its bearer before the handler's durable write.
+func TestLogoutAcrossInviteReplay(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := t.Context()
+	code, err := e.auth.CreateAuthCode(ctx, e.adminID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pair, _ := e.redeemCode(t, code)
+	exchange := func() string {
+		t.Helper()
+		res, err := e.auth.ConsumePairing(ctx, pair, "phone", "device-random-key-0123456789")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Token
+	}
+	first := exchange()
+	req := httptest.NewRequest("POST", "/api/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+first)
+	rec := httptest.NewRecorder()
+	var rotated string
+	e.api.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The replay committed after the middleware read the token and before
+		// its touch (a used bearer is never rotated): clear the touch it left.
+		if _, err := e.db.ExecContext(ctx, `UPDATE tokens SET last_seen = NULL WHERE id = ?`, credentialFrom(r.Context()).ID); err != nil {
+			t.Fatal(err)
+		}
+		rotated = exchange()
+		e.api.handleLogout(w, r)
+	})).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || rotated == "" {
+		t.Fatalf("logout across rotation: %d", rec.Code)
+	}
+	for _, token := range []string{first, rotated} {
+		if resp, _ := e.do(t, "GET", "/api/v1/me", token, ""); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("signed out bearer: %d", resp.StatusCode)
+		}
+	}
+
+	// An API key can still log itself out, keeping the session that minted it.
+	other := e.session(t, e.adminID)
+	key, _, err := e.auth.IssueAPIToken(ctx, e.adminID, e.credentialID(t, other), "dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/logout", key, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("key logout: %d", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/me", key, ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("key after logout: %d", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/me", other, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("another session after logout: %d", resp.StatusCode)
 	}
 }
 

@@ -324,5 +324,6 @@ func (s *Service) KeepCastToken(ctx context.Context, id int64) error {
 	} else if err != nil {
 		return err
 	}
-	return s.touch(ctx, id, KindCast, Presence{}, s.castExpiry(row.grant), nil) // no address: readAs unused
+	_, err := s.touch(ctx, id, "", KindCast, Presence{}, s.castExpiry(row.grant), nil) // no address: readAs unused
+	return err
 }

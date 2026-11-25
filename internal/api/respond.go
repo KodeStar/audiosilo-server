@@ -113,8 +113,9 @@ const (
 	codeUsernameTaken            = "username_taken"
 	codeUsernameRequired         = "username_required"
 	codeCurrentPasswordIncorrect = "current_password_incorrect"
-	codeInviteUsed               = "invite_used"    // redeem, exchange: a real invite with no uses left
-	codeInviteExpired            = "invite_expired" // redeem, exchange: a real invite past its expiry
+	codeInviteUsed               = "invite_used"                // redeem, exchange: a real invite with no uses left
+	codeInviteUsedByDevice       = "invite_used_by_this_device" // exchange: this device_id's one retry of the token is spent or late, its invite expired, or its session ended or was used
+	codeInviteExpired            = "invite_expired"             // redeem, exchange: a real invite past its expiry
 	codeNameTaken                = "name_taken"
 	codeConfigLibrary            = "config_library" // a library the config declares: renamed, moved or deleted here
 	codeLastAdmin                = "last_admin"

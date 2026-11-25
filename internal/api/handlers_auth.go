@@ -256,9 +256,12 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeInviteError answers a refused code or pairing token: a 401 naming an
-// invite that is used up or expired, else the plain fallback message.
+// invite that is used up or expired, or one this device already used (its
+// retry spent: exchange only), else the plain fallback message.
 func writeInviteError(w http.ResponseWriter, err error, fallback string) {
 	switch {
+	case errors.Is(err, auth.ErrInviteUsedByDevice):
+		writeErrorCode(w, http.StatusUnauthorized, codeInviteUsedByDevice, "this device already used the invite - sign in or ask for a new invite")
 	case errors.Is(err, auth.ErrCodeExhausted):
 		writeErrorCode(w, http.StatusUnauthorized, codeInviteUsed, "invite already used on all its devices - ask for a new invite")
 	case errors.Is(err, auth.ErrCodeExpired):
@@ -277,7 +280,13 @@ func writeInviteError(w http.ResponseWriter, err error, fallback string) {
 // and the session are one transaction (auth.ConsumePairing): a failure to
 // write the session burns no use and answers 500, uncharged (only a token
 // the lookup found valid reaches that write; a guess is charged unless the
-// database fails to answer its lookup, a 500 that tells it nothing).
+// database fails to answer its lookup, a 500 that tells it nothing). An
+// invite's device that sent device_id and lost the answer may send the same
+// token and device_id once more within a minute, before it presents the
+// bearer: the original session's bearer is rotated, no use claimed, no
+// sign-in reported again. An older server refuses device_id with 400
+// "pairing_token is required", spending nothing, and the player resends
+// without it.
 func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if !allowAttempt(w, a.redeemLimiter, ip) {
@@ -286,12 +295,13 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		PairingToken string `json:"pairing_token"`
 		DeviceName   string `json:"device_name"`
+		DeviceID     string `json:"device_id"`
 	}
 	if err := decodeJSON(r, &req, 0); err != nil || req.PairingToken == "" {
 		writeError(w, http.StatusBadRequest, "pairing_token is required")
 		return
 	}
-	u, session, codeKind, err := a.auth.ConsumePairing(r.Context(), req.PairingToken, req.DeviceName)
+	session, err := a.auth.ConsumePairing(r.Context(), req.PairingToken, req.DeviceName, req.DeviceID)
 	switch {
 	case auth.Refused(err):
 		a.redeemLimiter.Fail(ip)
@@ -302,17 +312,10 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.redeemLimiter.Reset(ip)
-	writeJSON(w, http.StatusOK, a.pairedSession(r, u, session, req.DeviceName, codeKind == auth.CodeInvite))
-}
-
-// pairedSession answers a consumed pairing token (exchange) or single sign-on
-// token (finish): u and session the account and the device's session, read and
-// minted with the spend (ConsumePairing, ConsumeOIDC: one transaction, so a
-// sign-out everywhere committing beside it never leaves one it missed), the
-// sign-in reported, and the session envelope for the caller to write.
-func (a *API) pairedSession(r *http.Request, u *auth.User, session, deviceName string, invite bool) map[string]any {
-	a.reportSignIn(r, u, deviceName, invite)
-	return a.sessionEnvelope(r, session, u)
+	if !session.Replayed {
+		a.reportSignIn(r, session.User, req.DeviceName, session.CodeKind == auth.CodeInvite)
+	}
+	writeJSON(w, http.StatusOK, a.sessionEnvelope(r, session.Token, session.User))
 }
 
 // sessionEnvelope is the answer to a sign-in (exchange, login, demo): the session
@@ -429,7 +432,8 @@ func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 
 // handleLogout revokes the caller's current session token.
 func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if err := a.auth.RevokeToken(r.Context(), bearerToken(r, false)); err != nil {
+	ctx := r.Context()
+	if err := a.auth.SignOut(ctx, userFrom(ctx).ID, credentialFrom(ctx).ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not revoke token")
 		return
 	}

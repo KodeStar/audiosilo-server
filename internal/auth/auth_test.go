@@ -30,6 +30,15 @@ func newTestServiceWithClock(t *testing.T) (*Service, context.Context, *time.Tim
 	return New(db, func() time.Time { return now }), ctx, &now
 }
 
+// RevokeToken signs out a test token, as the middleware and handler do together.
+func (s *Service) RevokeToken(ctx context.Context, secret string) error {
+	u, row, err := s.lookupToken(ctx, hashSecret(secret), KindSession, KindAPI)
+	if err != nil {
+		return err
+	}
+	return s.SignOut(ctx, u.ID, row.id)
+}
+
 func TestPasswordHashRoundTrip(t *testing.T) {
 	t.Parallel()
 	hash, err := HashPassword("correct horse battery staple")
@@ -1064,32 +1073,32 @@ func TestConsumePairingKind(t *testing.T) {
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	invite, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)
-	if _, _, kind, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, invite), ""); err != nil || kind != CodeInvite {
-		t.Fatalf("invite: kind %q, %v", kind, err)
+	if result, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, invite), "", ""); err != nil || result.CodeKind != CodeInvite {
+		t.Fatalf("invite: kind %q, %v", result.CodeKind, err)
 	}
 	recovery, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, kind, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, recovery), ""); err != nil || kind != CodeRecovery {
-		t.Fatalf("recovery: kind %q, %v", kind, err)
+	if result, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, recovery), "", ""); err != nil || result.CodeKind != CodeRecovery {
+		t.Fatalf("recovery: kind %q, %v", result.CodeKind, err)
 	}
 	unlinked, err := s.IssueToken(ctx, u.ID, KindPairing, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, kind, err := s.ConsumePairing(ctx, unlinked, ""); err != nil || kind != "" {
-		t.Fatalf("unlinked: kind %q, %v", kind, err)
+	if result, err := s.ConsumePairing(ctx, unlinked, "", ""); err != nil || result.CodeKind != "" {
+		t.Fatalf("unlinked: kind %q, %v", result.CodeKind, err)
 	}
-	if _, _, kind, err := s.ConsumePairing(ctx, "bogus", ""); err == nil || kind != "" {
-		t.Fatalf("bogus: kind %q, %v", kind, err)
+	if result, err := s.ConsumePairing(ctx, "bogus", "", ""); err == nil || result.CodeKind != "" {
+		t.Fatalf("bogus: kind %q, %v", result.CodeKind, err)
 	}
 }
 
 // consumePairing is ConsumePairing without the code kind, which most tests don't need.
 func consumePairing(s *Service, ctx context.Context, secret string) (*User, error) {
-	u, _, _, err := s.ConsumePairing(ctx, secret, "")
-	return u, err
+	session, err := s.ConsumePairing(ctx, secret, "", "")
+	return session.User, err
 }
 
 // TestExchangeRacingASignOut: a Sign out everywhere, a password change or a
@@ -1108,8 +1117,8 @@ func TestExchangeRacingASignOut(t *testing.T) {
 				t.Fatal(err)
 			}
 			return func(device string) (string, error) {
-				_, session, _, err := s.ConsumePairing(ctx, tok, device)
-				return session, err
+				session, err := s.ConsumePairing(ctx, tok, device, "")
+				return session.Token, err
 			}
 		},
 		"recovery code's pairing token": func(u *User) func(string) (string, error) {
@@ -1119,8 +1128,8 @@ func TestExchangeRacingASignOut(t *testing.T) {
 			}
 			tok := pairThrough(t, s, ctx, code)
 			return func(device string) (string, error) {
-				_, session, _, err := s.ConsumePairing(ctx, tok, device)
-				return session, err
+				session, err := s.ConsumePairing(ctx, tok, device, "")
+				return session.Token, err
 			}
 		},
 		"invite's pairing token": func(u *User) func(string) (string, error) {
@@ -1130,8 +1139,8 @@ func TestExchangeRacingASignOut(t *testing.T) {
 			}
 			tok := pairThrough(t, s, ctx, code)
 			return func(device string) (string, error) {
-				_, session, _, err := s.ConsumePairing(ctx, tok, device)
-				return session, err
+				session, err := s.ConsumePairing(ctx, tok, device, "")
+				return session.Token, err
 			}
 		},
 		"single sign-on": func(u *User) func(string) (string, error) {
