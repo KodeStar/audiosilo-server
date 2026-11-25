@@ -3220,8 +3220,14 @@ func (s *Scanner) claimFlight(key bookKey, scan *bookRead) (f *indexFlight, lead
 }
 
 // WaitReads waits for the detached indexing requests admitted before the
-// server cancelled its base context. A stopped scan owns its abandoned reads.
-func (s *Scanner) WaitReads() {
+// server cancelled its base context, until wait ends, and returns how many it
+// left under way then. A stopped scan owns its abandoned reads. One left is
+// held in a call a share that stopped answering never returns from (on a
+// FUSE share, the close of a file whose read was given up on:
+// metadata.closeBlockFile), so shutdown goes on without it; it writes nothing
+// when it returns, as its reads and writes run on a context the base
+// context's end has cancelled (leadIndex), the database closed or not.
+func (s *Scanner) WaitReads(wait context.Context) (left int) {
 	s.flightMu.Lock()
 	var done []<-chan struct{}
 	for _, f := range s.flights {
@@ -3230,9 +3236,21 @@ func (s *Scanner) WaitReads() {
 		}
 	}
 	s.flightMu.Unlock()
-	for _, d := range done {
-		<-d
+	for i, d := range done {
+		select {
+		case <-d:
+		case <-wait.Done():
+			for _, d := range done[i:] {
+				select {
+				case <-d:
+				default:
+					left++
+				}
+			}
+			return left
+		}
 	}
+	return 0
 }
 
 // endFlight ends flight f with its outcome, for its waiters.
@@ -3315,6 +3333,12 @@ func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *cata
 		return "", fmt.Errorf("library: indexing %q: %s: %w", book.RelPath, why, metadata.ErrNotAnswered)
 	}
 	failed := func(err error) (string, error) {
+		if ctx.Err() != nil {
+			// The read has ended (the server's stop, indexTimeout), its
+			// database perhaps closed by now (Scanner.WaitReads): nothing more
+			// is read or written, and leadIndex tells why.
+			return "", err
+		}
 		s.log.Warn("looking for a moved book failed", "library", lib.Name, "path", book.RelPath, "err", err)
 		return "", nil
 	}

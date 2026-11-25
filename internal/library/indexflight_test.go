@@ -296,7 +296,7 @@ func TestIndexPathEndsWithTheServer(t *testing.T) {
 		t.Fatalf("IndexPath: %v, want context.Canceled", err)
 	}
 	stop() // then the server stops
-	s.WaitReads()
+	s.WaitReads(context.Background())
 	if f := flightOf(s, lib, "A/Book"); f != nil {
 		t.Fatal("shutdown returned with the detached read still running")
 	}

@@ -452,12 +452,22 @@ func (a *API) renditionsOn() bool { return a.renditions != nil && a.ffmpeg != ""
 // for the cover thumbnails a console batch answered without (bounded reads),
 // so none records its colour after the database closed, and for the detached
 // book reads (startBookRead: the Re-reads answered still_reading and the
-// favourites' reads, ended by the base context too).
-func (a *API) WaitMediaCaches() {
+// favourites' reads, ended by the base context too). The book reads are
+// waited for only until wait ends: one held in a call a share that stopped
+// answering never returns from is left to end on its own, writing nothing
+// (library.Scanner.WaitReads, which counts it).
+func (a *API) WaitMediaCaches(wait context.Context) {
 	a.bookReadMu.Lock()
 	a.bookReadsClosed = true
 	a.bookReadMu.Unlock()
-	defer a.bookReads.Wait()
+	defer func() {
+		done := make(chan struct{})
+		go func() { a.bookReads.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-wait.Done():
+		}
+	}()
 	defer a.coverWork.Wait()
 	for _, c := range []*media.FileCache{a.remux, a.renditions} {
 		if c != nil {
