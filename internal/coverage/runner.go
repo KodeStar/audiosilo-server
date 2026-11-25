@@ -59,11 +59,10 @@ type Options struct {
 	// On reports whether the job may run now: metadata on AND
 	// metadata.report_unknown. Required.
 	On func() bool
-	// Ready reports whether lookups may be made: in mirror mode, the local
-	// copy is loaded. nil is always ready (remote mode).
-	Ready func() bool
-	Now   func() time.Time
-	Log   *slog.Logger
+	// Loaded supplies the local mirror's first-load signal, or nil in remote mode.
+	Loaded func() <-chan struct{}
+	Now    func() time.Time
+	Log    *slog.Logger
 }
 
 // The run's states (the console's status line).
@@ -145,6 +144,7 @@ func (r *Runner) Wake() {
 // Run keeps the schedule until ctx ends: the first run an hour after the start
 // (or a day after the last run, when that is later), then daily with jitter.
 func (r *Runner) Run(ctx context.Context) {
+	var loaded <-chan struct{}
 	next := r.firstRun(ctx)
 	defer r.next.Store(0)
 	for {
@@ -161,6 +161,11 @@ func (r *Runner) Run(ctx context.Context) {
 		case <-ctx.Done():
 			t.Stop()
 			return
+		case <-loaded:
+			t.Stop()
+			loaded = nil
+			next = r.opt.Now()
+			continue
 		case <-r.wake:
 			t.Stop()
 			if r.opt.On() && r.due(ctx) {
@@ -178,6 +183,7 @@ func (r *Runner) Run(ctx context.Context) {
 		}
 		switch err := r.RunOnce(ctx); {
 		case errors.Is(err, errNotReady):
+			loaded = r.opt.Loaded()
 			next = r.opt.Now().Add(notReady)
 		case errors.Is(err, errSwitchedOff):
 			// looked at again once it is back on
@@ -238,8 +244,14 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		r.record(ctx, catalog.UnknownASINReport{State: StateNotOffered, LastRunAt: stamp(now)})
 		return nil
 	}
-	if r.opt.Ready != nil && !r.opt.Ready() {
-		return errNotReady
+	if r.opt.Loaded != nil {
+		if loaded := r.opt.Loaded(); loaded != nil {
+			select {
+			case <-loaded:
+			default:
+				return errNotReady
+			}
+		}
 	}
 	rctx, stop := pool.WhileOn(ctx, r.offCheck, r.opt.On, errSwitchedOff)
 	defer stop()
@@ -262,9 +274,11 @@ func (r *Runner) run(ctx context.Context, now time.Time) (catalog.UnknownASINRep
 		res.State = StateFailed
 		return res, err
 	}
-	// In mirror mode the copy answers the lookups (Ready already held), so no
-	// Ping: a health check the copy fails would go to the remote service.
-	if r.opt.Ready == nil {
+	// In mirror mode the copy answers the lookups (the mirror has loaded), so no
+	// Ping: a health check the copy fails would go to the remote service. Remote
+	// mode is a nil Loaded or one that hands out no signal (api.mirrorLoaded
+	// without a mirror).
+	if r.opt.Loaded == nil || r.opt.Loaded() == nil {
 		if h := r.meta.Ping(); !h.Reachable {
 			return failed(fmt.Errorf("metadata service unreachable: %s", h.Error))
 		}

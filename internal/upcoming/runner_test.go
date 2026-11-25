@@ -1071,7 +1071,7 @@ func TestRequestedRunSwitchedOffWhileMirrorLoads(t *testing.T) {
 			f := newFixture(t)
 			f.clock = time.Now()
 			f.r.opt.Resolve = func() bool { return true }
-			f.r.opt.Ready = func() bool { f.off.Store(true); return true }
+			f.r.opt.Loaded = func() <-chan struct{} { f.off.Store(true); return nil }
 			f.r.settle = time.Hour
 			f.loose(t, f.lib, "Book", "A1", "e1")
 			steps := stepSignal(f)

@@ -179,14 +179,19 @@ func (c *Catalog) ReadalongEbooksDue(ctx context.Context, libraryID int64, bookP
 // caller found stale (ebook_hashed_sig = was, ReadalongIndexed.HashedSig or
 // EbookDue.HashedSig as read before hashing): a slow hash of an older file
 // never overwrites a digest another caller recorded meanwhile, of the newer one.
+// A false result means the compare-and-set missed.
 // The digest is stored with its signature, so it is current only for that
 // file: for the index once a scan records the same ebook_sig (a request may
 // record one for a file on disk newer than the last scan), for a request while
 // the file on disk still has it.
-func (c *Catalog) SetEbookDigest(ctx context.Context, libraryID int64, bookPath, ebookPath, was, sig, sha256 string) error {
-	_, err := c.db.ExecContext(ctx,
+func (c *Catalog) SetEbookDigest(ctx context.Context, libraryID int64, bookPath, ebookPath, was, sig, sha256 string) (bool, error) {
+	result, err := c.db.ExecContext(ctx,
 		`UPDATE books SET ebook_sha256 = ?, ebook_hashed_sig = ?
 		  WHERE library_id = ? AND rel_path = ? AND ebook_path = ? AND ebook_hashed_sig = ?`,
 		sha256, sig, libraryID, bookPath, ebookPath, was)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n != 0, err
 }

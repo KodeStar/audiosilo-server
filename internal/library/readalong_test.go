@@ -223,3 +223,37 @@ func digestCurrent(t *testing.T, cat *catalog.Catalog, libID int64, rel string) 
 	}
 	return len(due) == 0
 }
+
+func TestEbookDigestAfterCompetingWrite(t *testing.T) {
+	t.Parallel()
+	cat, s, ctx := newScanEnv(t)
+	root := t.TempDir()
+	const book, file = "A/Book", "A/Book/Book.epub"
+	copyFixtureM4B(t, filepath.Join(root, book, "01.m4b"))
+	epub := epubBytes(t, minimalEpub...)
+	writeFile(t, root, file, epub)
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	idx, err := cat.BookReadalongAt(ctx, lib.ID, book)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two requests read idx. The older file's hash finishes first.
+	if _, err := s.EbookDigestNow(ctx, *lib, idx, book, file, true, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	updated := append(slices.Clone(epub), 1)
+	writeFile(t, root, file, updated)
+	if _, err := s.EbookDigestNow(ctx, *lib, idx, book, file, true, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cat.BookReadalongAt(ctx, lib.ID, book)
+	if err != nil || got.EbookSHA256 != digestOf(updated) {
+		t.Fatalf("stored digest = %s, %v", got.EbookSHA256, err)
+	}
+}

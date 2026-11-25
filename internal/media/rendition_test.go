@@ -2,8 +2,7 @@ package media
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+
 	"encoding/json"
 	"errors"
 	"io"
@@ -42,19 +41,15 @@ func TestRenditionArgs(t *testing.T) {
 	}
 }
 
-// TestCacheKeys: the remux's keys are the ones it always had (its cached copies
-// and ETags survive the upgrade); a rendition's key adds its kind and version,
-// so the two never share a key and a new encode version is a new key.
+// TestCacheKeys covers two spellings of one file, distinct files with equal
+// timestamps and sizes, and the remux and watch representations.
 func TestCacheKeys(t *testing.T) {
 	t.Parallel()
-	src := filepath.Join(t.TempDir(), "book.mp3")
+	src := filepath.Join(t.TempDir(), "Café.mp3")
 	if err := os.WriteFile(src, []byte("audio"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(src)
-	if err != nil {
-		t.Fatal(err)
-	}
+	info := statOf(t, src)
 	remux, err := NewRemuxer(filepath.Join(t.TempDir(), "remux"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -63,19 +58,57 @@ func TestCacheKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256([]byte(src + "\x00" + strconv.FormatInt(info.Size(), 10) + "\x00" +
-		strconv.FormatInt(info.ModTime().UnixNano(), 10)))
-	old := hex.EncodeToString(sum[:])[:32]
-	if got := remux.key(src, info); got != old {
-		t.Fatalf("remux key = %s, want the 2.5 key %s", got, old)
-	}
-	if got := remux.spec.etag(old, 99); got != `"remux-`+old+`"` {
+	key := remux.key(src, info)
+	if got := remux.spec.etag(key, 99); got != `"remux-`+key+`"` {
 		t.Fatalf("remux etag = %s", got)
 	}
-	sum = sha256.Sum256([]byte(src + "\x00" + strconv.FormatInt(info.Size(), 10) + "\x00" +
-		strconv.FormatInt(info.ModTime().UnixNano(), 10) + "\x00watch-v1"))
-	if got, want := watch.key(src, info), hex.EncodeToString(sum[:])[:32]; got != want || got == old {
-		t.Fatalf("watch key = %s, want %s (not the remux's)", got, want)
+	if watch.key(src, info) == key {
+		t.Fatal("rendition and remux have the same key")
+	}
+	alias := filepath.Join(filepath.Dir(src), "CAFE\u0301.MP3")
+	_, aliasErr := os.Stat(alias)
+	separateNames := os.IsNotExist(aliasErr)
+	if separateNames {
+		if err := os.Link(src, alias); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := remux.key(alias, statOf(t, alias)); got != key {
+		t.Fatal("two names of one file have different keys")
+	}
+	var runs int
+	remux.run = func(_ context.Context, _ string, args []string, _ inputSpec) error {
+		runs++
+		return os.WriteFile(strings.TrimPrefix(args[len(args)-1], "file:"), []byte("copy"), 0600)
+	}
+	for _, name := range []string{src, alias} {
+		f, tag, err := remux.Open(t.Context(), t.Context(), "ffmpeg", filepath.Dir(src), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		if tag != remuxETag(key, 0) {
+			t.Fatalf("different validator for %s", name)
+		}
+	}
+	if runs != 1 {
+		t.Fatalf("two spellings started %d copies", runs)
+	}
+	other := filepath.Join(filepath.Dir(src), "other.mp3")
+	if separateNames {
+		if err := os.Remove(alias); err != nil {
+			t.Fatal(err)
+		}
+		other = alias
+	}
+	if err := os.WriteFile(other, []byte("other"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(other, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if remux.key(other, statOf(t, other)) == key {
+		t.Fatal("distinct same-size, same-time files share a key")
 	}
 	if got := watch.spec.etag("k", 123); got != `"rw1-k-123"` {
 		t.Fatalf("watch etag = %s", got)
@@ -247,7 +280,7 @@ func srcFile(t *testing.T, name string) string {
 // statOf is a test's look at p, as a caller hands Queue and StatusOf theirs.
 func statOf(t *testing.T, p string) os.FileInfo {
 	t.Helper()
-	info, err := os.Stat(p)
+	info, err := statCacheSource(filepath.Dir(p), p)
 	if err != nil {
 		t.Fatal(err)
 	}

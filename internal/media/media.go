@@ -691,25 +691,9 @@ func HasFFmpeg(ffmpegPath string) bool {
 	return err == nil
 }
 
-// coverImageTypes are the types cover art is served as (what
-// http.DetectContentType names them).
-var coverImageTypes = map[string]bool{
-	"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true, "image/bmp": true,
-}
-
-// coverMIME is the Content-Type embedded art is served with: what its bytes are,
-// never what the tag claims, because the cover endpoint serves it from this
-// origin. A tag declaring text/html (or bytes that are no image at all) would
-// otherwise turn a crafted audio file into a page served by the server. ok is
-// false for anything that isn't an image.
-func coverMIME(data []byte) (string, bool) {
-	mime := http.DetectContentType(data)
-	return mime, coverImageTypes[mime]
-}
-
 // EmbeddedCoverBelow returns embedded cover art from absPath, a file its
 // caller joined and checked under the library root root (a request's, or the
-// scan's cover backfill), with its sniffed image type (see coverMIME): nil
+// scan's cover backfill), with its sniffed image type (see metadata.CoverMIME): nil
 // data and no error when the file holds none (art that isn't an image is no
 // art, and so is a file whose tags don't read). The file is opened through
 // root (metadata.OpenRegularBelow): the open can't leave the library whatever
@@ -725,11 +709,26 @@ func EmbeddedCoverBelow(ctx context.Context, root, absPath string, timeout time.
 		mime string
 	}
 	a, err := metadata.Bounded(ctx, absPath, timeout, func() (art, error) {
-		f, _, err := metadata.OpenRegularBelow(root, absPath)
+		f, info, err := metadata.OpenRegularBelow(root, absPath)
 		if err != nil {
 			return art{}, err
 		}
 		defer f.Close()
+		if strings.EqualFold(filepath.Ext(absPath), ".mka") {
+			readCtx := ctx
+			if timeout > 0 {
+				var cancel context.CancelFunc
+				readCtx, cancel = context.WithTimeoutCause(ctx, timeout, metadata.ErrNotAnswered)
+				defer cancel()
+			}
+			data, err := metadata.MatroskaCover(readCtx, f, info.Size())
+			if err != nil {
+				return art{}, err
+			}
+			if mime, ok := metadata.CoverMIME(data); ok {
+				return art{data, mime}, nil
+			}
+		}
 		md, err := metadata.ReadTags(f)
 		if err != nil {
 			return art{}, nil
@@ -738,7 +737,7 @@ func EmbeddedCoverBelow(ctx context.Context, root, absPath string, timeout time.
 		if pic == nil || len(pic.Data) == 0 {
 			return art{}, nil
 		}
-		mime, ok := coverMIME(pic.Data)
+		mime, ok := metadata.CoverMIME(pic.Data)
 		if !ok {
 			return art{}, nil
 		}
