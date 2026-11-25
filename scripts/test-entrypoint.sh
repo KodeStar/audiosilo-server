@@ -133,6 +133,13 @@ owners=$(docker run --rm -v "$BK:/v" "$RUN_ID" sh -c \
 expect "backups chown follows no link" "$owners" \
   "^/v/other 0:0$" "^/v/other.tar 0:0$" "^/v/audiosilo-20261101-030000Z-scheduled.db 1000:1000$"
 
+# 5c'. Nor the folder a link at the backups folder's own name points at: the
+#      server's user can leave one in its data folder for root to follow.
+out=$(docker run --rm -e AUDIOSILO_BACKUP_DIR=/data/backups -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '
+  mkdir -p /data /target && ln -s /target /data/backups &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /data && stat -c "%n %u:%g" /target' 2>&1 || true)
+expect "backups folder link is not followed" "$out" "^/target 0:0$"
+
 # A backups listing that outlasts the ownership pass's five seconds cannot
 # hold startup. The stand-in records whether it reached the end of its wait.
 out=$(docker run --rm -e AUDIOSILO_BACKUP_DIR=/backups -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -ec '

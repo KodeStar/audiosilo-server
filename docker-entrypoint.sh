@@ -176,10 +176,13 @@ if [ "$(id -u)" = "0" ]; then
   if [ -n "$BACKUPS" ]; then
     # The folder and AudioSilo's own backup files in it, never the rest (it may be
     # a share other apps keep their backups in too) and never what a link in it
-    # points at: files only, and chown -h. Each step bounded, as the checks are:
-    # the share's server may be gone, and the server starts without its backups.
+    # points at: files only, and chown -h. The folder itself takes chown -h too:
+    # in a folder the server's user can write (/data/backups) it could leave a
+    # link there to a system folder for root to hand it at the next start. Each
+    # step bounded, as the checks are: the share's server may be gone, and the
+    # server starts without its backups.
     timeout "$WAIT" mkdir -p "$BACKUPS" 2>/dev/null || true
-    if timeout "$WAIT" chown "$RUN_AS" "$BACKUPS" 2>/dev/null; then
+    if timeout "$WAIT" chown -h "$RUN_AS" "$BACKUPS" 2>/dev/null; then
       timeout "$WAIT" find "$BACKUPS/" -maxdepth 1 -type f \( -name 'audiosilo-*.db' -o -name '.audiosilo-*' \) \
         -exec chown -h "$RUN_AS" {} + 2>/dev/null || true
     else

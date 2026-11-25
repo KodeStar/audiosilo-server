@@ -5008,7 +5008,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   It descends into btrfs subvolumes within the data tree and chowns writable mounted regular files.
   Mounted folders, devices and read-only file mounts keep their owners. An explicit absolute
   `AUDIOSILO_BACKUP_DIR` gets only its own folder and regular `audiosilo-*.db` and `.audiosilo-*`
-  files prepared. `usable_path` keeps the ownership pass off the container root and paths with `..`.
+  files prepared, each with `chown -h` (a link at the folder's own name is never followed: the
+  server's user could leave one in `/data`).
+  `usable_path` keeps the ownership pass off the container root and paths with `..`.
   The command checks both data and the configured backups folder (environment, then YAML, then
   `<data>/backups`) by creating and removing
   a private temp file. It opens mounted regular files for reading and lists mounted library folders.
