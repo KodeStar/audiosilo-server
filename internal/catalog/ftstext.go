@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -67,33 +68,24 @@ func (c *Catalog) IndexSearchText(ctx context.Context) (int, error) {
 	rewritten := 0
 	err := c.db.WithTx(ctx, "IndexSearchText", func(tx *sql.Tx) error {
 		type row struct {
-			id   int64
-			cols [6]string
+			id        int64
+			cols, old [6]string
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT b.id, b.title, b.author, b.series, b.more_series, b.narrator, b.genres, b.tags,
+		changed, err := queryRows(ctx, tx, func(r *sql.Rows, w *row) error {
+			var title, author, series, more, narrator, genres, tags string
+			if err := r.Scan(&w.id, &title, &author, &series, &more, &narrator, &genres, &tags,
+				&w.old[0], &w.old[1], &w.old[2], &w.old[3], &w.old[4], &w.old[5]); err != nil {
+				return err
+			}
+			w.cols = searchColumns(title, author, series, more, narrator, genres, tags)
+			return nil
+		}, `SELECT b.id, b.title, b.author, b.series, b.more_series, b.narrator, b.genres, b.tags,
 			COALESCE(f.title,''), COALESCE(f.author,''), COALESCE(f.series,''), COALESCE(f.narrator,''), COALESCE(f.genres,''), COALESCE(f.tags,'')
 			FROM books_fts f JOIN books b ON b.id = f.rowid`)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		var changed []row
-		for rows.Next() {
-			var w row
-			var old [6]string
-			var title, author, series, more, narrator, genres, tags string
-			if err := rows.Scan(&w.id, &title, &author, &series, &more, &narrator, &genres, &tags,
-				&old[0], &old[1], &old[2], &old[3], &old[4], &old[5]); err != nil {
-				return err
-			}
-			w.cols = searchColumns(title, author, series, more, narrator, genres, tags)
-			if w.cols != old {
-				changed = append(changed, w)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
+		changed = slices.DeleteFunc(changed, func(w row) bool { return w.cols == w.old })
 		for _, w := range changed {
 			if err := writeFTSRow(ctx, tx, w.id, w.cols); err != nil {
 				return err
@@ -112,16 +104,13 @@ func searchColumns(title, author, series, more, narrator, genres, tags string) [
 
 // writeFTSRow writes book id's full-text index row (delete-then-insert, keyed
 // by rowid = book id) from cols, its title, author, series, narrator, genres
-// and tags, each in ftsText's form.
+// and tags, each in ftsText's form (searchColumns).
 func writeFTSRow(ctx context.Context, tx *sql.Tx, id int64, cols [6]string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, id); err != nil {
 		return err
 	}
-	args := []any{id}
-	for _, c := range cols {
-		args = append(args, c)
-	}
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO books_fts(rowid, title, author, series, narrator, genres, tags) VALUES(?,?,?,?,?,?,?)`, args...)
+		`INSERT INTO books_fts(rowid, title, author, series, narrator, genres, tags) VALUES(?,?,?,?,?,?,?)`,
+		id, cols[0], cols[1], cols[2], cols[3], cols[4], cols[5])
 	return err
 }

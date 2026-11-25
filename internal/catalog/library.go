@@ -251,9 +251,11 @@ func (c *Catalog) markResolve(ctx context.Context, tx *sql.Tx, id int64) error {
 // the pass returns its errors rather than starting again (it would fail the
 // same way).
 func (c *Catalog) ResolveSources(ctx context.Context) error {
-	type cursor struct{ generation, after int64 }
+	type cursor struct {
+		generation, after int64
+		failed            bool
+	}
 	progress := map[int64]cursor{}
-	failed := map[int64]int64{}
 	var errs []error
 	for {
 		due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey)
@@ -262,24 +264,23 @@ func (c *Catalog) ResolveSources(ctx context.Context) error {
 		}
 		ran := false
 		for lib, gen := range due {
-			if failed[lib] == gen {
-				continue
-			}
-			ran = true
 			at := progress[lib]
 			if at.generation != gen {
 				at = cursor{generation: gen}
 			}
-			next, err := c.resolveLibraryBatch(ctx, lib, gen, at.after)
+			if at.failed {
+				continue
+			}
+			ran = true
+			at.after, err = c.resolveLibraryBatch(ctx, lib, gen, at.after)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				failed[lib] = gen
+				at.failed = true
 				errs = append(errs, fmt.Errorf("library %d: %w", lib, err))
-			} else {
-				progress[lib] = cursor{gen, next}
 			}
+			progress[lib] = at
 		}
 		if !ran {
 			return errors.Join(errs...)

@@ -771,7 +771,7 @@ func refreshBook(ctx context.Context, tx *sql.Tx, bookID int64, scan *Book) erro
 	// so a search finds it by any (the series= filter goes by key instead), and
 	// the genres and tags columns a label a line, so a search finds a book by its
 	// labels too (the genre= and tag= filters go by book_labels). Every column is
-	// in ftsText's form, a Chinese or Japanese character a token (writeFTSRow).
+	// in ftsText's form, a Chinese or Japanese character a token (searchColumns).
 	return writeFTSRow(ctx, tx, bookID, searchColumns(v(FieldTitle), v(FieldAuthor), v(FieldSeries), v(FieldMoreSeries),
 		v(FieldNarrator), v(FieldGenres), v(FieldTags)))
 }
