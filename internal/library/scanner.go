@@ -671,34 +671,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		flush()
 		grace := time.NewTimer(stopGrace)
 		defer grace.Stop()
-		left := 0
-		// Once the grace has passed its timer has fired for good: a read that
-		// returned just as it did must not send the next one back to wait on
-		// it (a read held on a share that stopped answering would hold the
-		// scan, and every one queued behind it, for good).
-		graceOver := false
-		for _, r := range pending {
-			if !graceOver {
-				select {
-				case <-r.done:
-				case <-grace.C:
-					graceOver = true
-				}
-			}
-			if r.finished() {
-				r.drop(s)
-				recordWrite(r) // a request's write of it, if one claimed it
-				continue
-			}
-			left++
-			r.left.Store(true)
-			s.readsLeft.Add(1)
-			go func() {
-				<-r.done
-				r.drop(s)
-				s.readsLeft.Add(-1)
-			}()
-		}
+		left := s.endReads(pending, grace.C, recordWrite)
 		if left > 0 {
 			s.log.Warn("scan stopped with reads still under way, left to end on their own",
 				"library", lib.Name, "reads", left, "left_by_all_scans", s.readsLeft.Load())
@@ -1006,6 +979,41 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 // books a transaction takes, and how long it may hold the writer, are
 // catalog.UpsertBooks' bounds.
 const writeBatchAge = 250 * time.Millisecond
+
+// endReads ends a stopped scan's reads under way (pending), waiting for each
+// until grace fires: one done by then is dropped and recorded (record: a
+// request's write of it, if one claimed it), one still under way is left to
+// end on its own (bookRead.left, Scanner.readsLeft). It returns how many were
+// left. Once grace has fired it is not waited on again (it fires once): a
+// read that returned just as it did must not send the next one back to wait
+// on it, or a read held on a share that stopped answering would hold the
+// scan, and every one queued behind it, for good.
+func (s *Scanner) endReads(pending []*bookRead, grace <-chan time.Time, record func(*bookRead)) (left int) {
+	graceOver := false
+	for _, r := range pending {
+		if !graceOver {
+			select {
+			case <-r.done:
+			case <-grace:
+				graceOver = true
+			}
+		}
+		if r.finished() {
+			r.drop(s)
+			record(r)
+			continue
+		}
+		left++
+		r.left.Store(true)
+		s.readsLeft.Add(1)
+		go func() {
+			<-r.done
+			r.drop(s)
+			s.readsLeft.Add(-1)
+		}()
+	}
+	return left
+}
 
 // stopGrace is how long a stopped scan waits for its reads under way to end
 // before it leaves them (stopped).

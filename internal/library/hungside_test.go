@@ -173,6 +173,45 @@ func TestStopDuringAStuckRead(t *testing.T) {
 	}
 }
 
+// A stopped scan whose grace fires as its first read returns does not wait on
+// the grace again for the next read (it fires once): a read held for good is
+// left, every read ends exactly once (the returned one recorded, the held one
+// left), and the count of reads left comes back to 0 once the held one ends.
+// Both of the first read's cases are ready, so select picks either: run
+// enough times, the grace's pick (which hung the scan) comes up.
+func TestStopGraceFiredWithAReturnedReadLeavesTheRest(t *testing.T) {
+	t.Parallel()
+	s, _, _, _ := newTestScanner(t, t.TempDir(), "", 1)
+	read := func() *bookRead {
+		return &bookRead{book: &catalog.Book{}, done: make(chan struct{}), stored: make(chan struct{})}
+	}
+	for range 64 {
+		returned, held := read(), read()
+		close(returned.done)
+		grace := make(chan time.Time, 1)
+		grace <- time.Now()
+		recorded := map[*bookRead]int{}
+		ended := make(chan int, 1)
+		go func() { ended <- s.endReads([]*bookRead{returned, held}, grace, func(r *bookRead) { recorded[r]++ }) }()
+		select {
+		case left := <-ended:
+			if left != 1 || recorded[returned] != 1 || recorded[held] != 0 || !held.left.Load() {
+				t.Fatalf("left %d, recorded %v, held marked left %v; want the held read left, the returned one recorded once",
+					left, recorded, held.left.Load())
+			}
+		case <-time.After(5 * time.Second):
+			close(held.done)
+			t.Fatal("the stop waited on a grace that had already fired")
+		}
+		if !errors.Is(returned.err, errReadDropped) {
+			t.Fatalf("the returned read's outcome = %v, want dropped", returned.err)
+		}
+		close(held.done)
+		<-held.stored
+	}
+	waitNoReadsLeft(t, s)
+}
+
 // A later scan does not wait on a book whose read a stopped scan left stuck
 // (its flight held until that read returns, which may be never): it keeps the
 // book as stored with an unreadable problem and scans the rest of the library.
