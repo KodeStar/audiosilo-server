@@ -560,7 +560,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// problem or the failure.
 	recordWrite := func(r *bookRead) {
 		b, err := r.book, r.err
-		if r.reused {
+		if r.reused || errors.Is(err, errReadDropped) {
+			// The on-demand read's row stands, or the read was dropped at a
+			// Stop (bookRead.drop, publish): no write of the scan's, no failure.
 			return
 		}
 		if err != nil {
@@ -683,9 +685,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			}
 			if r.finished() {
 				r.drop(s)
-				if r.err == nil {
-					recordWrite(r)
-				}
+				recordWrite(r) // a request's write of it, if one claimed it
 				continue
 			}
 			left++
@@ -3107,15 +3107,10 @@ func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
 			return nil
 		case <-ready:
 			ready = nil
-			r := f.scan
-			if r.ctx.Err() == nil && r.claimed.CompareAndSwap(false, true) {
+			if r := f.scan; r.ctx.Err() == nil && r.claimed.CompareAndSwap(false, true) {
 				// The scan joins this write in flush or stopped. A request may
 				// leave while SQLite's writer is busy.
-				go func() {
-					r.book.ReadRoot = r.root
-					_, err := s.cat.UpsertBook(r.ctx, r.book)
-					r.finishWrite(s, err)
-				}()
+				go r.publish(s)
 			}
 		case <-capped:
 			if f.scan != nil && f.scan.finished() {
